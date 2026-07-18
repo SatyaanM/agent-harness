@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.turbo/
+.next/
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+
+# Runtime data (sessions, inbox)
+sessions/
+inbox/
+
+# Runtime config (machine-specific paths, provider settings)
+.harness/
+**/.harness/
+
+# TypeScript incremental build artifacts
+*.tsbuildinfo

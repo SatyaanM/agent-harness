@@ -1,0 +1,36 @@
+{
+  "name": "@agent-harness/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.16",
+    "@ai-sdk/openai": "^4.0.16",
+    "@ai-sdk/openai-compatible": "^3.0.12",
+    "ai": "^7.0.31",
+    "fast-glob": "^3.x",
+    "fs-extra": "^11.x",
+    "gray-matter": "^4.x",
+    "uuid": "^9.x",
+    "zod": "^3.x"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.x",
+    "@types/node": "^20.x",
+    "@types/uuid": "^9.x",
+    "typescript": "^5.x"
+  }
+}

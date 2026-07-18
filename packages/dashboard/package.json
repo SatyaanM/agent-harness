@@ -1,0 +1,37 @@
+{
+  "name": "@agent-harness/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agent-harness/core": "*",
+    "next": "^14.x",
+    "react": "^18.x",
+    "react-dom": "^18.x",
+    "tailwindcss": "^3.x",
+    "zustand": "^4.x",
+    "react-resizable-panels": "^2.x",
+    "@monaco-editor/react": "^4.x",
+    "react-markdown": "^9.x",
+    "remark-gfm": "^4.x",
+    "react-pdf": "^9.x",
+    "@excalidraw/excalidraw": "^0.17.x",
+    "@tanstack/react-table": "^8.x",
+    "shiki": "^1.x",
+    "socket.io-client": "^4.x"
+  },
+  "devDependencies": {
+    "typescript": "^5.x",
+    "@types/node": "^20.x",
+    "@types/react": "^18.x",
+    "@types/react-dom": "^18.x",
+    "autoprefixer": "^10.x",
+    "postcss": "^8.x"
+  }
+}
