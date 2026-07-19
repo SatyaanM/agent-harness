@@ -5,6 +5,7 @@ import { useSessionStore, type Message } from '@/stores/session-store';
 import { DelegationCard } from './DelegationCard';
 import { CouncilCard } from './CouncilCard';
 import { InboxLink } from './InboxLink';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 function stripToolCalls(content: string): string {
   let cleaned = content;
@@ -32,11 +33,21 @@ function stripToolCalls(content: string): string {
   return cleaned.trim();
 }
 
+function formatTime(isoString: string): string {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function UserMessage({ message }: { message: Message }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[80%] rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">
-        {message.content}
+      <div className="max-w-[80%]">
+        <div className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">
+          <MarkdownRenderer content={message.content} className="prose-invert" />
+        </div>
+        <div className="mt-1 text-right text-[10px] text-gray-400">
+          {formatTime(message.createdAt)}
+        </div>
       </div>
     </div>
   );
@@ -46,8 +57,13 @@ function AssistantMessage({ message }: { message: Message }) {
   const cleanedContent = stripToolCalls(message.content);
   return (
     <div className="flex justify-start">
-      <div className="max-w-[80%] rounded-lg bg-gray-200 px-4 py-2 text-sm text-gray-900">
-        {cleanedContent}
+      <div className="max-w-[80%]">
+        <div className="rounded-lg bg-gray-200 px-4 py-2 text-sm text-gray-900">
+          <MarkdownRenderer content={cleanedContent} />
+        </div>
+        <div className="mt-1 text-[10px] text-gray-400">
+          {formatTime(message.createdAt)}
+        </div>
       </div>
     </div>
   );
@@ -71,6 +87,11 @@ function SystemCard({ message }: { message: Message }) {
     <div className="flex justify-center">
       <div className="rounded border border-gray-300 bg-gray-100 px-4 py-2 text-xs text-gray-500">
         {message.content}
+        {message.createdAt && (
+          <span className="ml-2 text-[10px] text-gray-400">
+            {formatTime(message.createdAt)}
+          </span>
+        )}
       </div>
     </div>
   );

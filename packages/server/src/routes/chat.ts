@@ -100,7 +100,7 @@ chatRouter.post("/", async (req, res) => {
 
     emitAgentEvent("agent:started", { sessionId, agentName: agentConfig.name });
 
-    session.messages.push({ role: "user", content: message });
+    session.messages.push({ role: "user", content: message, createdAt: new Date().toISOString() });
 
     console.log("[chat] Running agent with model:", agentConfig.model, "history length:", session.messages.length);
     console.log("[chat] History messages:", session.messages.slice(0, -1).map((m) => `${m.role}: ${m.content.slice(0, 50)}...`));
@@ -114,7 +114,7 @@ chatRouter.post("/", async (req, res) => {
 
     res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
 
-    session.messages.push({ role: "assistant", content: result.summary });
+    session.messages.push({ role: "assistant", content: result.summary, createdAt: new Date().toISOString() });
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = new Date().toISOString();
     await sessionStore.save(session);
