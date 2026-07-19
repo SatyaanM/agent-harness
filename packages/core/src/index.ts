@@ -59,3 +59,18 @@ export type { CouncilMessage } from "./collaboration/council.js";
 
 export { InboxManager } from "./presentation/inbox.js";
 export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js";
+
+export type {
+  TTSConfig,
+  ParaphraseConfig,
+  ChunkerConfig,
+  AudioChunk,
+  TTSProvider,
+  ParaphraseResult,
+} from "./tts/types.js";
+export { GEMINI_VOICES, TAG_INDICATORS } from "./tts/types.js";
+export type { GeminiVoiceName } from "./tts/types.js";
+export { createGeminiTTSProvider } from "./tts/gemini.js";
+export { paraphrase } from "./tts/paraphrase.js";
+export { createSpeechChunker } from "./tts/chunker.js";
+export type { SpeechChunker } from "./tts/chunker.js";

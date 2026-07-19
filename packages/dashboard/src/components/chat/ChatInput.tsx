@@ -2,13 +2,17 @@
 
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
 import { useSessionStore } from '@/stores/session-store';
+import { useTTSStore } from '@/stores/tts-store';
 import { sendMessage } from '@/lib/api';
+import { TTSButton } from './TTSButton';
 
 export default function ChatInput() {
   const [input, setInput] = useState('');
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const addMessage = useSessionStore((s) => s.addMessage);
   const updateMessage = useSessionStore((s) => s.updateMessage);
+  const ttsEnabled = useTTSStore((s) => s.enabled);
+  const playTTS = useTTSStore((s) => s.play);
 
   const handleSubmit = async () => {
     if (!input.trim() || !activeSessionId) return;
@@ -70,6 +74,11 @@ export default function ChatInput() {
           }
         }
       }
+
+      // Auto-play TTS if enabled
+      if (ttsEnabled && accumulated.trim()) {
+        playTTS(accumulated);
+      }
     } catch {
       updateMessage(
         activeSessionId,
@@ -89,6 +98,7 @@ export default function ChatInput() {
   return (
     <div className="border-t border-gray-200 bg-white p-3">
       <div className="flex items-end gap-2">
+        <TTSButton />
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}

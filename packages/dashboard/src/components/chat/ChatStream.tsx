@@ -2,10 +2,33 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useSessionStore, type Message } from '@/stores/session-store';
+import { useTTSStore } from '@/stores/tts-store';
 import { DelegationCard } from './DelegationCard';
 import { CouncilCard } from './CouncilCard';
 import { InboxLink } from './InboxLink';
 import { MarkdownRenderer } from './MarkdownRenderer';
+
+const TAG_INDICATORS: Record<string, string> = {
+  excitedly: '✨',
+  excited: '✨',
+  amazed: '😲',
+  sighs: '😮‍💨',
+  laughs: '😄',
+  giggles: '😊',
+  whispers: '🤫',
+  serious: '⚠️',
+  gasp: '😮',
+  crying: '😢',
+  curious: '🤔',
+  panicked: '😰',
+  sarcastic: '😏',
+  shouting: '📢',
+  tired: '😴',
+  trembling: '🫨',
+  mischievously: '😈',
+};
+
+const TAG_REGEX = /\[([^\]]+)\]/g;
 
 function stripToolCalls(content: string): string {
   let cleaned = content;
@@ -38,6 +61,23 @@ function formatTime(isoString: string): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function extractTagIndicators(content: string): string[] {
+  const indicators: string[] = [];
+  let match;
+  while ((match = TAG_REGEX.exec(content)) !== null) {
+    const tag = match[1].toLowerCase().split(',')[0].trim();
+    const indicator = TAG_INDICATORS[tag];
+    if (indicator && !indicators.includes(indicator)) {
+      indicators.push(indicator);
+    }
+  }
+  return indicators;
+}
+
+function stripEmotiveTags(content: string): string {
+  return content.replace(TAG_REGEX, '').replace(/\s+/g, ' ').trim();
+}
+
 function UserMessage({ message }: { message: Message }) {
   return (
     <div className="flex justify-end">
@@ -55,14 +95,56 @@ function UserMessage({ message }: { message: Message }) {
 
 function AssistantMessage({ message }: { message: Message }) {
   const cleanedContent = stripToolCalls(message.content);
+  const displayContent = stripEmotiveTags(cleanedContent);
+  const { enabled, play } = useTTSStore();
+  const indicators = extractTagIndicators(cleanedContent);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const handlePlay = async () => {
+    setIsPlaying(true);
+    try {
+      await play(displayContent);
+    } catch (error) {
+      console.error('TTS error:', error);
+    } finally {
+      setIsPlaying(false);
+    }
+  };
+
   return (
     <div className="flex justify-start">
       <div className="max-w-[80%]">
         <div className="rounded-lg bg-gray-200 px-4 py-2 text-sm text-gray-900">
-          <MarkdownRenderer content={cleanedContent} />
+          <MarkdownRenderer content={displayContent} />
         </div>
-        <div className="mt-1 text-[10px] text-gray-400">
-          {formatTime(message.createdAt)}
+        <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-400">
+          <span>{formatTime(message.createdAt)}</span>
+          {indicators.length > 0 && (
+            <span className="text-xs" title="Emotive tags in speech">
+              {indicators.join(' ')}
+            </span>
+          )}
+          {enabled && (
+            <button
+              onClick={handlePlay}
+              disabled={isPlaying}
+              className="text-blue-600 hover:text-blue-800 disabled:text-gray-400"
+              title="Listen to this message"
+            >
+              {isPlaying ? (
+                <span className="animate-pulse">Playing...</span>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-3 w-3 inline"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

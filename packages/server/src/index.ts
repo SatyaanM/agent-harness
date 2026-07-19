@@ -17,6 +17,7 @@ import { chatRouter } from "./routes/chat.js";
 import { agentsRouter } from "./routes/agents.js";
 import inboxRouter from "./routes/inbox.js";
 import { settingsRouter } from "./routes/settings.js";
+import { ttsRouter } from "./routes/tts.js";
 import { initWebSocket } from "./ws/events.js";
 
 export function createApp() {
@@ -31,6 +32,7 @@ export function createApp() {
   app.use("/api/agents", agentsRouter);
   app.use("/api/inbox", inboxRouter);
   app.use("/api/settings", settingsRouter);
+  app.use("/api/tts", ttsRouter);
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });

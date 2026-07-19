@@ -112,7 +112,21 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           ...(params.system ? { system: params.system } : {}),
           ...(tools ? { tools } : {}),
         });
-        console.log("[llm] generateText succeeded:", { finishReason: result.finishReason, textLength: result.text?.length });
+        console.log("[llm] generateText succeeded:", {
+          finishReason: result.finishReason,
+          textLength: result.text?.length,
+          hasReasoning: !!(result as any).reasoning,
+        });
+
+        // Handle reasoning models: extract text from reasoning if content is empty
+        let responseText = result.text;
+        if (!responseText || responseText.trim().length === 0) {
+          const reasoning = (result as any).reasoning || (result as any).reasoning_content;
+          if (reasoning && typeof reasoning === "string") {
+            console.log("[llm] Using reasoning as text:", { reasoningLength: reasoning.length });
+            responseText = reasoning;
+          }
+        }
 
         const toolCalls = result.toolCalls?.length
           ? result.toolCalls.map((tc) => ({
@@ -124,7 +138,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
 
         const message: Message = {
           role: "assistant",
-          content: result.text,
+          content: responseText || "",
           ...(toolCalls ? { toolCalls } : {}),
         };
 
