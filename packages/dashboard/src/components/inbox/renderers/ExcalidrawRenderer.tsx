@@ -45,7 +45,15 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
     setSaved(false);
     sceneRef.current = null;
     try {
-      setParsed(JSON.parse(content));
+      const data = JSON.parse(content);
+      const appState =
+        data?.appState && typeof data.appState === 'object'
+          ? data.appState
+          : {};
+      if (!Array.isArray(appState.collaborators)) {
+        data.appState = { ...appState, collaborators: [] };
+      }
+      setParsed(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Invalid JSON');
     }
