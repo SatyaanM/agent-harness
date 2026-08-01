@@ -101,6 +101,27 @@ export class InboxManager {
     return updated;
   }
 
+  async renameKey(oldId: string, newId: string): Promise<void> {
+    await this.ensureLoaded();
+    const existing = this.metadata.get(oldId);
+    if (!existing) return;
+    this.metadata.set(newId, { ...existing, id: newId });
+    this.metadata.delete(oldId);
+    await this.persist();
+  }
+
+  async untrackRecursive(prefix: string): Promise<void> {
+    await this.ensureLoaded();
+    let changed = false;
+    for (const key of this.metadata.keys()) {
+      if (key === prefix || key.startsWith(`${prefix}/`)) {
+        this.metadata.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) await this.persist();
+  }
+
   getInboxDir(): string {
     return this.inboxDir;
   }

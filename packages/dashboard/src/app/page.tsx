@@ -1,5 +1,7 @@
-import { InboxBrowser } from '@/components/inbox/InboxBrowser';
+'use client';
+
+import { InboxWorkspace } from '@/components/inbox/InboxWorkspace';
 
 export default function HomePage() {
-  return <InboxBrowser />;
+  return <InboxWorkspace />;
 }
