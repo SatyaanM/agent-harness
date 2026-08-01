@@ -29,7 +29,7 @@ export function InboxItemView({ item }: InboxItemViewProps) {
       <div className="flex-1 overflow-auto p-4">
         <Renderer
           content={content}
-          item={{ name: item.name, type: item.type }}
+          item={{ name: item.name, type: item.type, path: item.id }}
         />
       </div>
     </div>

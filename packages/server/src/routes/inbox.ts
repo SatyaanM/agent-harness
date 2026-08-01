@@ -84,6 +84,33 @@ router.get("/file", async (req, res) => {
   });
 });
 
+router.put("/file", async (req, res) => {
+  const config = getConfig();
+  const inboxManager = getInboxManager();
+  const rel = String(req.query["path"] ?? "");
+  const { content } = req.body as { content?: string };
+
+  if (typeof content !== "string") {
+    res.status(400).json({ error: "content is required" });
+    return;
+  }
+
+  const rootResolved = path.resolve(config.INBOX_ROOT);
+  const filePath = path.resolve(rootResolved, rel);
+  if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
+    res.status(403).json({ error: "Invalid path" });
+    return;
+  }
+  if (!(await fs.pathExists(filePath))) {
+    res.status(404).json({ error: "Inbox item not found" });
+    return;
+  }
+
+  await fs.writeFile(filePath, content, "utf-8");
+  const updated = await inboxManager.bumpVersion(rel);
+  res.json({ success: true, metadata: updated });
+});
+
 router.post("/move", async (req, res) => {
   const config = getConfig();
   const inboxManager = getInboxManager();

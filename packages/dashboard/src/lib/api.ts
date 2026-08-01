@@ -45,6 +45,15 @@ export async function fetchInboxFile(path: string): Promise<InboxItem> {
   return res.json();
 }
 
+export async function updateInboxFile(path: string, content: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/inbox/file?path=${encodeURIComponent(path)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) throw new Error('Failed to save file');
+}
+
 export async function moveInboxItem(from: string, toDir: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/inbox/move`, {
     method: 'POST',

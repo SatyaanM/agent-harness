@@ -11,7 +11,7 @@ import {
 
 export interface InboxRendererProps {
   content: string;
-  item?: { name: string; type: string };
+  item?: { name: string; type: string; path?: string };
 }
 
 export type InboxRendererComponent = ComponentType<any>;
