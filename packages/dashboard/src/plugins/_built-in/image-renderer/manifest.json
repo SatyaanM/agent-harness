@@ -1,0 +1,14 @@
+{
+  "name": "image-renderer",
+  "version": "1.0.0",
+  "description": "Renders image inbox items with lightbox",
+  "provides": {
+    "inboxRenderers": [
+      {
+        "extensions": ["png", "jpg", "jpeg", "gif", "webp", "svg"],
+        "component": "ImageRenderer",
+        "label": "Image"
+      }
+    ]
+  }
+}

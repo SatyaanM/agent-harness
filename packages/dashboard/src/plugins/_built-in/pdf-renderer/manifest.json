@@ -1,0 +1,14 @@
+{
+  "name": "pdf-renderer",
+  "version": "1.0.0",
+  "description": "Renders PDF inbox items",
+  "provides": {
+    "inboxRenderers": [
+      {
+        "extensions": ["pdf"],
+        "component": "PdfRenderer",
+        "label": "PDF"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "markdown-renderer",
+  "version": "1.0.0",
+  "description": "Renders markdown inbox items",
+  "provides": {
+    "inboxRenderers": [
+      {
+        "extensions": ["md", "markdown"],
+        "component": "MarkdownRenderer",
+        "label": "Markdown"
+      }
+    ]
+  }
+}

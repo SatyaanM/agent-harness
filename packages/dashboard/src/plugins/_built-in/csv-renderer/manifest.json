@@ -1,0 +1,14 @@
+{
+  "name": "csv-renderer",
+  "version": "1.0.0",
+  "description": "Renders CSV inbox items as a sortable table",
+  "provides": {
+    "inboxRenderers": [
+      {
+        "extensions": ["csv"],
+        "component": "CsvRenderer",
+        "label": "CSV Table"
+      }
+    ]
+  }
+}

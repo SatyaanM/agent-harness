@@ -12,6 +12,76 @@ export async function createSession() {
   return res.json();
 }
 
+export interface InboxItem {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  lastModified: string;
+  content?: string;
+  metadata?: unknown;
+}
+
+export interface InboxTreeEntry {
+  name: string;
+  path: string;
+  absPath: string;
+  type: 'file' | 'dir';
+  size?: number;
+  lastModified?: string;
+  metadata?: unknown;
+  children?: InboxTreeEntry[];
+}
+
+export async function fetchInboxTree(): Promise<InboxTreeEntry[]> {
+  const res = await fetch(`${BASE_URL}/api/inbox/tree`);
+  if (!res.ok) throw new Error('Failed to fetch inbox tree');
+  return res.json();
+}
+
+export async function fetchInboxFile(path: string): Promise<InboxItem> {
+  const res = await fetch(`${BASE_URL}/api/inbox/file?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error('Inbox item not found');
+  return res.json();
+}
+
+export async function moveInboxItem(from: string, toDir: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/inbox/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to: toDir }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(data?.error ?? 'Failed to move item');
+  }
+}
+
+export async function deleteInboxItem(path: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/inbox/file?path=${encodeURIComponent(path)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete item');
+}
+
+export async function createInboxDir(path: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/inbox/dir`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) throw new Error('Failed to create folder');
+}
+
+export async function openInboxItem(path: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/inbox/open`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) throw new Error('Failed to open in explorer');
+}
+
 export async function sendMessage(
   sessionId: string,
   content: string
@@ -117,4 +187,39 @@ export async function deleteAgent(name: string): Promise<void> {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error('Failed to delete agent');
+}
+
+export interface InboxRendererMeta {
+  extensions: string[];
+  component: string;
+  label?: string;
+}
+
+export interface PluginManifest {
+  name: string;
+  version: string;
+  description?: string;
+  enabled: boolean;
+  provides: {
+    inboxRenderers?: InboxRendererMeta[];
+  };
+}
+
+export async function fetchPlugins(): Promise<PluginManifest[]> {
+  const res = await fetch(`${BASE_URL}/api/plugins`);
+  if (!res.ok) throw new Error('Failed to fetch plugins');
+  return res.json();
+}
+
+export async function updatePlugin(
+  name: string,
+  enabled: boolean
+): Promise<PluginManifest> {
+  const res = await fetch(`${BASE_URL}/api/plugins/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error('Failed to update plugin');
+  return res.json();
 }

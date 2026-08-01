@@ -1,0 +1,14 @@
+{
+  "name": "excalidraw-renderer",
+  "version": "1.0.0",
+  "description": "Renders Excalidraw diagram inbox items",
+  "provides": {
+    "inboxRenderers": [
+      {
+        "extensions": ["excalidraw"],
+        "component": "ExcalidrawRenderer",
+        "label": "Excalidraw"
+      }
+    ]
+  }
+}

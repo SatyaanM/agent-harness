@@ -60,6 +60,15 @@ export type { CouncilMessage } from "./collaboration/council.js";
 export { InboxManager } from "./presentation/inbox.js";
 export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js";
 
+export {
+  PluginManifestSchema,
+  InboxRendererManifestSchema,
+} from "./plugin/types.js";
+export type {
+  PluginManifest,
+  InboxRendererManifest,
+} from "./plugin/types.js";
+
 export type {
   TTSConfig,
   ParaphraseConfig,

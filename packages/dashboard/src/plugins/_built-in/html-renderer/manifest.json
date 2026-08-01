@@ -1,0 +1,14 @@
+{
+  "name": "html-renderer",
+  "version": "1.0.0",
+  "description": "Renders HTML inbox items in a sandboxed iframe",
+  "provides": {
+    "inboxRenderers": [
+      {
+        "extensions": ["html", "htm"],
+        "component": "HtmlRenderer",
+        "label": "HTML"
+      }
+    ]
+  }
+}
