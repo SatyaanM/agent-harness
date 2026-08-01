@@ -386,4 +386,82 @@ agent-harness/
 
 ---
 
+## 10. Message Delivery and Session-to-Session Communication
+
+This section defines how work and results flow between sessions, agents, and the user. It pins down a delivery model that must hold as the system grows.
+
+### 10.1 Delivery is the system's job, never the agent's
+
+An agent must never poll for status. Checking "are my workers done?" via a tool call burns tokens on bookkeeping and couples the agent to the runtime's scheduling. Instead, the system owns delivery:
+
+- When a worker (or another session) produces a result, the **system** enqueues it for the target session.
+- While a session is running, the runtime drains its incoming messages at each loop boundary and injects them into the agent's context as system messages.
+- The agent only acts on what it is given. It never spends a tool call asking "anything new?"
+
+This is a hard invariant: there is no agent-facing "check inbox" tool.
+
+### 10.2 Sessions are addressable runtime units with durable mailboxes
+
+A session is not just a transcript file. It is an addressable unit with:
+
+- **A durable mailbox** — an ordered, persisted queue of incoming messages (user messages, worker completions, session-to-session messages).
+- **A runtime** — the in-memory execution context (agent config, message history, busy state) that processes the mailbox.
+
+Any sender — user, worker, or another session — posts to a session's mailbox. Senders never talk to an agent directly.
+
+### 10.3 The loaded gate
+
+A session's mailbox is drained **only when the session is loaded** — that is, when its runtime is alive in the server. This is the single rule governing delivery:
+
+- **Loaded session:** incoming messages are enqueued and the runtime is signaled. If the session is not currently running, it is woken to process. An open, idle session can therefore be given work and will act on it.
+- **Not-loaded session:** incoming messages accumulate in the durable mailbox, untouched and unprocessed. When the session is loaded later, it drains the mailbox in order.
+
+The distinction is loaded vs. not-loaded, **not** idle vs. running. "Idle" must never prevent a loaded session from receiving and acting on work.
+
+### 10.4 Session-to-session communication
+
+Orchestration is not limited to an orchestrator spawning delegates. A session can spawn other sessions, and any session can post to any other session's mailbox. Multi-level orchestration is the natural result: an orchestrating session spins up sessions, those sessions run their own delegated agents, and results report back by posting to the orchestrator's mailbox. Whether a posted message triggers work depends only on the target's loaded state (10.3).
+
+### 10.5 Runtime and manager
+
+The server keeps:
+
+- **`SessionRuntime`** — owns an agent's config, history, mailbox, and a serialized `process()` (one run at a time; messages arriving mid-run queue until the current run yields).
+- **`SessionManager`** — a registry of loaded runtimes; routes messages to the correct session; loads a session when opened and unloads it (keeping the durable mailbox) when appropriate.
+
+The chat route becomes "enqueue a message and signal the runtime" rather than a synchronous full run. The runtime emits WebSocket events so the UI stays live.
+
+### 10.6 Worker completion delivery
+
+When a worker completes, the system posts the result to the delegating session's mailbox (summary + status + task id; the full transcript remains available on demand via `readSession`). If that session is loaded, its runtime wakes and processes; if not, the result persists until the session is loaded. The agent never polls for this.
+
+### 10.7 Durable storage — the single-writer rule
+
+One piece of code owns all session file I/O. No caller writes files directly; callers submit full-state snapshots through the store, and the store is the only thing that touches disk.
+
+- **Per-session write queue:** writes to a given session file are serialized — only one write in flight per session at a time. Different sessions write in parallel; the same session never overlaps.
+- **Full-state snapshots:** every queued write is the complete session state (transcript, result, pending mailbox), never a delta.
+- **Atomic writes:** write to a temp file, then rename over the target, so a crash mid-write can never leave a truncated file.
+- **Immediate flush, whole-queue drain:** there is no artificial debounce or wait for more writes. A write triggers an immediate flush. When the flush runs, it drains *everything* queued for that file at that moment in one operation. One queued write → one disk write. Five queued writes → one disk write containing all five (because each is a full snapshot, the newest snapshot is the merged result). N writes never become N disk writes when they could be one.
+- **Debounce is a transcript-only refinement:** an agent doing continuous work writes the transcript constantly. Where that bursts, writes to the *transcript* may be debounced and coalesced to the latest snapshot to bound disk I/O. Debounce and coalescing never apply to mailbox messages.
+
+### 10.8 Two stores, two durability profiles
+
+Durable state has two distinct halves with different requirements. They are often conflated; they must be treated separately.
+
+- **Session transcript** (the conversation stream): written continuously during a run. Correct semantics are latest-state-wins — coalesce and debounce are safe, and a crash loses only the unwritten tail since the last flush.
+- **Inter-agent mailbox** (the delivery queue): discrete, individually meaningful messages (worker completions, session-to-session messages). Semantics are **lossless and ordered**. Messages are never coalesced, never collapsed, and never dribbled out one at a time. A message is removed only once it has actually been delivered (acked) by the consuming runtime.
+
+The two may live in the same session file under the same single-writer mechanism — the snapshot includes the pending-mailbox array, so coalescing the transcript to the latest snapshot still preserves every undelivered message. Removal from the mailbox is tied to delivery, never to the write itself. Where stronger mailbox guarantees are wanted, it can be kept as a separate append-only log committed independently of the transcript snapshot.
+
+### 10.9 Mailbox delivery — atomic batch drain
+
+When a session's runtime processes, it drains the **entire** mailbox at once and delivers all pending messages to the agent **together in a single injection** — never one at a time.
+
+- The agent sees the complete set of pending messages before it makes its next decision. Partial information is a correctness failure: three worker completions may each be required for the agent to do its work.
+- The drain is all-or-nothing: either the whole batch is delivered and the mailbox is cleared, or (if interrupted) nothing is cleared. There is never a partial drain.
+- Messages arriving while a run is in progress accumulate and are drained wholesale at the next loop boundary — same rule, all at once.
+
+---
+
 *This document should be updated when a new design decision is made that affects how the system is built. Implementation details belong in code comments and README files — not here.*
