@@ -1,9 +1,10 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '@excalidraw/excalidraw/index.css';
 import { updateInboxFile } from '@/lib/api';
+import { useInboxHeaderActions } from '../header-actions';
 import { Button } from '@/components/ui/button';
 import { Save } from 'lucide-react';
 
@@ -37,6 +38,7 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const sceneRef = useRef<ExcalidrawScene | null>(null);
+  const setHeaderActions = useInboxHeaderActions();
 
   useEffect(() => {
     setParsed(null);
@@ -67,12 +69,15 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
     [parsed]
   );
 
-  const handleChange = (elements: any, appState: any, files: any) => {
-    sceneRef.current = { elements, appState, files };
-    setIsDirty(JSON.stringify(elements) !== initialElementsJson);
-  };
+  const handleChange = useCallback(
+    (elements: any, appState: any, files: any) => {
+      sceneRef.current = { elements, appState, files };
+      setIsDirty(JSON.stringify(elements) !== initialElementsJson);
+    },
+    [initialElementsJson]
+  );
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     if (!sceneRef.current || !item?.path) return;
     setSaving(true);
     setError(null);
@@ -91,7 +96,17 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
     } finally {
       setSaving(false);
     }
-  };
+  }, [parsed, item]);
+
+  useEffect(() => {
+    setHeaderActions(
+      <Button size="sm" onClick={handleSave} disabled={!isDirty || saving}>
+        <Save className="h-4 w-4" />
+        {saving ? 'Saving...' : saved ? 'Saved' : 'Save'}
+      </Button>
+    );
+    return () => setHeaderActions(null);
+  }, [isDirty, saving, saved, handleSave, setHeaderActions]);
 
   if (error && !parsed) {
     return (
@@ -103,15 +118,6 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b bg-background px-3 py-2">
-        <span className="text-sm font-medium text-foreground truncate">
-          {item?.name ?? 'Excalidraw'}
-        </span>
-        <Button size="sm" onClick={handleSave} disabled={!isDirty || saving}>
-          <Save className="h-4 w-4" />
-          {saving ? 'Saving...' : saved ? 'Saved' : 'Save'}
-        </Button>
-      </div>
       {error && (
         <div className="mx-2 mt-2 rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}

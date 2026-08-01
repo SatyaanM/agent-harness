@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -8,6 +8,7 @@ import { createHighlighter, type Highlighter } from 'shiki';
 import { FilePenLine, Save, X } from 'lucide-react';
 import { updateInboxFile } from '@/lib/api';
 import { useThemeStore } from '@/stores/theme-store';
+import { useInboxHeaderActions } from '../header-actions';
 import { Button } from '@/components/ui/button';
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -121,21 +122,22 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const setHeaderActions = useInboxHeaderActions();
 
-  const startEditing = () => {
+  const startEditing = useCallback(() => {
     setDraft(current);
     setDirty(false);
     setSaved(false);
     setError(null);
     setEditing(true);
-  };
+  }, [current]);
 
-  const cancelEdit = () => {
+  const cancelEdit = useCallback(() => {
     setEditing(false);
     setDirty(false);
     setSaved(false);
     setError(null);
-  };
+  }, []);
 
   const handleEditorChange = (value: string | undefined) => {
     const next = value ?? '';
@@ -144,7 +146,7 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
     setSaved(false);
   };
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     if (!item?.path) return;
     setSaving(true);
     setError(null);
@@ -158,7 +160,33 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
     } finally {
       setSaving(false);
     }
-  };
+  }, [draft, item]);
+
+  useEffect(() => {
+    setHeaderActions(
+      editing ? (
+        <>
+          {saved && !dirty && (
+            <span className="text-xs text-green-600 dark:text-green-400">Saved</span>
+          )}
+          <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={saving}>
+            <X className="h-4 w-4" />
+            Cancel
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
+            <Save className="h-4 w-4" />
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+        </>
+      ) : (
+        <Button variant="ghost" size="sm" onClick={startEditing}>
+          <FilePenLine className="h-4 w-4" />
+          Edit
+        </Button>
+      )
+    );
+    return () => setHeaderActions(null);
+  }, [editing, saved, dirty, saving, startEditing, cancelEdit, handleSave, setHeaderActions]);
 
   const components: Components = {
     pre: ({ children }) => <>{children}</>,
@@ -201,31 +229,6 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b bg-background px-4 py-2">
-        {editing ? (
-          <>
-            {saved && !dirty && (
-              <span className="mr-auto text-xs text-green-600 dark:text-green-400">Saved</span>
-            )}
-            <div className="ml-auto flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={saving}>
-                <X className="h-4 w-4" />
-                Cancel
-              </Button>
-              <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
-                <Save className="h-4 w-4" />
-                {saving ? 'Saving...' : 'Save'}
-              </Button>
-            </div>
-          </>
-        ) : (
-          <Button variant="ghost" size="sm" className="ml-auto" onClick={startEditing}>
-            <FilePenLine className="h-4 w-4" />
-            Edit
-          </Button>
-        )}
-      </div>
-
       {error && (
         <div className="mx-4 mt-2 rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
