@@ -23,6 +23,7 @@ export interface Session {
   sessionId: string;
   messages: Message[];
   status: 'active' | 'idle' | 'archived';
+  agentName: string;
   createdAt: string;
 }
 
@@ -31,6 +32,7 @@ interface SessionStore {
   activeSessionId: string | null;
   addSession: (session: Session) => void;
   setActiveSession: (sessionId: string) => void;
+  setAgentName: (sessionId: string, agentName: string) => void;
   addMessage: (sessionId: string, message: Message) => void;
   updateMessage: (sessionId: string, messageId: string, content: string) => void;
 }
@@ -46,6 +48,13 @@ export const useSessionStore = create<SessionStore>((set) => ({
     })),
 
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
+
+  setAgentName: (sessionId, agentName) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.sessionId === sessionId ? { ...s, agentName } : s
+      ),
+    })),
 
   addMessage: (sessionId, message) =>
     set((state) => ({

@@ -2,6 +2,7 @@
 
 import { useSessionStore } from '@/stores/session-store';
 import { createSession } from '@/lib/api';
+import AgentPicker from './AgentPicker';
 
 export default function SessionTabs() {
   const sessions = useSessionStore((s) => s.sessions);
@@ -16,6 +17,7 @@ export default function SessionTabs() {
         sessionId: session.sessionId,
         messages: [],
         status: 'active',
+        agentName: session.agentName ?? 'orchestrator',
         createdAt: new Date().toISOString(),
       });
     } catch {
@@ -24,6 +26,7 @@ export default function SessionTabs() {
         sessionId: id,
         messages: [],
         status: 'active',
+        agentName: 'orchestrator',
         createdAt: new Date().toISOString(),
       });
     }
@@ -50,6 +53,9 @@ export default function SessionTabs() {
       >
         +
       </button>
+      <div className="ml-auto flex items-center">
+        <AgentPicker />
+      </div>
     </div>
   );
 }

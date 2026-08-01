@@ -12,6 +12,7 @@ import { TTSButton } from './TTSButton';
 export default function ChatInput() {
   const [input, setInput] = useState('');
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const sessions = useSessionStore((s) => s.sessions);
   const addMessage = useSessionStore((s) => s.addMessage);
   const updateMessage = useSessionStore((s) => s.updateMessage);
   const ttsEnabled = useTTSStore((s) => s.enabled);
@@ -48,8 +49,14 @@ export default function ChatInput() {
     const content = input.trim();
     setInput('');
 
+    const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
+
     try {
-      const stream = await sendMessage(activeSessionId, content);
+      const stream = await sendMessage(
+        activeSessionId,
+        content,
+        activeSession?.agentName
+      );
       if (!stream) return;
 
       const reader = stream.getReader();

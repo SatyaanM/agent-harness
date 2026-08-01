@@ -29,7 +29,9 @@ sessionsRouter.post("/", async (req, res) => {
     sessionId: randomUUID(),
     taskId: randomUUID(),
     prompt: req.body["prompt"] ?? "",
+    agentName: req.body["agentName"] ?? "orchestrator",
     messages: [],
+    mailbox: [],
     createdAt: new Date().toISOString(),
   };
   await getSessionStore().save(session);

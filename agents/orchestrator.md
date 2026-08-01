@@ -1,6 +1,7 @@
 ---
 name: orchestrator
 model: DEFAULT
+description: Coordinates work by delegating to specialized worker agents.
 tools:
   - readFile
   - writeFile
@@ -10,6 +11,8 @@ tools:
   - grep
   - runCommand
   - webFetch
+  - delegate
+  - readSession
 maxSteps: 50
 ---
 

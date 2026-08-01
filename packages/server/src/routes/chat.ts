@@ -1,4 +1,5 @@
 import { Router } from "express";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   Agent,
@@ -16,11 +17,43 @@ import {
   grepTool,
   runCommandTool,
   webFetchTool,
+  createDelegateTool,
+  createReadSessionTool,
 } from "@agent-harness/core";
 import type { SessionData } from "@agent-harness/core";
 import { emitAgentEvent } from "../ws/events.js";
 
 export const chatRouter = Router();
+
+function resolveAgentConfig(agentName: string | undefined) {
+  const config = getConfig();
+  const name = agentName || "orchestrator";
+  try {
+    const agentConfig = loadAgentConfig(path.join(config.AGENTS_DIR, `${name}.md`));
+    if (agentConfig.model === "DEFAULT") {
+      agentConfig.model = config.DEFAULT_MODEL;
+    }
+    return agentConfig;
+  } catch {
+    try {
+      const orchestratorConfig = loadAgentConfig(
+        path.join(config.AGENTS_DIR, "orchestrator.md")
+      );
+      if (orchestratorConfig.model === "DEFAULT") {
+        orchestratorConfig.model = config.DEFAULT_MODEL;
+      }
+      return orchestratorConfig;
+    } catch {
+      return {
+        name: "orchestrator",
+        model: config.DEFAULT_MODEL,
+        tools: [],
+        maxSteps: 10,
+        instructions: "You are a helpful orchestrator agent.",
+      };
+    }
+  }
+}
 
 chatRouter.post("/", async (req, res) => {
   const config = getConfig();
@@ -33,9 +66,13 @@ chatRouter.post("/", async (req, res) => {
   });
 
   const sessionStore = new SessionStore(config.SESSIONS_DIR);
-  const { sessionId, message } = req.body as { sessionId?: string; message?: string };
+  const { sessionId, message, agentName } = req.body as {
+    sessionId?: string;
+    message?: string;
+    agentName?: string;
+  };
 
-  console.log("[chat] Request:", { sessionId, messageLength: message?.length });
+  console.log("[chat] Request:", { sessionId, messageLength: message?.length, agentName });
 
   if (!sessionId || !message) {
     res.status(400).json({ error: "sessionId and message are required" });
@@ -48,9 +85,13 @@ chatRouter.post("/", async (req, res) => {
       sessionId,
       taskId: randomUUID(),
       prompt: message,
+      agentName: agentName || "orchestrator",
       messages: [],
+      mailbox: [],
       createdAt: new Date().toISOString(),
     };
+  } else if (agentName) {
+    session.agentName = agentName;
   }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -59,25 +100,12 @@ chatRouter.post("/", async (req, res) => {
   res.flushHeaders();
 
   try {
-    const orchestratorConfigPath = `${config.AGENTS_DIR}/orchestrator.md`;
-    let agentConfig;
-    try {
-      agentConfig = loadAgentConfig(orchestratorConfigPath);
-      // Replace DEFAULT model placeholder with the actual default from settings
-      if (agentConfig.model === "DEFAULT") {
-        agentConfig.model = config.DEFAULT_MODEL;
-      }
-      console.log("[chat] Loaded agent config:", { name: agentConfig.name, model: agentConfig.model });
-    } catch (err) {
-      console.log("[chat] Failed to load agent config, using defaults:", err);
-      agentConfig = {
-        name: "orchestrator",
-        model: config.DEFAULT_MODEL,
-        tools: [],
-        maxSteps: 10,
-        instructions: "You are a helpful orchestrator agent.",
-      };
-    }
+    const agentConfig = resolveAgentConfig(session.agentName);
+    console.log("[chat] Loaded agent config:", {
+      name: agentConfig.name,
+      model: agentConfig.model,
+      tools: agentConfig.tools,
+    });
 
     const toolRegistry = new ToolRegistry();
     toolRegistry.register(createReadFileTool(config.ROOT));
@@ -88,13 +116,46 @@ chatRouter.post("/", async (req, res) => {
     toolRegistry.register(grepTool);
     toolRegistry.register(runCommandTool);
     toolRegistry.register(webFetchTool);
-    console.log("[chat] Registered tools:", toolRegistry.getAll().map((t) => t.name));
-    console.log("[chat] Agent config tools:", agentConfig.tools);
+
     const llmClient = createVercelAILLMClient(config);
     const capabilityRegistry = new CapabilityRegistry({
       workspaceRoot: config.ROOT,
       baseUrl: config.PROVIDER_ENDPOINT,
     });
+
+    if (agentConfig.tools.includes("delegate")) {
+      toolRegistry.register(
+        createDelegateTool({
+          sessionsDir: config.SESSIONS_DIR,
+          sessionId: session.sessionId,
+          config: agentConfig,
+          toolRegistry,
+          llmClient,
+          capabilityRegistry,
+        })
+      );
+    }
+    if (agentConfig.tools.includes("readSession")) {
+      toolRegistry.register(createReadSessionTool(config.SESSIONS_DIR));
+    }
+    console.log("[chat] Registered tools:", toolRegistry.getAll().map((t) => t.name));
+
+    const delivered = session.mailbox ?? [];
+    if (delivered.length > 0) {
+      session.mailbox = [];
+      session.messages.push(
+        ...delivered.map((p) => ({
+          role: "system" as const,
+          content:
+            `Worker "${p.agentName}" (task ${p.taskId}) ` +
+            `${p.status === "done" ? "completed" : "failed"}: ${p.summary} ` +
+            `You may call readSession with taskId "${p.taskId}" for the full transcript.`,
+          createdAt: p.receivedAt,
+        }))
+      );
+      console.log("[chat] Delivered mailbox:", delivered.length, "pending message(s)");
+    }
+    await sessionStore.save(session);
 
     const agent = new Agent(agentConfig, toolRegistry, llmClient, capabilityRegistry);
 

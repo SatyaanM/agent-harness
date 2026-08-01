@@ -44,9 +44,11 @@ export type { Config } from "./config.js";
 
 export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
 export { SessionStore } from "./persistence/session.js";
-export type { SessionData } from "./persistence/session.js";
+export type { SessionData, PendingMessage } from "./persistence/session.js";
 
 export { Orchestrator } from "./agent/orchestrator.js";
+export { createDelegateTool, createReadSessionTool } from "./agent/delegation.js";
+export type { DelegationDeps } from "./agent/delegation.js";
 
 export { MessageBus, messageBus } from "./collaboration/message-bus.js";
 export type { BusMessage } from "./collaboration/message-bus.js";

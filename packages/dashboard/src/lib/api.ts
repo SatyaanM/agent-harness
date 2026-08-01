@@ -93,12 +93,13 @@ export async function openInboxItem(path: string): Promise<void> {
 
 export async function sendMessage(
   sessionId: string,
-  content: string
+  content: string,
+  agentName?: string
 ): Promise<ReadableStream<Uint8Array> | null> {
   const res = await fetch(`${BASE_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, message: content }),
+    body: JSON.stringify({ sessionId, message: content, agentName }),
   });
   if (!res.ok) throw new Error('Failed to send message');
   return res.body;
@@ -154,6 +155,7 @@ export interface AgentConfig {
   model: string;
   tools: string[];
   maxSteps: number;
+  description?: string;
   capabilities?: string[];
   modelIdMapping?: Record<string, string>;
   instructions?: string;

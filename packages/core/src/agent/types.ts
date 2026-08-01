@@ -8,6 +8,7 @@ export interface AgentConfig {
   tools: string[];
   maxSteps: number;
   instructions: string;
+  description?: string;
   capabilities?: CapabilityMatrix;
   modelIdMapping?: string;
 }

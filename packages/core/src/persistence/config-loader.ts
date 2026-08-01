@@ -18,6 +18,7 @@ const AgentFrontmatterSchema = z.object({
   model: z.string().min(1),
   tools: z.array(z.string()).min(1),
   maxSteps: z.number().int().positive(),
+  description: z.string().optional(),
   capabilities: CapabilityMatrixSchema.optional(),
   modelIdMapping: z.string().optional(),
 });
@@ -34,6 +35,7 @@ export function loadAgentConfig(filePath: string): AgentConfig {
     tools: parsed.tools,
     maxSteps: parsed.maxSteps,
     instructions: content.trim(),
+    description: parsed.description,
     capabilities: parsed.capabilities as CapabilityMatrix | undefined,
     modelIdMapping: parsed.modelIdMapping,
   };

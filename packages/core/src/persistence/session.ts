@@ -2,11 +2,22 @@ import fs from "fs-extra";
 import path from "path";
 import type { Message, TaskId } from "../agent/types.js";
 
+export interface PendingMessage {
+  taskId: TaskId;
+  from: string;
+  agentName: string;
+  status: "done" | "error";
+  summary: string;
+  receivedAt: string;
+}
+
 export interface SessionData {
   sessionId: string;
   taskId: TaskId;
   prompt: string;
   messages: Message[];
+  agentName?: string;
+  mailbox?: PendingMessage[];
   result?: {
     status: string;
     summary: string;
