@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import { ThemeProvider } from '@/components/layout/ThemeProvider';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { PluginProvider } from '@/components/layout/PluginProvider';
@@ -10,20 +11,19 @@ export const metadata: Metadata = {
   description: 'Dashboard for the Agent Harness',
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const cookieStore = await cookies();
+  const theme = cookieStore.get('theme')?.value;
+  const themeClass =
+    theme === 'light' || theme === 'dark' ? theme : undefined;
+
   return (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark'){document.documentElement.classList.toggle('dark',t==='dark')}else if(window.matchMedia('(prefers-color-scheme: dark)').matches){document.documentElement.classList.add('dark')}}catch(e){}})();`,
-          }}
-        />
-      </head>
+    <html lang="en" suppressHydrationWarning className={themeClass}>
+      <head />
       <body>
         <ThemeProvider>
           <div className="flex h-screen">

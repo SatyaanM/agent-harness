@@ -22,7 +22,14 @@ function getInitialTheme(): Theme {
 
 function applyTheme(theme: Theme): void {
   if (typeof window === 'undefined') return;
-  document.documentElement.classList.toggle('dark', theme === 'dark');
+  const root = document.documentElement;
+  root.classList.toggle('dark', theme === 'dark');
+  root.classList.toggle('light', theme === 'light');
+}
+
+function setThemeCookie(theme: Theme): void {
+  if (typeof document === 'undefined') return;
+  document.cookie = `theme=${theme}; path=/; max-age=31536000; samesite=lax`;
 }
 
 export const useThemeStore = create<ThemeState>((set, get) => ({
@@ -31,6 +38,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     const theme = getInitialTheme();
     set({ theme });
     applyTheme(theme);
+    setThemeCookie(theme);
   },
   setTheme: (theme) => {
     set({ theme });
@@ -38,6 +46,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
       localStorage.setItem('theme', theme);
     } catch {}
     applyTheme(theme);
+    setThemeCookie(theme);
   },
   toggle: () => get().setTheme(get().theme === 'dark' ? 'light' : 'dark'),
 }));
