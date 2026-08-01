@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useMemo, useState } from 'react';
+import '@excalidraw/excalidraw/index.css';
 
 const ExcalidrawComponent = dynamic(
   () => import('@excalidraw/excalidraw').then((mod) => mod.Excalidraw),
