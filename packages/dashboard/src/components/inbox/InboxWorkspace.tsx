@@ -40,7 +40,7 @@ export function InboxWorkspace() {
         <FileExplorer collapsed={collapsed} onToggleCollapse={toggleCollapsed} />
       </Panel>
       <PanelResizeHandle className="w-1 bg-border transition-colors hover:bg-blue-500" />
-      <Panel id="inbox-content" minSize={20}>
+      <Panel id="inbox-content" defaultSize={70} minSize={20}>
         <InboxContentView />
       </Panel>
     </PanelGroup>
