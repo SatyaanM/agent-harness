@@ -1,40 +1,262 @@
 'use client';
 
-import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { createHighlighter, type Highlighter } from 'shiki';
+import { FilePenLine, Save, X } from 'lucide-react';
+import { updateInboxFile } from '@/lib/api';
+import { useThemeStore } from '@/stores/theme-store';
+import { Button } from '@/components/ui/button';
+
+const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+
+const HIGHLIGHT_LANGS = [
+  'typescript',
+  'javascript',
+  'jsx',
+  'tsx',
+  'json',
+  'jsonc',
+  'yaml',
+  'markdown',
+  'python',
+  'rust',
+  'go',
+  'bash',
+  'shell',
+  'sql',
+  'css',
+  'scss',
+  'html',
+  'xml',
+  'java',
+  'c',
+  'cpp',
+  'csharp',
+  'ruby',
+  'php',
+  'diff',
+  'toml',
+  'graphql',
+  'powershell',
+];
+
+let highlighterPromise: Promise<Highlighter> | null = null;
+
+function getHighlighter(): Promise<Highlighter> {
+  if (!highlighterPromise) {
+    highlighterPromise = createHighlighter({
+      themes: ['github-dark', 'github-light'],
+      langs: HIGHLIGHT_LANGS,
+    });
+  }
+  return highlighterPromise;
+}
+
+function CodeBlock({
+  code,
+  lang,
+  theme,
+}: {
+  code: string;
+  lang: string;
+  theme: 'github-dark' | 'github-light';
+}) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getHighlighter()
+      .then((hl) => {
+        if (cancelled) return;
+        try {
+          setHtml(hl.codeToHtml(code, { lang, theme }));
+        } catch {
+          setFailed(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [code, lang, theme]);
+
+  if (html) {
+    return (
+      <div
+        className="not-prose my-4 overflow-x-auto rounded-lg border border-border [&_pre]:!my-0"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    );
+  }
+
+  return (
+    <pre
+      className={`not-prose my-4 overflow-x-auto rounded-lg border border-border bg-muted p-4 text-sm text-foreground ${
+        failed ? 'opacity-60' : ''
+      }`}
+    >
+      <code className={`language-${lang}`}>{code}</code>
+    </pre>
+  );
+}
 
 interface MarkdownRendererProps {
   content: string;
+  item?: { name: string; type: string; path?: string };
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
-  const [error, setError] = useState(false);
+export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
+  const theme = useThemeStore((s) => s.theme);
+  const isDark = theme === 'dark';
+  const [current, setCurrent] = useState(content);
+  const [draft, setDraft] = useState(content);
+  const [editing, setEditing] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
-        Failed to render markdown
+  const startEditing = () => {
+    setDraft(current);
+    setDirty(false);
+    setSaved(false);
+    setError(null);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setDirty(false);
+    setSaved(false);
+    setError(null);
+  };
+
+  const handleEditorChange = (value: string | undefined) => {
+    const next = value ?? '';
+    setDraft(next);
+    setDirty(next !== current);
+    setSaved(false);
+  };
+
+  const handleSave = async () => {
+    if (!item?.path) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await updateInboxFile(item.path, draft);
+      setCurrent(draft);
+      setDirty(false);
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save file');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const components: Components = {
+    pre: ({ children }) => <>{children}</>,
+    code: ({ className, children }) => {
+      const match = /language-(\w+)/.exec(className ?? '');
+      const text = String(children);
+      if (match) {
+        return (
+          <CodeBlock
+            code={text.replace(/\n$/, '')}
+            lang={match[1]}
+            theme={isDark ? 'github-dark' : 'github-light'}
+          />
+        );
+      }
+      if (text.includes('\n')) {
+        return (
+          <pre className="not-prose my-4 overflow-x-auto rounded-lg border border-border bg-muted p-4 text-sm text-foreground">
+            <code>{text}</code>
+          </pre>
+        );
+      }
+      return <code className={className}>{children}</code>;
+    },
+  };
+
+  const renderPreview = (source: string) => (
+    <div
+      className={
+        isDark
+          ? 'prose prose-invert prose-zinc max-w-none p-4 prose-headings:text-zinc-200 prose-p:text-zinc-300 prose-a:text-blue-400 prose-strong:text-zinc-200 prose-code:text-zinc-200 prose-code:bg-zinc-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-th:text-zinc-200 prose-td:text-zinc-300 prose-li:text-zinc-300 prose-blockquote:border-zinc-600 prose-blockquote:text-zinc-400'
+          : 'prose prose-zinc max-w-none p-4 prose-a:text-blue-600'
+      }
+    >
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {source}
+      </ReactMarkdown>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b bg-background px-4 py-2">
+        {editing ? (
+          <>
+            {saved && !dirty && (
+              <span className="mr-auto text-xs text-green-600 dark:text-green-400">Saved</span>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={saving}>
+                <X className="h-4 w-4" />
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
+                <Save className="h-4 w-4" />
+                {saving ? 'Saving...' : 'Save'}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={startEditing}>
+            <FilePenLine className="h-4 w-4" />
+            Edit
+          </Button>
+        )}
       </div>
-    );
-  }
 
-  try {
-    return (
-      <div className="overflow-auto h-full">
-        <div className="prose prose-invert prose-zinc max-w-none p-4 prose-headings:text-zinc-200 prose-p:text-zinc-300 prose-a:text-blue-400 prose-strong:text-zinc-200 prose-code:text-zinc-200 prose-code:bg-zinc-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800 prose-th:text-zinc-200 prose-td:text-zinc-300 prose-border-zinc-700 prose-li:text-zinc-300 prose-blockquote:border-zinc-600 prose-blockquote:text-zinc-400">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {content}
-          </ReactMarkdown>
+      {error && (
+        <div className="mx-4 mt-2 rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
         </div>
-      </div>
-    );
-  } catch {
-    setError(true);
-    return (
-      <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
-        Failed to render markdown
-      </div>
-    );
-  }
+      )}
+
+      {editing ? (
+        <div className="flex min-h-0 flex-1">
+          <div className="h-full w-1/2 overflow-hidden border-r border-border">
+            <MonacoEditor
+              height="100%"
+              language="markdown"
+              theme={theme === 'dark' ? 'vs-dark' : 'light'}
+              value={draft}
+              onChange={handleEditorChange}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13,
+                lineNumbers: 'on',
+                scrollBeyondLastLine: false,
+                wordWrap: 'on',
+                automaticLayout: true,
+                tabSize: 2,
+              }}
+            />
+          </div>
+          <div className="h-full w-1/2 overflow-auto">{renderPreview(draft)}</div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-auto">{renderPreview(current)}</div>
+      )}
+    </div>
+  );
 }
