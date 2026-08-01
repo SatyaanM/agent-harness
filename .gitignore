@@ -10,7 +10,7 @@ Thumbs.db
 
 # Runtime data (sessions, inbox)
 sessions/
-inbox/
+/inbox/
 
 # Runtime config (machine-specific paths, provider settings)
 .harness/
