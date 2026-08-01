@@ -5,23 +5,34 @@
 ### 1. Install Dependencies
 
 ```bash
-cd C:\Users\damai\agent-harness
+git clone https://github.com/<you>/agent-harness.git
+cd agent-harness
 npm install
 ```
 
 ### 2. Set API Key
 
-Create a `.env` file in the root:
+Copy the example env file and fill in your provider key:
 
 ```bash
-OPENCODE_API_KEY=your-api-key-here
+cp .env.example .env
 ```
 
-Or export it in your shell:
+Any OpenAI-compatible or Anthropic-compatible provider works. For example:
+
+```bash
+OPENAI_API_KEY=sk-...
+API_KEY_ENV=OPENAI_API_KEY
+PROVIDER_ENDPOINT=https://api.openai.com/v1
+```
+
+Or export the key in your shell:
 
 ```bash
 export OPENCODE_API_KEY="your-api-key-here"
 ```
+
+See the README's [Using any LLM provider](./README.md#using-any-llm-provider) section for details.
 
 ### 3. Start Development Servers
 
@@ -171,6 +182,5 @@ Check the server logs for details. Common issues:
 ## Next Steps
 
 - Read the full [README.md](./README.md) for architecture details
-- Explore the spec documents in `C:\Users\damai\agent-harness-spec\`
 - Customize agent configs for your workflow
 - Extend with custom tools (see README.md "Adding a New Tool")
