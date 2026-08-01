@@ -2,6 +2,16 @@
 
 import { useState, useEffect } from 'react';
 import { fetchSettings, updateSettings, fetchModels, type HarnessSettings, type ModelInfo } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 const FIELD_LABELS: Record<keyof HarnessSettings, string> = {
   ROOT: 'Root Directory',
@@ -36,7 +46,6 @@ export function SettingsForm() {
       })
       .catch(() => setError('Failed to load settings'));
 
-    // Fetch available models from the server
     fetchModels()
       .then((data) => {
         setAvailableModels(data.data || []);
@@ -101,74 +110,73 @@ export function SettingsForm() {
   }
 
   if (!settings) {
-    return <div className="flex items-center justify-center h-64 text-zinc-400">Loading...</div>;
+    return <div className="flex items-center justify-center h-64 text-muted-foreground">Loading...</div>;
   }
 
   return (
     <div className="flex flex-col gap-4">
       {(Object.keys(FIELD_LABELS) as (keyof HarnessSettings)[]).map((field) => (
-        <div key={field} className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+        <div key={field} className="flex flex-col gap-1.5">
+          <Label htmlFor={`settings-${field}`} className="uppercase tracking-wider text-xs text-muted-foreground">
             {FIELD_LABELS[field]}
-          </label>
+          </Label>
           {field === 'DEFAULT_MODEL' ? (
-            <select
+            <Select
               value={String(draft[field] ?? '')}
-              onChange={(e) => handleChange(field, e.target.value)}
+              onValueChange={(v) => handleChange(field, v)}
               disabled={saving || modelsLoading}
-              className={`rounded border px-3 py-2 text-sm bg-zinc-900 text-zinc-200 transition-colors focus:outline-none focus:ring-1 ${
-                validationErrors[field]
-                  ? 'border-red-500 focus:ring-red-500'
-                  : 'border-zinc-700 focus:ring-blue-500'
-              } disabled:opacity-50`}
             >
-              {modelsLoading ? (
-                <option value="">Loading models...</option>
-              ) : (
-                availableModels.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.id} ({model.owned_by})
-                  </option>
-                ))
-              )}
-            </select>
+              <SelectTrigger id={`settings-${field}`} className="w-full">
+                <SelectValue placeholder="Select a model" />
+              </SelectTrigger>
+              <SelectContent>
+                {modelsLoading ? (
+                  <SelectItem value="__loading" disabled>
+                    Loading models...
+                  </SelectItem>
+                ) : (
+                  availableModels.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.id} ({model.owned_by})
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
           ) : (
-            <input
+            <Input
+              id={`settings-${field}`}
               type={NUMBER_FIELDS.includes(field) ? 'number' : 'text'}
               value={String(draft[field] ?? '')}
               onChange={(e) => handleChange(field, e.target.value)}
               disabled={saving}
-              className={`rounded border px-3 py-2 text-sm bg-zinc-900 text-zinc-200 placeholder-zinc-600 transition-colors focus:outline-none focus:ring-1 ${
-                validationErrors[field]
-                  ? 'border-red-500 focus:ring-red-500'
-                  : 'border-zinc-700 focus:ring-blue-500'
-              } disabled:opacity-50`}
+              className={validationErrors[field] ? 'border-destructive focus-visible:ring-destructive' : ''}
             />
           )}
           {validationErrors[field] && (
-            <span className="text-xs text-red-400">{validationErrors[field]}</span>
+            <span className="text-xs text-destructive">{validationErrors[field]}</span>
           )}
         </div>
       ))}
 
       {error && (
-        <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </div>
       )}
       {success && (
-        <div className="rounded border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-400">
+        <div className="rounded border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-600 dark:text-green-400">
           Settings saved successfully
         </div>
       )}
 
-      <button
+      <Button
         onClick={handleSave}
         disabled={saving || Object.keys(validationErrors).length > 0}
-        className="mt-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="mt-2 w-fit"
       >
         {saving ? 'Saving...' : 'Save Settings'}
-      </button>
+      </Button>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { fetchAgent, type AgentConfig } from '@/lib/api';
 import { AgentConfigEditor } from '@/components/agents/AgentConfigEditor';
+import { Button } from '@/components/ui/button';
 
 export default function AgentEditorPage() {
   const params = useParams();
@@ -22,7 +23,7 @@ export default function AgentEditorPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-400">
+      <div className="flex items-center justify-center h-full text-muted-foreground">
         Loading agent...
       </div>
     );
@@ -31,13 +32,10 @@ export default function AgentEditorPage() {
   if (error || !agent) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
-        <span className="text-zinc-500">{error ?? 'Agent not found'}</span>
-        <button
-          onClick={() => router.push('/agents')}
-          className="rounded bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
-        >
+        <span className="text-muted-foreground">{error ?? 'Agent not found'}</span>
+        <Button variant="outline" onClick={() => router.push('/agents')}>
           Back to Agents
-        </button>
+        </Button>
       </div>
     );
   }

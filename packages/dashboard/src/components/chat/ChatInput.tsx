@@ -1,9 +1,12 @@
 'use client';
 
-import { useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useState, useEffect, type FormEvent, type KeyboardEvent } from 'react';
 import { useSessionStore } from '@/stores/session-store';
 import { useTTSStore } from '@/stores/tts-store';
+import { useChatInputStore } from '@/stores/chat-input-store';
 import { sendMessage } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { TTSButton } from './TTSButton';
 
 export default function ChatInput() {
@@ -13,6 +16,15 @@ export default function ChatInput() {
   const updateMessage = useSessionStore((s) => s.updateMessage);
   const ttsEnabled = useTTSStore((s) => s.enabled);
   const playTTS = useTTSStore((s) => s.play);
+  const pendingPrefill = useChatInputStore((s) => s.pendingPrefill);
+  const consumePrefill = useChatInputStore((s) => s.consumePrefill);
+
+  useEffect(() => {
+    if (pendingPrefill) {
+      setInput((prev) => (prev ? `${prev} ${pendingPrefill}` : pendingPrefill));
+      consumePrefill();
+    }
+  }, [pendingPrefill, consumePrefill]);
 
   const handleSubmit = async () => {
     if (!input.trim() || !activeSessionId) return;
@@ -96,25 +108,24 @@ export default function ChatInput() {
   };
 
   return (
-    <div className="border-t border-gray-200 bg-white p-3">
+    <div className="border-t bg-background p-3">
       <div className="flex items-end gap-2">
         <TTSButton />
-        <textarea
+        <Textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={activeSessionId ? 'Type a message...' : 'Create a session first'}
           disabled={!activeSessionId}
           rows={1}
-          className="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-gray-100"
+          className="flex-1 min-h-9 max-h-40 resize-none"
         />
-        <button
+        <Button
           onClick={handleSubmit}
           disabled={!activeSessionId || !input.trim()}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-700 disabled:bg-gray-300"
         >
           Send
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { fetchAgents, createAgent, type AgentConfig } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
@@ -53,7 +55,7 @@ export default function AgentsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-400">
+      <div className="flex items-center justify-center h-full text-muted-foreground">
         Loading agents...
       </div>
     );
@@ -61,53 +63,47 @@ export default function AgentsPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-        <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
+      <div className="flex items-center justify-between px-4 py-3 border-b bg-background">
+        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">
           Agents
         </h2>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-700"
-        >
+        <Button size="sm" onClick={() => setShowCreate(true)}>
           + New Agent
-        </button>
+        </Button>
       </div>
 
       {showCreate && (
-        <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-2">
-          <input
+        <div className="flex items-center gap-2 border-b px-4 py-2">
+          <Input
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="Agent name..."
             autoFocus
-            className="flex-1 rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="flex-1"
             onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); }}
           />
-          <button
-            onClick={handleCreate}
-            disabled={creating || !newName.trim()}
-            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          >
+          <Button onClick={handleCreate} disabled={creating || !newName.trim()} size="sm">
             {creating ? '...' : 'Create'}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => { setShowCreate(false); setNewName(''); }}
-            className="rounded px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200"
           >
             Cancel
-          </button>
+          </Button>
         </div>
       )}
 
       {error && (
-        <div className="mx-4 mt-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className="mx-4 mt-2 rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </div>
       )}
 
       {agents.length === 0 ? (
-        <div className="flex items-center justify-center flex-1 text-zinc-500">
+        <div className="flex items-center justify-center flex-1 text-muted-foreground">
           No agents configured yet
         </div>
       ) : (
@@ -116,19 +112,19 @@ export default function AgentsPage() {
             <li key={agent.name}>
               <button
                 onClick={() => router.push(`/agents/${encodeURIComponent(agent.name)}`)}
-                className="w-full text-left px-4 py-3 border-b border-zinc-800/50 hover:bg-zinc-800/50 transition-colors"
+                className="w-full text-left px-4 py-3 border-b hover:bg-muted/50 transition-colors"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm text-zinc-200 font-medium truncate">
+                  <span className="text-sm text-foreground font-medium truncate">
                     {agent.name}
                   </span>
-                  <span className="text-xs text-zinc-500 shrink-0">
+                  <span className="text-xs text-muted-foreground shrink-0">
                     {agent.tools?.length ?? 0} tools
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-2 mt-1">
-                  <span className="text-xs text-zinc-500">{agent.model}</span>
-                  <span className="text-xs text-zinc-600">
+                  <span className="text-xs text-muted-foreground">{agent.model}</span>
+                  <span className="text-xs text-muted-foreground/70">
                     max {agent.maxSteps ?? 10} steps
                   </span>
                 </div>

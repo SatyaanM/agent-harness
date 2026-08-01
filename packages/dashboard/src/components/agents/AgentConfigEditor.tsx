@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { updateAgent, deleteAgent, type AgentConfig } from '@/lib/api';
+import { useThemeStore } from '@/stores/theme-store';
+import { Button } from '@/components/ui/button';
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
@@ -83,6 +85,7 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  const theme = useThemeStore((s) => s.theme);
 
   useEffect(() => {
     if (initialConfig) {
@@ -131,38 +134,36 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800">
+      <div className="flex items-center justify-between px-4 py-2 border-b">
         <div className="flex items-center gap-3">
-          <h3 className="text-sm font-semibold text-zinc-300">{agentName}</h3>
+          <h3 className="text-sm font-semibold text-foreground">{agentName}</h3>
           {isDirty && (
-            <span className="text-xs text-amber-400">Unsaved changes</span>
+            <span className="text-xs text-amber-600 dark:text-amber-400">Unsaved changes</span>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button
             onClick={handleDelete}
             disabled={deleting}
-            className="rounded border border-red-500/30 px-3 py-1 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+            variant="outline"
+            size="sm"
+            className="border-destructive/50 text-destructive hover:bg-destructive/10"
           >
             {deleting ? 'Deleting...' : 'Delete'}
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving || !isDirty}
-            className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-          >
+          </Button>
+          <Button onClick={handleSave} disabled={saving || !isDirty} size="sm">
             {saving ? 'Saving...' : 'Save'}
-          </button>
+          </Button>
         </div>
       </div>
 
       {error && (
-        <div className="mx-4 mt-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className="mx-4 mt-2 rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </div>
       )}
       {success && (
-        <div className="mx-4 mt-2 rounded border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-400">
+        <div className="mx-4 mt-2 rounded border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-600 dark:text-green-400">
           Agent saved successfully
         </div>
       )}
@@ -171,7 +172,7 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
         <MonacoEditor
           height="100%"
           language="markdown"
-          theme="vs-dark"
+          theme={theme === 'dark' ? 'vs-dark' : 'light'}
           value={content}
           onChange={handleEditorChange}
           options={{

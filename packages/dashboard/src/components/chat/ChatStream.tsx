@@ -85,7 +85,7 @@ function UserMessage({ message }: { message: Message }) {
         <div className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">
           <MarkdownRenderer content={message.content} className="prose-invert" />
         </div>
-        <div className="mt-1 text-right text-[10px] text-gray-400">
+        <div className="mt-1 text-right text-[10px] text-zinc-400 dark:text-zinc-500">
           {formatTime(message.createdAt)}
         </div>
       </div>
@@ -114,10 +114,10 @@ function AssistantMessage({ message }: { message: Message }) {
   return (
     <div className="flex justify-start">
       <div className="max-w-[80%]">
-        <div className="rounded-lg bg-gray-200 px-4 py-2 text-sm text-gray-900">
+        <div className="rounded-lg bg-zinc-200 px-4 py-2 text-sm text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100">
           <MarkdownRenderer content={displayContent} />
         </div>
-        <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-400">
+        <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-400 dark:text-zinc-500">
           <span>{formatTime(message.createdAt)}</span>
           {indicators.length > 0 && (
             <span className="text-xs" title="Emotive tags in speech">
@@ -128,7 +128,7 @@ function AssistantMessage({ message }: { message: Message }) {
             <button
               onClick={handlePlay}
               disabled={isPlaying}
-              className="text-blue-600 hover:text-blue-800 disabled:text-gray-400"
+              className="text-blue-600 hover:text-blue-800 disabled:text-zinc-400 dark:text-blue-400 dark:hover:text-blue-300 dark:disabled:text-zinc-600"
               title="Listen to this message"
             >
               {isPlaying ? (
@@ -167,10 +167,10 @@ function SystemCard({ message }: { message: Message }) {
   
   return (
     <div className="flex justify-center">
-      <div className="rounded border border-gray-300 bg-gray-100 px-4 py-2 text-xs text-gray-500">
+      <div className="rounded border border-zinc-300 bg-zinc-100 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400">
         {message.content}
         {message.createdAt && (
-          <span className="ml-2 text-[10px] text-gray-400">
+          <span className="ml-2 text-[10px] text-zinc-400 dark:text-zinc-500">
             {formatTime(message.createdAt)}
           </span>
         )}
@@ -208,7 +208,7 @@ export default function ChatStream() {
 
   if (!activeSessionId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-gray-400">
+      <div className="flex h-full items-center justify-center text-sm text-zinc-400 dark:text-zinc-500">
         Loading messages...
       </div>
     );
