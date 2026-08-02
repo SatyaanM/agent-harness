@@ -70,6 +70,14 @@ export function createVercelAILLMClient(config: Config): LLMClient {
 
       const { model, isAnthropic } = getModelProvider(params.model, config);
 
+      const systemParts = [
+        params.system,
+        ...params.messages
+          .filter((m) => m.role === "system")
+          .map((m) => m.content),
+      ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+      const instructions = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
+
       const messages = convertMessages(params.messages);
 
       const tools = params.tools
@@ -109,7 +117,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
         const result = await generateText({
           model,
           messages,
-          ...(params.system ? { system: params.system } : {}),
+          ...(instructions ? { instructions } : {}),
           ...(tools ? { tools } : {}),
         });
         console.log("[llm] generateText succeeded:", {
@@ -158,10 +166,10 @@ export function createVercelAILLMClient(config: Config): LLMClient {
 }
 
 function convertMessages(messages: Message[]) {
-  return messages.map((msg, index, arr) => {
-    switch (msg.role) {
-      case "system":
-        return { role: "system" as const, content: msg.content };
+  return messages
+    .filter((msg) => msg.role !== "system")
+    .map((msg, index, arr) => {
+      switch (msg.role) {
       case "user":
         return { role: "user" as const, content: msg.content };
 
@@ -199,8 +207,11 @@ function convertMessages(messages: Message[]) {
           ],
         };
       }
-    }
-  });
+
+      default:
+        return { role: "user" as const, content: msg.content };
+      }
+    });
 }
 
 function findToolName(toolCallId: string, messages: Message[]): string | undefined {
