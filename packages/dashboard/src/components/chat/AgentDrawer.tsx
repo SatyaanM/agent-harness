@@ -80,6 +80,14 @@ export default function AgentDrawer({
 
   const [transcript, setTranscript] = useState<any>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [shown, setShown] = useState(false);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  const isOpen = shown && visible;
 
   useEffect(() => {
     if (agent.role === 'worker' && agent.id) {
@@ -115,11 +123,14 @@ export default function AgentDrawer({
 
   return createPortal(
     <div
-      className="fixed bottom-0 top-0 z-40 flex flex-col border-r border-border bg-background shadow-2xl transition-transform duration-300 ease-in-out"
+      className="fixed bottom-0 top-0 z-40 flex flex-col border-r border-border bg-background shadow-2xl"
       style={{
         width: clampedWidth,
         left: chatLeft - clampedWidth,
-        transform: visible ? 'translateX(0)' : `translateX(${clampedWidth}px)`,
+        opacity: isOpen ? 1 : 0,
+        transform: isOpen ? 'translateX(0)' : 'translateX(-24px)',
+        transition: 'opacity 200ms ease, transform 200ms ease',
+        pointerEvents: isOpen ? 'auto' : 'none',
       }}
     >
       <div
