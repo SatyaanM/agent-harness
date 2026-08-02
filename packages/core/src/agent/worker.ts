@@ -1,4 +1,5 @@
 import { Agent } from "./agent.js";
+import type { AgentEventCallback } from "./agent.js";
 import type { AgentConfig, Message, TaskId } from "./types.js";
 import { AgentCancelledError } from "./types.js";
 import type { ToolRegistry } from "../tool/types.js";
@@ -26,8 +27,9 @@ export class Worker {
     private readonly orchestratorId: TaskId,
     private readonly bus: MessageBus,
     private readonly abortSignal?: AbortSignal,
+    private readonly onEvent?: AgentEventCallback,
   ) {
-    this.agent = new Agent(config, toolRegistry, llmClient, capabilityRegistry);
+    this.agent = new Agent(config, toolRegistry, llmClient, capabilityRegistry, onEvent);
   }
 
   async run(task: string): Promise<WorkerResult> {

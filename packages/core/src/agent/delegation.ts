@@ -23,6 +23,12 @@ export interface DelegationDeps {
     abort: AbortController
   ) => void;
   onWorkerCompleted?: (delegatingSessionId: string, pending: PendingMessage) => void;
+  onWorkerTool?: (
+    workerSessionId: string,
+    event:
+      | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
+      | { type: "tool:completed"; toolName: string; result?: string }
+  ) => void;
 }
 
 export function createDelegateTool(deps: DelegationDeps): Tool {
@@ -56,6 +62,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         instructions: delegatingAgent.instructions,
       };
 
+      const createdAt = new Date().toISOString();
       await store.save({
         sessionId,
         taskId,
@@ -63,7 +70,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         prompt: task,
         messages: [],
         mailbox: [],
-        createdAt: new Date().toISOString(),
+        createdAt,
       });
 
       const controller = new AbortController();
@@ -76,6 +83,26 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         deps.sessionId,
         messageBus,
         controller.signal,
+        (e) => {
+          if (e.type === "step") {
+            // Progressively persist the worker transcript so the drawer can
+            // show work-in-progress instead of waiting for completion.
+            void store.save({
+              sessionId,
+              taskId,
+              agentName: workerConfig.name,
+              prompt: task,
+              messages: e.messages.map((m) => ({
+                ...m,
+                createdAt: m.createdAt ?? new Date().toISOString(),
+              })),
+              createdAt,
+              result: { status: "running", summary: "" },
+            });
+            return;
+          }
+          deps.onWorkerTool?.(sessionId, e);
+        },
       );
 
       deps.onWorkerSpawned?.(taskId, sessionId, task, controller);

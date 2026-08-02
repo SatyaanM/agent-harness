@@ -144,6 +144,17 @@ export class SessionManager {
         },
         onWorkerCompleted: (delegatingSessionId, pending) =>
           this.onWorkerCompleted(delegatingSessionId, pending),
+        onWorkerTool: (workerSessionId, event) => {
+          const tool =
+            event.type === "tool:called"
+              ? { type: "called" as const, toolName: event.toolName, args: event.args }
+              : { type: "completed" as const, toolName: event.toolName, result: event.result };
+          emitAgentEvent("agent:tool", {
+            sessionId,
+            agentName: workerSessionId,
+            tool,
+          });
+        },
       })
     );
     registry.register(createReadSessionTool(config.SESSIONS_DIR));
