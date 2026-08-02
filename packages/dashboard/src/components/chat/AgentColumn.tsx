@@ -33,10 +33,12 @@ export default function AgentColumn() {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const parent = el.parentElement;
     const update = () => setChatLeft(el.getBoundingClientRect().left);
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
+    if (parent) ro.observe(parent);
     window.addEventListener('resize', update);
     return () => {
       ro.disconnect();
