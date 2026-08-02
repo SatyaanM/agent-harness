@@ -249,6 +249,10 @@ GET    /api/health                  # Health check
 agent:started        # Agent began execution
 agent:completed      # Agent finished
 agent:error          # Agent encountered error
+agent:tool           # Agent called/completed a tool (live activity)
+worker:spawned       # A worker session was created
+worker:completed     # A worker posted a completion to its delegator
+session:updated      # A session's state changed (authoritative sync)
 council:created      # Council formed
 council:message      # Council message
 council:dissolved    # Council completed

@@ -24,6 +24,8 @@ export interface CapabilityMatrix {
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  reasoning?: string;
+  meta?: unknown;
   toolCalls?: ToolCall[];
   toolCallId?: string;
   createdAt?: string;

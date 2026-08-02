@@ -12,36 +12,45 @@ import { messageBus } from "../collaboration/message-bus.js";
 export interface DelegationDeps {
   sessionsDir: string;
   sessionId: string;
-  config: AgentConfig;
+  resolveConfig: (agentName: string | undefined) => AgentConfig;
   toolRegistry: ToolRegistry;
   llmClient: LLMClient;
   capabilityRegistry: CapabilityRegistry;
+  onWorkerSpawned?: (taskId: TaskId, workerSessionId: string, task: string) => void;
+  onWorkerCompleted?: (delegatingSessionId: string, pending: PendingMessage) => void;
 }
 
 export function createDelegateTool(deps: DelegationDeps): Tool {
   const parameters = z.object({
     task: z.string().describe("The task description to delegate to a worker agent"),
-    model: z.string().describe("The model to use for the worker agent"),
+    model: z
+      .string()
+      .optional()
+      .describe(
+        "The model to use for the worker agent. Omit this to inherit the delegating agent's own model, which is guaranteed to be supported."
+      ),
   });
 
   return {
     name: "delegate",
     description:
-      "Spawn a worker agent to handle a task in the background. Returns a taskId immediately without blocking. When the worker completes, the system delivers the result to this session automatically.",
+      "Spawn a worker agent to handle a task in the background. Returns a taskId immediately without blocking. When the worker completes, the system delivers the result to this session automatically. Omit the model argument to inherit your own model.",
     parameters,
-    async execute({ task, model }: { task: string; model: string }) {
+    async execute({ task, model }: { task: string; model?: string }) {
       const taskId: TaskId = uuidv4();
       const sessionId = `worker-${taskId}`;
 
+      const store = new SessionStore(deps.sessionsDir);
+      const delegating = await store.load(deps.sessionId);
+      const delegatingAgent = deps.resolveConfig(delegating?.agentName ?? "orchestrator");
       const workerConfig: AgentConfig = {
         name: `worker-${taskId}`,
-        model,
-        tools: deps.config.tools,
-        maxSteps: deps.config.maxSteps,
-        instructions: deps.config.instructions,
+        model: model || delegatingAgent.model,
+        tools: delegatingAgent.tools,
+        maxSteps: delegatingAgent.maxSteps,
+        instructions: delegatingAgent.instructions,
       };
 
-      const store = new SessionStore(deps.sessionsDir);
       await store.save({
         sessionId,
         taskId,
@@ -62,7 +71,22 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         messageBus,
       );
 
+      deps.onWorkerSpawned?.(taskId, sessionId, task);
+
       void worker.run(task).then(async (result) => {
+        const existing = await store.load(sessionId);
+        await store.save({
+          sessionId,
+          taskId,
+          agentName: workerConfig.name,
+          prompt: task,
+          messages: result.messages,
+          mailbox: existing?.mailbox ?? [],
+          result: { status: result.status, summary: result.summary },
+          createdAt: existing?.createdAt ?? new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+        });
+
         const delegating = await store.load(deps.sessionId);
         if (!delegating) return;
         const pending: PendingMessage = {
@@ -75,6 +99,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         };
         delegating.mailbox = [...(delegating.mailbox ?? []), pending];
         await store.save(delegating);
+        deps.onWorkerCompleted?.(deps.sessionId, pending);
       });
 
       return JSON.stringify({ taskId, sessionId, status: "delegated" });

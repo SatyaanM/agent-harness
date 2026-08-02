@@ -3,6 +3,13 @@ import type { ToolRegistry } from "../tool/types.js";
 import type { LLMClient, LLMToolDefinition } from "../llm/client.js";
 import type { CapabilityRegistry } from "../capability/registry.js";
 
+export type AgentEventCallback = (event: {
+  type: "tool:called" | "tool:completed";
+  toolName: string;
+  args?: Record<string, unknown>;
+  result?: string;
+}) => void;
+
 export class Agent {
   private messages: Message[] = [];
 
@@ -11,10 +18,14 @@ export class Agent {
     private readonly toolRegistry: ToolRegistry,
     private readonly llmClient: LLMClient,
     private readonly capabilityRegistry: CapabilityRegistry,
+    private readonly onEvent?: AgentEventCallback,
   ) {}
 
-  async run(prompt: string, history: Message[] = []): Promise<AgentResult> {
-    this.messages = [...history, { role: "user", content: prompt }];
+  async run(prompt?: string, history: Message[] = []): Promise<AgentResult> {
+    this.messages = [...history];
+    if (prompt) {
+      this.messages.push({ role: "user", content: prompt });
+    }
 
     const tools = this.config.tools
       .map((name) => this.toolRegistry.get(name))
@@ -59,8 +70,19 @@ export class Agent {
             continue;
           }
 
+          this.onEvent?.({
+            type: "tool:called",
+            toolName: toolCall.toolName,
+            args: toolCall.args,
+          });
+
           try {
             const result = await tool.execute(toolCall.args);
+            this.onEvent?.({
+              type: "tool:completed",
+              toolName: toolCall.toolName,
+              result,
+            });
             this.messages.push({
               role: "tool",
               content: result,

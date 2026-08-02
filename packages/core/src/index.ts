@@ -1,6 +1,9 @@
 export { Agent } from "./agent/agent.js";
+export type { AgentEventCallback } from "./agent/agent.js";
 export { Worker } from "./agent/worker.js";
 export type { WorkerResult } from "./agent/worker.js";
+export { SessionRuntime } from "./agent/session-runtime.js";
+export type { SessionRuntimeEvent, SessionRuntimeOptions } from "./agent/session-runtime.js";
 export type {
   AgentConfig,
   AgentResult,

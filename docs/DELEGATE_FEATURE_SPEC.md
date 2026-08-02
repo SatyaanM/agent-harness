@@ -51,7 +51,7 @@ The defining property: an agent is an *orchestrator if and only if it holds the 
 
 ## 5. Delivery model (target)
 
-1. An agent calls `delegate({ task, model })`. The system creates a **worker session** (`worker-<taskId>`), spawns a `Worker` in the background, and returns the `taskId` immediately (fire-and-forget).
+1. An agent calls `delegate({ task, model? })`. `model` is optional: when omitted, the worker **inherits the delegating agent's model** (guaranteed supported since that agent is running on it). The system creates a **worker session** (`worker-<taskId>`), spawns a `Worker` in the background, and returns the `taskId` immediately (fire-and-forget).
 2. When the worker completes (success or error), the **system posts a completion message to the delegating session's mailbox** — summary + status + taskId (+ sender). The agent does not poll.
 3. The mailbox is **durable** (persisted with the session).
 4. When the delegating session next processes (a new message arrives, or its loaded runtime is signaled), the runtime **drains the entire mailbox at once** and injects all pending messages **together** into the agent's context before the next LLM call.
@@ -164,11 +164,12 @@ tool:called          # NEW — agent invoked a tool (for live drawer)
 - Update `agents/orchestrator.md` to declare `delegate`/`readSession`.
 - Dashboard: `agents-store`, `AgentPicker` in the session bar, per-session `agentName`, `sendMessage(..., agentName)`.
 
-### Phase 2 — Session runtime + real-time delivery
+### Phase 2 — Session runtime + real-time delivery ✅ (implemented)
 - `SessionRuntime` (serialized `process()`, own mailbox) + `SessionManager` (loaded registry, routing).
 - Loaded-gate: drained only when loaded; not-loaded sessions persist mailbox untouched.
-- Wake-on-signal for loaded sessions; WebSocket client on the dashboard; server emits `worker:*` / `tool:*` events.
-- Reconnect the `Orchestrator` delegation tooling to the runtime path.
+- Wake-on-signal for loaded sessions; WebSocket client on the dashboard; server emits `worker:*` / `tool:*` / `session:updated` events.
+- Tool-driven delegation is now the single path (the old `Orchestrator` class is superseded by `SessionRuntime` + `createDelegateTool`).
+- Worker completions are delivered into a loaded session automatically, and the chat UI syncs via `session:updated` (rendering completion cards from `meta` on system messages).
 
 ### Phase 3 — Agent-scope UI
 - Bubble column (anchored to chat left edge, moves with resize, staggered pop-in).

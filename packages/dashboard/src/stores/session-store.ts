@@ -35,6 +35,21 @@ interface SessionStore {
   setAgentName: (sessionId: string, agentName: string) => void;
   addMessage: (sessionId: string, message: Message) => void;
   updateMessage: (sessionId: string, messageId: string, content: string) => void;
+  syncFromServer: (data: ServerSession) => void;
+}
+
+export interface ServerMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  createdAt?: string;
+  meta?: unknown;
+}
+
+export interface ServerSession {
+  sessionId: string;
+  agentName?: string;
+  createdAt?: string;
+  messages: ServerMessage[];
 }
 
 export const useSessionStore = create<SessionStore>((set) => ({
@@ -78,4 +93,62 @@ export const useSessionStore = create<SessionStore>((set) => ({
           : s
       ),
     })),
+
+  syncFromServer: (data) =>
+    set((state) => {
+      const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
+      const existing = state.sessions.find((s) => s.sessionId === data.sessionId);
+      if (!existing) {
+        return {
+          sessions: [
+            ...state.sessions,
+            {
+              sessionId: data.sessionId,
+              messages,
+              status: 'active',
+              agentName: data.agentName ?? 'orchestrator',
+              createdAt: data.createdAt ?? new Date().toISOString(),
+            },
+          ],
+        };
+      }
+      return {
+        sessions: state.sessions.map((s) =>
+          s.sessionId === data.sessionId
+            ? {
+                ...s,
+                messages,
+                agentName: data.agentName ?? s.agentName,
+              }
+            : s
+        ),
+      };
+    }),
 }));
+
+function serverMessageToClient(m: ServerMessage, index: number): Message {
+  const role =
+    m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : 'system';
+
+  let event: ChatEvent | undefined;
+  const meta = m.meta as
+    | { kind?: string; taskId?: string; summary?: string; status?: string }
+    | undefined;
+  if (meta?.kind === 'worker_completed') {
+    event = {
+      type: 'delegation_complete',
+      taskId: meta.taskId ?? '',
+      summary: meta.summary ?? '',
+      status: meta.status === 'error' ? 'error' : 'done',
+      timestamp: m.createdAt ? Date.parse(m.createdAt) : Date.now(),
+    };
+  }
+
+  return {
+    id: `srv-${index}`,
+    role,
+    content: m.content ?? '',
+    createdAt: m.createdAt ?? '',
+    ...(event ? { event } : {}),
+  };
+}

@@ -120,9 +120,10 @@ export function createVercelAILLMClient(config: Config): LLMClient {
 
         // Handle reasoning models: extract text from reasoning if content is empty
         let responseText = result.text;
+        const rawReasoning = (result as any).reasoning || (result as any).reasoning_content;
+        const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
         if (!responseText || responseText.trim().length === 0) {
-          const reasoning = (result as any).reasoning || (result as any).reasoning_content;
-          if (reasoning && typeof reasoning === "string") {
+          if (reasoning) {
             console.log("[llm] Using reasoning as text:", { reasoningLength: reasoning.length });
             responseText = reasoning;
           }
@@ -139,6 +140,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
         const message: Message = {
           role: "assistant",
           content: responseText || "",
+          ...(reasoning ? { reasoning } : {}),
           ...(toolCalls ? { toolCalls } : {}),
         };
 

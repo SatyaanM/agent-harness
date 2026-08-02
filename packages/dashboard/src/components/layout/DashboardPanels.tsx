@@ -3,10 +3,13 @@
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import LeftPanel from './LeftPanel';
 import RightPanel from './RightPanel';
+import RuntimeSync from '@/components/chat/RuntimeSync';
 
 export default function DashboardPanels({ children }: { children: React.ReactNode }) {
   return (
-    <PanelGroup direction="horizontal" className="h-full">
+    <>
+      <RuntimeSync />
+      <PanelGroup direction="horizontal" className="h-full">
       <Panel defaultSize={50} minSize={20}>
         <LeftPanel>{children}</LeftPanel>
       </Panel>
@@ -15,5 +18,6 @@ export default function DashboardPanels({ children }: { children: React.ReactNod
         <RightPanel />
       </Panel>
     </PanelGroup>
+    </>
   );
 }
