@@ -139,17 +139,31 @@ export class SessionRuntime {
       this.options.toolRegistry,
       this.options.llmClient,
       this.options.capabilityRegistry,
-      (e) =>
+      (e) => {
+        if (e.type === "step") {
+          // Live update: emit the session with the messages produced so far,
+          // so the chat fills in as the agent works instead of all at once.
+          const liveAppended = e.messages
+            .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
+            .map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
+          this.emit({
+            type: "session:updated",
+            session: { ...session, messages: [...session.messages, ...liveAppended] },
+          });
+          return;
+        }
+        const isCalled = e.type === "tool:called";
         this.emit({
           type: "agent:tool",
           agentName: agentConfig.name,
           tool: {
-            type: e.type === "tool:called" ? "called" : "completed",
+            type: isCalled ? "called" : "completed",
             toolName: e.toolName,
-            args: e.args,
-            result: e.result,
+            args: isCalled ? e.args : undefined,
+            result: isCalled ? undefined : e.result,
           },
-        }),
+        });
+      },
     );
 
     this.emit({ type: "agent:started", agentName: agentConfig.name });
@@ -163,11 +177,15 @@ export class SessionRuntime {
       throw error;
     }
 
-    session.messages.push({
-      role: "assistant",
-      content: result.summary,
-      createdAt: now,
-    });
+    // Persist the full run record — every assistant message (with tool calls
+    // and reasoning) and every tool result — so the transcript is a complete
+    // audit of what the agent did. Slice off the history that was passed in
+    // (baseHistory + deliveredSystem + the prompt agent.run re-added), keeping
+    // only the messages this run actually produced.
+    const appended = result.messages.slice(
+      baseHistory.length + deliveredSystem.length + (message ? 1 : 0)
+    ).map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
+    session.messages.push(...appended);
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = now;
 

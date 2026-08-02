@@ -26,46 +26,11 @@ export interface SessionData {
   completedAt?: string;
 }
 
-function stripToolCallXml(content: string): string {
-  let cleaned = content;
-
-  const toolCallStart = "<" + "tool_call>";
-  const toolCallEnd = "</" + "tool_call>";
-  while (true) {
-    const startIdx = cleaned.indexOf(toolCallStart);
-    if (startIdx === -1) break;
-    const endIdx = cleaned.indexOf(toolCallEnd, startIdx);
-    if (endIdx === -1) break;
-    cleaned = cleaned.slice(0, startIdx) + cleaned.slice(endIdx + toolCallEnd.length);
-  }
-
-  const toolResultStart = "<" + "tool_result>";
-  const toolResultEnd = "</" + "tool_result>";
-  while (true) {
-    const startIdx = cleaned.indexOf(toolResultStart);
-    if (startIdx === -1) break;
-    const endIdx = cleaned.indexOf(toolResultEnd, startIdx);
-    if (endIdx === -1) break;
-    cleaned = cleaned.slice(0, startIdx) + cleaned.slice(endIdx + toolResultEnd.length);
-  }
-
-  return cleaned.trim();
-}
-
-function cleanMessages(messages: Message[]): Message[] {
-  return messages.map((msg) => {
-    if (msg.content && typeof msg.content === "string") {
-      return { ...msg, content: stripToolCallXml(msg.content) };
-    }
-    return msg;
-  });
-}
-
-/** A cleaned, detached copy of a session so callers can safely mutate their own state. */
+/** A detached copy of a session so callers can safely mutate their own state. */
 function cleanSession(session: SessionData): SessionData {
   return {
     ...session,
-    messages: cleanMessages(session.messages || []),
+    messages: session.messages || [],
     mailbox: session.mailbox ? [...session.mailbox] : undefined,
   };
 }

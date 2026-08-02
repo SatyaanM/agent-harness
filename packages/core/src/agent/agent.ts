@@ -4,12 +4,10 @@ import type { ToolRegistry } from "../tool/types.js";
 import type { LLMClient, LLMToolDefinition } from "../llm/client.js";
 import type { CapabilityRegistry } from "../capability/registry.js";
 
-export type AgentEventCallback = (event: {
-  type: "tool:called" | "tool:completed";
-  toolName: string;
-  args?: Record<string, unknown>;
-  result?: string;
-}) => void;
+export type AgentEventCallback = (event:
+  | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
+  | { type: "tool:completed"; toolName: string; result?: string }
+  | { type: "step"; messages: Message[] }) => void;
 
 export class Agent {
   private messages: Message[] = [];
@@ -52,6 +50,7 @@ export class Agent {
       });
 
       this.messages.push(response.message);
+      this.onEvent?.({ type: "step", messages: [...this.messages] });
 
       if (response.finishReason === "stop") {
         return {
