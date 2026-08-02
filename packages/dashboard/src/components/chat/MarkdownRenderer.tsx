@@ -10,7 +10,7 @@ interface MarkdownRendererProps {
 
 export function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
   return (
-    <div className={`markdown-body ${className}`}>
+    <div className={`markdown-body min-w-0 break-words ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -36,7 +36,7 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
                     {match[1]}
                   </div>
                 )}
-                <pre className="overflow-x-auto rounded-lg bg-gray-900 p-3 text-xs text-gray-100">
+                <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-gray-900 p-3 text-xs text-gray-100">
                   <code className={codeClassName} {...props}>
                     {children}
                   </code>

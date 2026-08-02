@@ -61,6 +61,11 @@ function formatTime(isoString: string): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max) + '…';
+}
+
 function extractTagIndicators(content: string): string[] {
   const indicators: string[] = [];
   let match;
@@ -80,8 +85,8 @@ function stripEmotiveTags(content: string): string {
 
 function UserMessage({ message }: { message: Message }) {
   return (
-    <div className="flex justify-end">
-      <div className="max-w-[80%]">
+    <div className="flex min-w-0 justify-end">
+      <div className="max-w-[80%] min-w-0 break-words">
         <div className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">
           <MarkdownRenderer content={message.content} className="prose-invert" />
         </div>
@@ -89,6 +94,119 @@ function UserMessage({ message }: { message: Message }) {
           {formatTime(message.createdAt)}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ToolCallBlock({
+  toolName,
+  args,
+  result,
+}: {
+  toolName: string;
+  args?: Record<string, unknown>;
+  result?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  const argHint = args
+    ? Object.entries(args)
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .join(' ')
+    : '';
+  const hint = argHint.length > 0 ? ` → ${truncate(argHint, 80)}` : '';
+
+  return (
+    <div className="my-1.5 overflow-hidden rounded-md border border-zinc-300 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+      >
+        <span className={expanded ? 'text-zinc-500' : 'text-blue-600 dark:text-blue-400'}>
+          {expanded ? '▾' : '▸'}
+        </span>
+        <span className="shrink-0 font-medium">⚙ {toolName}</span>
+        <span className="min-w-0 flex-1 break-words text-zinc-500 dark:text-zinc-400">{hint}</span>
+        <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
+          {expanded ? 'hide' : 'details'}
+        </span>
+      </button>
+      {expanded && (
+        <div className="space-y-2 border-t border-zinc-200 px-3 py-2 dark:border-zinc-700">
+          {args && (
+            <div>
+              <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">Arguments</div>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-100 p-2 font-mono text-[11px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                {JSON.stringify(args, null, 2)}
+              </pre>
+            </div>
+          )}
+          {result !== undefined && (
+            <div>
+              <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">Result</div>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-100 p-2 font-mono text-[11px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                {result}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReasoningBlock({ reasoning }: { reasoning: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="my-1.5 overflow-hidden rounded-md border border-dashed border-zinc-300 bg-zinc-50/60 dark:border-zinc-700 dark:bg-zinc-900/60">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-zinc-600 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+      >
+        <span>{expanded ? '▾' : '▸'}</span>
+        <span className="italic">Reasoning</span>
+        <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
+          {expanded ? 'hide' : 'show'}
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-zinc-200 px-3 py-2 dark:border-zinc-700">
+          <p className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+            {reasoning}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolResultBlock({ message }: { message: Message }) {
+  const [expanded, setExpanded] = useState(false);
+  const preview = truncate(message.content, 120);
+
+  return (
+    <div className="my-1.5 overflow-hidden rounded-md border border-zinc-300 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+      >
+        <span className={expanded ? 'text-zinc-500' : 'text-emerald-600 dark:text-emerald-400'}>
+          {expanded ? '▾' : '▸'}
+        </span>
+        <span className="shrink-0 text-emerald-600 dark:text-emerald-400">✓</span>
+        <span className="min-w-0 flex-1 break-words text-zinc-500 dark:text-zinc-400">{preview}</span>
+        <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
+          {expanded ? 'hide' : 'result'}
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-zinc-200 px-3 py-2 dark:border-zinc-700">
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-100 p-2 font-mono text-[11px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+            {message.content}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
@@ -112,11 +230,17 @@ function AssistantMessage({ message }: { message: Message }) {
   };
 
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[80%]">
-        <div className="rounded-lg bg-zinc-200 px-4 py-2 text-sm text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100">
-          <MarkdownRenderer content={displayContent} />
-        </div>
+    <div className="flex min-w-0 justify-start">
+      <div className="max-w-[80%] min-w-0 break-words">
+        {message.reasoning && <ReasoningBlock reasoning={message.reasoning} />}
+        {message.toolCalls?.map((tc, i) => (
+          <ToolCallBlock key={tc.toolCallId ?? i} toolName={tc.toolName} args={tc.args} />
+        ))}
+        {displayContent && (
+          <div className="rounded-lg bg-zinc-200 px-4 py-2 text-sm text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100">
+            <MarkdownRenderer content={displayContent} />
+          </div>
+        )}
         <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-400 dark:text-zinc-500">
           <span>{formatTime(message.createdAt)}</span>
           {indicators.length > 0 && (
@@ -166,8 +290,8 @@ function SystemCard({ message }: { message: Message }) {
   }
   
   return (
-    <div className="flex justify-center">
-      <div className="rounded border border-zinc-300 bg-zinc-100 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400">
+    <div className="flex min-w-0 justify-center">
+      <div className="min-w-0 max-w-[85%] break-words rounded border border-zinc-300 bg-zinc-100 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400">
         {message.content}
         {message.createdAt && (
           <span className="ml-2 text-[10px] text-zinc-400 dark:text-zinc-500">
@@ -215,11 +339,20 @@ export default function ChatStream() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-4">
-      <div className="flex flex-col gap-3">
+    <div className="h-full overflow-x-hidden overflow-y-auto p-4">
+      <div className="flex min-w-0 flex-col gap-3">
         {messages.map((message) => {
           if (message.role === 'user') return <UserMessage key={message.id} message={message} />;
           if (message.role === 'system') return <SystemCard key={message.id} message={message} />;
+          if (message.role === 'tool') {
+            return (
+              <div className="flex min-w-0 justify-start">
+                <div className="max-w-[80%] min-w-0 break-words">
+                  <ToolResultBlock message={message} />
+                </div>
+              </div>
+            );
+          }
           return <AssistantMessage key={message.id} message={message} />;
         })}
         <div ref={bottomRef} />
