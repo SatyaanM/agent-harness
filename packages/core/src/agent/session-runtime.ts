@@ -92,7 +92,9 @@ export class SessionRuntime {
           role: "system" as const,
           content:
             `Worker "${p.agentName}" (task ${p.taskId}) ` +
-            `${p.status === "done" ? "completed" : "failed"}: ${p.summary}`,
+            `${p.status === "done" ? "completed with the result below" : "failed with the error below"}. ` +
+            `${p.summary}\n\n` +
+            `This is the final result of the task you delegated. Present it to the user. Do not delegate this task again.`,
           createdAt: p.receivedAt,
           meta: {
             kind: "worker_completed",
@@ -115,8 +117,15 @@ export class SessionRuntime {
     }
 
     const agentConfig = this.options.resolveConfig(session.agentName);
+    // Wake runs (system-delivered completions, no user message) must report
+    // results, not spawn new work: drop the delegate tool to prevent runaway
+    // autonomous re-delegation.
+    const runTools = message
+      ? agentConfig.tools
+      : agentConfig.tools.filter((t) => t !== "delegate");
+    const runConfig = { ...agentConfig, tools: runTools };
     const agent = new Agent(
-      agentConfig,
+      runConfig,
       this.options.toolRegistry,
       this.options.llmClient,
       this.options.capabilityRegistry,

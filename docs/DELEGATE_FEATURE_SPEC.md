@@ -170,6 +170,7 @@ tool:called          # NEW — agent invoked a tool (for live drawer)
 - Wake-on-signal for loaded sessions; WebSocket client on the dashboard; server emits `worker:*` / `tool:*` / `session:updated` events.
 - Tool-driven delegation is now the single path (the old `Orchestrator` class is superseded by `SessionRuntime` + `createDelegateTool`).
 - Worker completions are delivered into a loaded session automatically, and the chat UI syncs via `session:updated` (rendering completion cards from `meta` on system messages).
+- **Wake-run guard:** a wake (no user message) drops the `delegate` tool, so a woken agent reports its delivered results rather than spawning new work. This bounds runaway autonomous re-delegation; delegation is only available on user-initiated runs.
 
 ### Phase 3 — Agent-scope UI ✅ (implemented)
 - Bubble column anchored to the chat's left edge (moves with panel resize, staggered pop-in animation).
