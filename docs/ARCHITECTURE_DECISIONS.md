@@ -462,6 +462,61 @@ When a session's runtime processes, it drains the **entire** mailbox at once and
 - The drain is all-or-nothing: either the whole batch is delivered and the mailbox is cleared, or (if interrupted) nothing is cleared. There is never a partial drain.
 - Messages arriving while a run is in progress accumulate and are drained wholesale at the next loop boundary — same rule, all at once.
 
+### 10.10 The wake-run guard
+
+A run triggered by a delivered completion (no new user message) is a **wake run**. Wake runs must report results, not spawn new work: the `delegate` tool is dropped from the wake run's tool set so a woken agent presents its delivered completions instead of autonomously re-delegating. This is what bounds runaway self-propagation when delegation is recursive.
+
+- Delegation is only available on **user-initiated runs** (a message was sent).
+- A wake run with nothing to report returns immediately without calling the LLM.
+- This is a hard rule, not a prompt instruction — the tool is absent, so the model cannot call it.
+
+---
+
+## 11. Agent Transparency and the Audit Record
+
+The user must be able to trust the agent by reading *what it did and why*. This section pins down how the system records and discloses agent behavior.
+
+### 11.1 The transcript is the complete audit record
+
+Every run persists the **full message sequence** — the user prompt, each assistant message with its tool calls and reasoning, every tool result, and the final answer — for the main session **and** worker sessions alike. A run is never collapsed to a summary in storage.
+
+- The agent's action trail (tool call → result → next decision → answer) is exactly what the user reads to understand the agent's path.
+- Persistence and *display* are separate concerns: what is stored is always the complete record.
+
+### 11.2 Store bytes exactly as produced; truncate only at display
+
+Storage never scrubs, summarizes, collapses, or rewrites message content. Whatever the model or a tool produced is written verbatim — including raw tool results, which can be large.
+
+- Display may truncate for readability, but **everything truncated is expandable**: the user clicks to reveal the full content. No information is unreachable in the UI.
+- Do not "clean" or strip content at write or load time as a shortcut for display concerns. If content must be altered for a specific renderer, do it at render time.
+
+### 11.3 Tool calls are structured data, not text
+
+A tool call is structured fields (`toolCallId`, `toolName`, `args`) — never embedded as text in the message content. The UI renders tool calls as structured blocks and derives a human-readable hint from the **name and actual args** (e.g. `webFetch → url=https://…`).
+
+- There is **no model-written "purpose" field** per tool call. Asking the model to restate why it called a tool adds output tokens on every call, carries a format-reliability risk, and duplicates what reasoning already provides. The "why" comes from the persisted reasoning that precedes the call (11.4), and the "what" comes from the args.
+
+### 11.4 Reasoning is part of the record but never re-fed
+
+Where the provider exposes chain-of-thought (`reasoning`), it is stored with the assistant message. It is never re-sent to the model on later runs: the LLM-context assembly path strips reasoning and system roles when building the next request.
+
+- The record is for humans to inspect; the model's future context stays clean.
+- Reasoning is shown collapsed and expandable in the UI, in the same assistant turn as the tool calls it produced.
+
+### 11.5 Live progress streaming
+
+The runtime emits session updates **as work progresses, not only at completion**. After each LLM turn the current message state is emitted, so the chat fills in step-by-step — reasoning, then tool call, then result — instead of everything arriving at once when the run finishes.
+
+- Live updates are a *disclosure* concern: the persisted record is the same whether or not the UI was watching.
+
+### 11.6 Workers are as observable as the orchestrator
+
+A delegated worker is no less transparent than the main agent:
+
+- Worker tool activity is emitted live to the same WebSocket channel.
+- The worker transcript is **progressively persisted** during the run (not only at completion), so its drawer/view updates as it works and survives a mid-run crash.
+- The worker's full transcript remains available on demand via `readSession` after completion.
+
 ---
 
 *This document should be updated when a new design decision is made that affects how the system is built. Implementation details belong in code comments and README files — not here.*

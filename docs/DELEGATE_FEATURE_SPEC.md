@@ -34,6 +34,13 @@ The defining property: an agent is an *orchestrator if and only if it holds the 
 | D9 | Mailbox drains atomically — the entire batch delivered together in one injection | ADR §10.9 |
 | D10 | Agents are selected per-session; agent picker in chat; `description` for discoverability | session decisions |
 | D11 | Agent-scope UI: bubble column anchored to chat's left edge; sliding drawer over the left panel | session decisions |
+| D12 | Wake runs (completion-delivered, no user message) drop the `delegate` tool so the agent reports results instead of re-delegating | ADR §10.10 |
+| D13 | The transcript is the complete audit record: full message sequence (tool calls, tool results, reasoning) persisted for main and worker sessions | ADR §11.1 |
+| D14 | Store bytes exactly as produced; truncate only at display; everything truncated is expandable | ADR §11.2 |
+| D15 | Tool calls are structured data (id, name, args); no model-written "purpose" field | ADR §11.3 |
+| D16 | Reasoning is stored with the message but never re-fed into the LLM context | ADR §11.4 |
+| D17 | Runtime emits live session updates as work progresses, not only at completion | ADR §11.5 |
+| D18 | Workers are as observable as the orchestrator: live tool events + progressively persisted transcript | ADR §11.6 |
 
 ## 3. Agent model
 
