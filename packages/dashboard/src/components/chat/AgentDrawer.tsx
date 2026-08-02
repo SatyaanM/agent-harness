@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useShallow } from 'zustand/react/shallow';
 import { GripVertical, Maximize2, Minimize2, X } from 'lucide-react';
 import { useRuntimeStore } from '@/stores/runtime-store';
 import { useRosterStore } from '@/stores/agent-roster-store';
@@ -73,9 +74,9 @@ export default function AgentDrawer({
   const maxAvailable = Math.max(MIN_WIDTH, Math.floor(chatLeft));
   const clampedWidth = Math.min(width, maxAvailable);
 
-  const activity = useRuntimeStore((s) => s.activity[sessionId] ?? []);
+  const activity = useRuntimeStore(useShallow((s) => s.activity[sessionId] ?? []));
   const myActivity = activity.filter((a) => a.agentName === agent.id).slice(-50);
-  const workers = useRosterStore((s) => s.bySession[sessionId] ?? []);
+  const workers = useRosterStore(useShallow((s) => s.bySession[sessionId] ?? []));
 
   const [transcript, setTranscript] = useState<any>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useSessionStore } from '@/stores/session-store';
 import { useRosterStore } from '@/stores/agent-roster-store';
 import { useRuntimeStore } from '@/stores/runtime-store';
@@ -20,8 +21,8 @@ export default function AgentColumn() {
   const [chatLeft, setChatLeft] = useState(0);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
-  const workers = useRosterStore((s) =>
-    activeSessionId ? s.bySession[activeSessionId] ?? [] : []
+  const workers = useRosterStore(
+    useShallow((s) => (activeSessionId ? s.bySession[activeSessionId] ?? [] : []))
   );
   const running = useRuntimeStore((s) =>
     activeSessionId ? !!s.running[activeSessionId] : false
