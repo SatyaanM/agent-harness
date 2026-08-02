@@ -11,10 +11,19 @@ export type ChatEvent =
   | CouncilDissolvedEvent 
   | InboxLinkEvent;
 
+export interface ClientToolCall {
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+}
+
 export interface Message {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  reasoning?: string;
+  toolCalls?: ClientToolCall[];
+  toolCallId?: string;
   createdAt: string;
   event?: ChatEvent;
 }
@@ -39,8 +48,11 @@ interface SessionStore {
 }
 
 export interface ServerMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  reasoning?: string;
+  toolCalls?: ClientToolCall[];
+  toolCallId?: string;
   createdAt?: string;
   meta?: unknown;
 }
@@ -127,8 +139,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
 }));
 
 function serverMessageToClient(m: ServerMessage, index: number): Message {
-  const role =
-    m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : 'system';
+  const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : m.role === 'tool' ? 'tool' : 'system';
 
   let event: ChatEvent | undefined;
   const meta = m.meta as
@@ -153,6 +164,9 @@ function serverMessageToClient(m: ServerMessage, index: number): Message {
     id: `srv-${index}`,
     role,
     content: m.content ?? '',
+    ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+    ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
+    ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
     createdAt: m.createdAt ?? '',
     ...(event ? { event } : {}),
   };

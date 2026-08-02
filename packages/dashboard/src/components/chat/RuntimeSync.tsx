@@ -16,7 +16,15 @@ interface SessionUpdatedPayload {
   sessionId: string;
   agentName?: string;
   createdAt?: string;
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string; createdAt?: string; meta?: unknown }>;
+  messages: Array<{
+    role: 'system' | 'user' | 'assistant' | 'tool';
+    content: string;
+    reasoning?: string;
+    toolCalls?: Array<{ toolCallId: string; toolName: string; args: Record<string, unknown> }>;
+    toolCallId?: string;
+    createdAt?: string;
+    meta?: unknown;
+  }>;
 }
 
 interface WorkerSpawnedPayload {
