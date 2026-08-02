@@ -77,40 +77,44 @@ export class SessionRuntime {
     if (agentName) session.agentName = agentName;
     if (message) session.prompt = message;
 
+    // History handed to the agent = the loaded transcript + the delivered
+    // mailbox completions. The new user prompt is NOT included: agent.run
+    // re-adds it as the prompt itself, so it must be the last thing the model
+    // sees.
+    const baseHistory = [...session.messages];
+
     if (message) {
       session.messages.push({ role: "user", content: message, createdAt: now });
     }
 
-    const latest = await this.sessionStore.load(this.options.sessionId);
-    if (latest?.mailbox) session.mailbox = latest.mailbox;
-
-    const delivered = session.mailbox ?? [];
+    // Atomically drain the durable mailbox — the entire batch is delivered
+    // together (ADR §10.9). Messages are removed from the log only on delivery.
+    const delivered = await this.sessionStore.drainMailbox(this.options.sessionId);
+    session.mailbox = [];
+    const deliveredSystem = delivered.map((p) => ({
+      role: "system" as const,
+      content:
+        `Worker "${p.agentName}" (task ${p.taskId}) ` +
+        `${
+          p.status === "done"
+            ? "completed with the result below"
+            : p.status === "cancelled"
+              ? "was cancelled by the user"
+              : "failed with the error below"
+        }. ` +
+        `${p.summary}\n\n` +
+        `This is the final result of the task you delegated. Present it to the user. Do not delegate this task again.`,
+      createdAt: p.receivedAt,
+      meta: {
+        kind: "worker_completed",
+        taskId: p.taskId,
+        agentName: p.agentName,
+        status: p.status,
+        summary: p.summary,
+      },
+    }));
     if (delivered.length > 0) {
-      session.mailbox = [];
-      session.messages.push(
-        ...delivered.map((p) => ({
-          role: "system" as const,
-          content:
-            `Worker "${p.agentName}" (task ${p.taskId}) ` +
-            `${
-              p.status === "done"
-                ? "completed with the result below"
-                : p.status === "cancelled"
-                  ? "was cancelled by the user"
-                  : "failed with the error below"
-            }. ` +
-            `${p.summary}\n\n` +
-            `This is the final result of the task you delegated. Present it to the user. Do not delegate this task again.`,
-          createdAt: p.receivedAt,
-          meta: {
-            kind: "worker_completed",
-            taskId: p.taskId,
-            agentName: p.agentName,
-            status: p.status,
-            summary: p.summary,
-          },
-        }))
-      );
+      session.messages.push(...deliveredSystem);
     }
     await this.sessionStore.save(session);
 
@@ -152,7 +156,7 @@ export class SessionRuntime {
 
     let result: AgentResult;
     try {
-      result = await agent.run(message, session.messages.slice(0, -1));
+      result = await agent.run(message, [...baseHistory, ...deliveredSystem]);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.emit({ type: "agent:error", agentName: agentConfig.name, error: errorMessage });
@@ -167,8 +171,6 @@ export class SessionRuntime {
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = now;
 
-    const onDisk = await this.sessionStore.load(this.options.sessionId);
-    if (onDisk?.mailbox) session.mailbox = onDisk.mailbox;
     await this.sessionStore.save(session);
 
     this.emit({ type: "agent:completed", agentName: agentConfig.name, status: result.status });

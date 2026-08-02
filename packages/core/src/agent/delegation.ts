@@ -109,8 +109,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
           summary: result.summary,
           receivedAt: new Date().toISOString(),
         };
-        delegating.mailbox = [...(delegating.mailbox ?? []), pending];
-        await store.save(delegating);
+        await store.appendMailbox(deps.sessionId, pending);
         deps.onWorkerCompleted?.(deps.sessionId, pending);
       });
 
