@@ -12,6 +12,13 @@ export async function fetchSession(sessionId: string) {
   return res.json();
 }
 
+export async function cancelWorker(taskId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/workers/${encodeURIComponent(taskId)}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Failed to cancel worker');
+}
+
 export async function createSession() {
   const res = await fetch(`${BASE_URL}/api/sessions`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to create session');

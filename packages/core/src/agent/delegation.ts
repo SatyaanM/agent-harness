@@ -16,7 +16,12 @@ export interface DelegationDeps {
   toolRegistry: ToolRegistry;
   llmClient: LLMClient;
   capabilityRegistry: CapabilityRegistry;
-  onWorkerSpawned?: (taskId: TaskId, workerSessionId: string, task: string) => void;
+  onWorkerSpawned?: (
+    taskId: TaskId,
+    workerSessionId: string,
+    task: string,
+    abort: AbortController
+  ) => void;
   onWorkerCompleted?: (delegatingSessionId: string, pending: PendingMessage) => void;
 }
 
@@ -61,6 +66,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         createdAt: new Date().toISOString(),
       });
 
+      const controller = new AbortController();
       const worker = new Worker(
         taskId,
         workerConfig,
@@ -69,9 +75,10 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         deps.capabilityRegistry,
         deps.sessionId,
         messageBus,
+        controller.signal,
       );
 
-      deps.onWorkerSpawned?.(taskId, sessionId, task);
+      deps.onWorkerSpawned?.(taskId, sessionId, task, controller);
 
       void worker.run(task).then(async (result) => {
         const existing = await store.load(sessionId);
@@ -93,7 +100,12 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
           taskId,
           from: sessionId,
           agentName: workerConfig.name,
-          status: result.status === "done" ? "done" : "error",
+          status:
+            result.status === "done"
+              ? "done"
+              : result.status === "cancelled"
+                ? "cancelled"
+                : "error",
           summary: result.summary,
           receivedAt: new Date().toISOString(),
         };

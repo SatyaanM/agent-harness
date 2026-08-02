@@ -6,7 +6,7 @@ export interface PendingMessage {
   taskId: TaskId;
   from: string;
   agentName: string;
-  status: "done" | "error";
+  status: "done" | "error" | "cancelled";
   summary: string;
   receivedAt: string;
 }

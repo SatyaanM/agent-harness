@@ -49,7 +49,7 @@ export interface WorkerCompletedPayload {
   sessionId: string;
   taskId: string;
   agentName: string;
-  status: "done" | "error";
+  status: "done" | "error" | "cancelled";
   summary: string;
 }
 

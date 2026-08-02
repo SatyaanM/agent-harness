@@ -92,7 +92,13 @@ export class SessionRuntime {
           role: "system" as const,
           content:
             `Worker "${p.agentName}" (task ${p.taskId}) ` +
-            `${p.status === "done" ? "completed with the result below" : "failed with the error below"}. ` +
+            `${
+              p.status === "done"
+                ? "completed with the result below"
+                : p.status === "cancelled"
+                  ? "was cancelled by the user"
+                  : "failed with the error below"
+            }. ` +
             `${p.summary}\n\n` +
             `This is the final result of the task you delegated. Present it to the user. Do not delegate this task again.`,
           createdAt: p.receivedAt,

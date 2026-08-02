@@ -42,3 +42,10 @@ export interface AgentResult {
   summary: string;
   messages: Message[];
 }
+
+export class AgentCancelledError extends Error {
+  constructor() {
+    super("Agent run cancelled");
+    this.name = "AgentCancelledError";
+  }
+}

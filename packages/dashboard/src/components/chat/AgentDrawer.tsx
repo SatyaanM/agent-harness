@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
-import { GripVertical, Maximize2, Minimize2, X } from 'lucide-react';
+import { GripVertical, Maximize2, Minimize2, Square, X } from 'lucide-react';
 import { useRuntimeStore } from '@/stores/runtime-store';
 import { useRosterStore } from '@/stores/agent-roster-store';
-import { fetchSession } from '@/lib/api';
+import { cancelWorker, fetchSession } from '@/lib/api';
 
 const DEFAULT_WIDTH = 360;
 const MIN_WIDTH = 280;
@@ -39,9 +39,11 @@ function StatusDot({ status }: { status: string }) {
       ? 'bg-green-500 animate-pulse'
       : status === 'error'
         ? 'bg-red-500'
-        : status === 'done'
-          ? 'bg-emerald-500'
-          : 'bg-zinc-400';
+        : status === 'cancelled'
+          ? 'bg-amber-500'
+          : status === 'done'
+            ? 'bg-emerald-500'
+            : 'bg-zinc-400';
   return <span className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${color}`} />;
 }
 
@@ -111,6 +113,17 @@ export default function AgentDrawer({
   };
   const snapDefault = () => snap(DEFAULT_WIDTH);
   const snapMax = () => snap(maxAvailable);
+
+  const [cancelling, setCancelling] = useState(false);
+  const handleCancel = async () => {
+    if (!agent.taskId) return;
+    setCancelling(true);
+    try {
+      await cancelWorker(agent.taskId);
+    } catch {
+      setCancelling(false);
+    }
+  };
 
   const startResize = useCallback(
     (e: React.PointerEvent) => {
@@ -187,6 +200,16 @@ export default function AgentDrawer({
           >
             <Maximize2 className="h-4 w-4" />
           </button>
+          {agent.role === 'worker' && agent.status === 'running' && (
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              title="Stop worker"
+              className="rounded p-1.5 text-red-500 transition-colors hover:bg-red-500/10"
+            >
+              <Square className={cancelling ? 'animate-pulse h-4 w-4' : 'h-4 w-4'} />
+            </button>
+          )}
           <button
             onClick={onClose}
             title="Close"
@@ -211,15 +234,17 @@ export default function AgentDrawer({
                 <ul className="space-y-1">
                   {workers.map((w) => (
                     <li key={w.id} className="flex items-center gap-2 text-xs">
-                      <span
-                        className={`h-2 w-2 shrink-0 rounded-full ${
-                          w.status === 'running'
-                            ? 'animate-pulse bg-green-500'
-                            : w.status === 'error'
-                              ? 'bg-red-500'
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        w.status === 'running'
+                          ? 'animate-pulse bg-green-500'
+                          : w.status === 'error'
+                            ? 'bg-red-500'
+                            : w.status === 'cancelled'
+                              ? 'bg-amber-500'
                               : 'bg-emerald-500'
-                        }`}
-                      />
+                      }`}
+                    />
                       <span className="truncate">{w.name}</span>
                       <span className="ml-auto text-muted-foreground">{w.status}</span>
                     </li>

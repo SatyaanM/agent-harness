@@ -54,6 +54,7 @@ export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
 
 export class SessionManager {
   private runtimes = new Map<string, SessionRuntime>();
+  private workerControllers = new Map<string, AbortController>();
 
   getOrCreate(sessionId: string): SessionRuntime {
     let runtime = this.runtimes.get(sessionId);
@@ -87,6 +88,7 @@ export class SessionManager {
   }
 
   onWorkerCompleted(delegatingSessionId: string, pending: PendingMessage): void {
+    this.workerControllers.delete(pending.taskId);
     emitAgentEvent("worker:completed", {
       sessionId: delegatingSessionId,
       taskId: pending.taskId,
@@ -103,6 +105,14 @@ export class SessionManager {
       });
     }
     // Not loaded: the pending message stays durable on disk until the session is loaded.
+  }
+
+  cancelWorker(taskId: string): boolean {
+    const controller = this.workerControllers.get(taskId);
+    if (!controller) return false;
+    controller.abort();
+    this.workerControllers.delete(taskId);
+    return true;
   }
 
   private buildToolRegistry(
@@ -128,8 +138,10 @@ export class SessionManager {
         toolRegistry: registry,
         llmClient,
         capabilityRegistry,
-        onWorkerSpawned: (taskId, workerSessionId, task) =>
-          emitAgentEvent("worker:spawned", { sessionId, taskId, workerSessionId, task }),
+        onWorkerSpawned: (taskId, workerSessionId, task, controller) => {
+          this.workerControllers.set(taskId, controller);
+          emitAgentEvent("worker:spawned", { sessionId, taskId, workerSessionId, task });
+        },
         onWorkerCompleted: (delegatingSessionId, pending) =>
           this.onWorkerCompleted(delegatingSessionId, pending),
       })

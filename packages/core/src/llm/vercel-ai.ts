@@ -119,6 +119,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           messages,
           ...(instructions ? { instructions } : {}),
           ...(tools ? { tools } : {}),
+          ...(params.signal ? { signal: params.signal } : {}),
         });
         console.log("[llm] generateText succeeded:", {
           finishReason: result.finishReason,

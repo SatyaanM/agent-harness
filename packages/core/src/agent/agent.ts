@@ -1,4 +1,5 @@
 import type { AgentConfig, AgentResult, Message } from "./types.js";
+import { AgentCancelledError } from "./types.js";
 import type { ToolRegistry } from "../tool/types.js";
 import type { LLMClient, LLMToolDefinition } from "../llm/client.js";
 import type { CapabilityRegistry } from "../capability/registry.js";
@@ -21,7 +22,7 @@ export class Agent {
     private readonly onEvent?: AgentEventCallback,
   ) {}
 
-  async run(prompt?: string, history: Message[] = []): Promise<AgentResult> {
+  async run(prompt?: string, history: Message[] = [], signal?: AbortSignal): Promise<AgentResult> {
     this.messages = [...history];
     if (prompt) {
       this.messages.push({ role: "user", content: prompt });
@@ -40,11 +41,14 @@ export class Agent {
       : undefined;
 
     for (let step = 0; step < this.config.maxSteps; step++) {
+      if (signal?.aborted) throw new AgentCancelledError();
+
       const response = await this.llmClient.chat({
         messages: this.messages,
         system: this.config.instructions,
         model: this.config.model,
         ...(llmTools ? { tools: llmTools } : {}),
+        ...(signal ? { signal } : {}),
       });
 
       this.messages.push(response.message);
@@ -59,6 +63,8 @@ export class Agent {
 
       if (response.toolCalls?.length) {
         for (const toolCall of response.toolCalls) {
+          if (signal?.aborted) throw new AgentCancelledError();
+
           const tool = this.toolRegistry.get(toolCall.toolName);
 
           if (!tool) {

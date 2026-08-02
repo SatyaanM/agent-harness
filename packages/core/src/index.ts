@@ -12,6 +12,7 @@ export type {
   TaskId,
   ToolCall,
 } from "./agent/types.js";
+export { AgentCancelledError } from "./agent/types.js";
 
 export type {
   LLMChatParams,

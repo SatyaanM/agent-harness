@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type WorkerStatus = 'running' | 'done' | 'error';
+export type WorkerStatus = 'running' | 'done' | 'error' | 'cancelled';
 
 export interface WorkerEntry {
   id: string;

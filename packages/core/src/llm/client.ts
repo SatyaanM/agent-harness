@@ -12,6 +12,7 @@ export interface LLMChatParams {
   system?: string;
   model: string;
   tools?: LLMToolDefinition[];
+  signal?: AbortSignal;
 }
 
 export interface LLMResponse {

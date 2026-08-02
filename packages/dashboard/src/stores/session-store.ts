@@ -139,7 +139,12 @@ function serverMessageToClient(m: ServerMessage, index: number): Message {
       type: 'delegation_complete',
       taskId: meta.taskId ?? '',
       summary: meta.summary ?? '',
-      status: meta.status === 'error' ? 'error' : 'done',
+      status:
+        meta.status === 'error'
+          ? 'error'
+          : meta.status === 'cancelled'
+            ? 'cancelled'
+            : 'done',
       timestamp: m.createdAt ? Date.parse(m.createdAt) : Date.now(),
     };
   }

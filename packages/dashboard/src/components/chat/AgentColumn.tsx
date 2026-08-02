@@ -104,9 +104,11 @@ export default function AgentColumn() {
                 ? 'animate-pulse bg-green-500'
                 : entry.status === 'error'
                   ? 'bg-red-500'
-                  : entry.status === 'done'
-                    ? 'bg-emerald-500'
-                    : 'bg-zinc-400'
+                  : entry.status === 'cancelled'
+                    ? 'bg-amber-500'
+                    : entry.status === 'done'
+                      ? 'bg-emerald-500'
+                      : 'bg-zinc-400'
             }`}
           />
         </button>
