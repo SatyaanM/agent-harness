@@ -58,6 +58,70 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function Disclosure({
+  label,
+  preview,
+  children,
+  initial = false,
+}: {
+  label: string;
+  preview: string;
+  children: React.ReactNode;
+  initial?: boolean;
+}) {
+  const [open, setOpen] = useState(initial);
+  return (
+    <div className="my-1 overflow-hidden rounded border border-border bg-muted/30">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-1.5 px-2 py-1 text-left font-mono text-[11px] text-foreground transition-colors hover:bg-muted/50"
+      >
+        <span className="text-muted-foreground">{open ? '▾' : '▸'}</span>
+        <span className="shrink-0">{label}</span>
+        <span className="min-w-0 truncate text-muted-foreground">{preview}</span>
+      </button>
+      {open && (
+        <div className="border-t border-border px-2 py-1.5">
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-foreground">
+            {children}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TranscriptMessage({ m, index }: { m: any; index: number }) {
+  const roleLabel =
+    m.role === 'tool'
+      ? '✓ result'
+      : m.role === 'assistant'
+        ? 'assistant'
+        : m.role === 'user'
+          ? 'user'
+          : m.role;
+  return (
+    <div key={index} className="space-y-1">
+      <div className="font-medium text-muted-foreground">{roleLabel}</div>
+      {m.reasoning ? (
+        <Disclosure label="reasoning" preview={truncate(m.reasoning, 60)}>
+          {m.reasoning}
+        </Disclosure>
+      ) : null}
+      {m.toolCalls?.map((tc: any, j: number) => (
+        <Disclosure key={j} label={`⚙ ${tc.toolName}`} preview={truncate(JSON.stringify(tc.args ?? {}), 80)}>
+          {JSON.stringify(tc.args ?? {}, null, 2)}
+        </Disclosure>
+      ))}
+      {m.content ? (
+        <Disclosure label={m.role === 'tool' ? 'result' : 'content'} preview={truncate(m.content, 80)}>
+          {m.content}
+        </Disclosure>
+      ) : null}
+    </div>
+  );
+}
+
 export default function AgentDrawer({
   sessionId,
   agent,
@@ -95,16 +159,30 @@ export default function AgentDrawer({
     if (!visible) setWidth(0);
   }, [visible]);
 
+  // Worker transcript: poll while running so progressive saves show up live.
   useEffect(() => {
-    if (agent.role === 'worker' && agent.id) {
-      setTranscriptLoading(true);
-      fetchSession(agent.id)
-        .then((data) => setTranscript(data))
-        .catch(() => setTranscript(null))
-        .finally(() => setTranscriptLoading(false));
-    } else {
+    if (agent.role !== 'worker' || !agent.id) {
       setTranscript(null);
+      return;
     }
+    let cancelled = false;
+    const load = () => {
+      fetchSession(agent.id)
+        .then((data) => {
+          if (cancelled) return;
+          setTranscript(data);
+          setTranscriptLoading(false);
+        })
+        .catch(() => {});
+    };
+    setTranscriptLoading(true);
+    load();
+    const id = setInterval(load, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      setTranscriptLoading(false);
+    };
   }, [agent.id, agent.role]);
 
   const snap = (w: number) => {
@@ -261,16 +339,7 @@ export default function AgentDrawer({
               ) : transcript?.messages?.length ? (
                 <div className="space-y-2">
                   {transcript.messages.map((m: any, i: number) => (
-                    <div key={i} className="text-xs leading-relaxed">
-                      <div className="font-medium text-muted-foreground">{m.role}</div>
-                      {m.toolCalls?.map((tc: any, j: number) => (
-                        <div key={j} className="font-mono text-foreground">
-                          ⚙ {tc.toolName}
-                          <span className="text-muted-foreground"> {truncate(JSON.stringify(tc.args ?? {}), 120)}</span>
-                        </div>
-                      ))}
-                      {m.content ? <div className="text-foreground">{truncate(m.content, 400)}</div> : null}
-                    </div>
+                    <TranscriptMessage key={i} m={m} index={i} />
                   ))}
                 </div>
               ) : (
