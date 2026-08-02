@@ -12,12 +12,15 @@ export interface ToolActivity {
 
 interface RuntimeStore {
   activity: Record<string, ToolActivity[]>;
+  running: Record<string, boolean>;
   record: (sessionId: string, activity: ToolActivity) => void;
+  setRunning: (sessionId: string, running: boolean) => void;
   clear: (sessionId: string) => void;
 }
 
 export const useRuntimeStore = create<RuntimeStore>((set) => ({
   activity: {},
+  running: {},
   record: (sessionId, activity) =>
     set((state) => ({
       activity: {
@@ -25,10 +28,16 @@ export const useRuntimeStore = create<RuntimeStore>((set) => ({
         [sessionId]: [...(state.activity[sessionId] ?? []), activity],
       },
     })),
+  setRunning: (sessionId, running) =>
+    set((state) => ({
+      running: { ...state.running, [sessionId]: running },
+    })),
   clear: (sessionId) =>
     set((state) => {
       const next = { ...state.activity };
+      const nextRunning = { ...state.running };
       delete next[sessionId];
-      return { activity: next };
+      delete nextRunning[sessionId];
+      return { activity: next, running: nextRunning };
     }),
 }));

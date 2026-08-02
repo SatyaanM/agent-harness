@@ -142,3 +142,18 @@ body {
   border-left-color: rgba(255, 255, 255, 0.5);
   color: rgba(255, 255, 255, 0.8);
 }
+
+/* Agent bubble pop-in (staggered via animation-delay) */
+@keyframes bubble-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

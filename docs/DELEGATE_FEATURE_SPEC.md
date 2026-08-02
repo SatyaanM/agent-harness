@@ -171,11 +171,11 @@ tool:called          # NEW — agent invoked a tool (for live drawer)
 - Tool-driven delegation is now the single path (the old `Orchestrator` class is superseded by `SessionRuntime` + `createDelegateTool`).
 - Worker completions are delivered into a loaded session automatically, and the chat UI syncs via `session:updated` (rendering completion cards from `meta` on system messages).
 
-### Phase 3 — Agent-scope UI
-- Bubble column (anchored to chat left edge, moves with resize, staggered pop-in).
-- Delegate drawer (slide-out over left panel, drag-resize, snap buttons, X, `sessionStorage` width persistence).
-- Live activity feed in the drawer from WebSocket events.
-- Render the previously-dormant `DelegationCard`/`InboxLink` cards from real events.
+### Phase 3 — Agent-scope UI ✅ (implemented)
+- Bubble column anchored to the chat's left edge (moves with panel resize, staggered pop-in animation).
+- Delegate drawer: slides out from under the chat over the left panel; drag-resize; snap buttons (default / max); X close; width persisted in `sessionStorage` and restored on reopen.
+- Drawer content per agent: status, task (workers), live tool-activity feed (from `agent:tool` events), full worker transcript (fetched via `GET /api/sessions/:id`), and the primary's delegated-work list.
+- Completion cards render from real events via `session:updated` (system messages carry `meta`), lighting up the previously-dormant `DelegationCard` UI.
 
 ### Phase 4 — Durable storage hardening
 - Single-writer `SessionStore` with per-session write queue, atomic writes, whole-queue drain.

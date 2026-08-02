@@ -6,6 +6,12 @@ export async function fetchSessions() {
   return res.json();
 }
 
+export async function fetchSession(sessionId: string) {
+  const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`);
+  if (!res.ok) throw new Error('Failed to fetch session');
+  return res.json();
+}
+
 export async function createSession() {
   const res = await fetch(`${BASE_URL}/api/sessions`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to create session');
