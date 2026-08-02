@@ -42,7 +42,13 @@ export default function AgentColumn() {
       ro.disconnect();
       window.removeEventListener('resize', update);
     };
-  }, []);
+  }, [activeSessionId]);
+
+  const openDrawer = (id: string) => {
+    if (ref.current) setChatLeft(ref.current.getBoundingClientRect().left);
+    setClosing(false);
+    setSelectedId(id);
+  };
 
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
   const primaryName = activeSession?.agentName ?? 'orchestrator';
@@ -79,10 +85,7 @@ export default function AgentColumn() {
       {entries.map((entry, i) => (
         <button
           key={entry.id}
-          onClick={() => {
-            setClosing(false);
-            setSelectedId(entry.id);
-          }}
+          onClick={() => openDrawer(entry.id)}
           title={`${entry.name} (${entry.status})`}
           className={`relative flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold text-white transition-transform hover:scale-110 ${
             entry.role === 'primary' ? 'bg-blue-600' : 'bg-zinc-600'
