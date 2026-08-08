@@ -71,10 +71,13 @@ Plugins are the primary extension mechanism. A plugin can provide:
 |---|---|---|
 | **Pages** | New left-panel views | Left panel, accessible via nav |
 | **Nav items** | Navigation entries | Top navigation bar |
+| **Command palette commands** | Options in the global command palette | Command palette (Ctrl+K, global overlay) |
 | **Inbox renderers** | Renderers for new file types | Inbox item detail view |
 | **Chat cards** | Custom event card components | Chat message stream |
 | **Settings panels** | Configuration UI sections | Settings page (new tab/section) |
 | **Tools** | Agent-callable tools | Registered in ToolRegistry |
+
+**Command palette commands are declarative.** A plugin registers commands in its manifest with a `navigate` action (route push) or a `builtin` action that triggers a built-in command by id. Manifests never carry executable code, and the dashboard only accepts a small, validated set of action types and icon names. A command that needs custom behavior is deferred until plugin components can be loaded on demand (the inbox-renderer pattern).
 
 ### 3.2 Tools (core package)
 
@@ -552,6 +555,18 @@ Opening a session (a deliberate act: creating one or reopening a closed one) dec
 
 Auto-spawned worker sessions belong to their delegating session's lifecycle. They are never surfaced as independent open tabs.
 
+### 12.6 A derived metadata index powers listing and search
+
+Listing, titling, and searching sessions must not read every transcript (10.7). A derived metadata index — a projection of each top-level session (title, agent, prompt, timestamps, message count) — is maintained by the same single writer as the transcripts.
+
+- Its durability profile is deliberately weaker than transcript or mailbox (10.8): **eventually consistent, coalesced, and rebuildable** from the transcripts when the index file is missing or corrupt. It is a cache, never a source of truth.
+- Worker sessions are excluded (12.5).
+- The write path sits behind a small interface so the index can later be swapped for a real query engine (e.g. SQL) without touching transcripts or routes.
+
+### 12.7 Sessions are nameable
+
+A session has an optional title. The title is part of the session record — the durable source of truth — not the registry (12.1) or a side table. It survives closing, reopening, and restarts, and flows to every listing (tab bar, command palette, reopen modal) through the index (12.6).
+
 ---
 
 ## 13. Lifecycle Hooks
@@ -580,7 +595,7 @@ An observer may opt into **immediate parallel execution**: it is then fired conc
 
 ### 13.4 Initial events
 
-Session lifecycle events are hookable: opened, closed, created, deleted. Middleware exists where gating or shaping is meaningful (before-close, before-delete). The set grows as the app's events grow; the two-family contract is fixed.
+Session lifecycle events are hookable: opened, closed, created, deleted, renamed. Middleware exists where gating or shaping is meaningful (before-close, before-delete). The set grows as the app's events grow; the two-family contract is fixed.
 
 ---
 
