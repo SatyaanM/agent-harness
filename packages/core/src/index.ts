@@ -49,6 +49,7 @@ export type { Config } from "./config.js";
 export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
 export { SessionStore } from "./persistence/session.js";
 export type { SessionData, PendingMessage } from "./persistence/session.js";
+export type { SessionMeta } from "./persistence/session-index.js";
 
 export { Orchestrator } from "./agent/orchestrator.js";
 export { createDelegateTool, createReadSessionTool } from "./agent/delegation.js";

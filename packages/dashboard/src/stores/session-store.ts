@@ -33,6 +33,7 @@ export interface Session {
   messages: Message[];
   status: 'active' | 'idle' | 'archived';
   agentName: string;
+  title?: string;
   createdAt: string;
 }
 
@@ -45,6 +46,9 @@ interface SessionStore {
   addMessage: (sessionId: string, message: Message) => void;
   updateMessage: (sessionId: string, messageId: string, content: string) => void;
   syncFromServer: (data: ServerSession) => void;
+  hydrate: (sessions: ServerSession[]) => void;
+  removeSession: (sessionId: string) => void;
+  renameSession: (sessionId: string, title?: string) => void;
 }
 
 export interface ServerMessage {
@@ -60,6 +64,7 @@ export interface ServerMessage {
 export interface ServerSession {
   sessionId: string;
   agentName?: string;
+  title?: string;
   createdAt?: string;
   messages: ServerMessage[];
 }
@@ -106,6 +111,40 @@ export const useSessionStore = create<SessionStore>((set) => ({
       ),
     })),
 
+  hydrate: (serverSessions) =>
+    set({
+      sessions: serverSessions.map((data) => {
+        const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
+        return {
+          sessionId: data.sessionId,
+          messages,
+          status: 'active',
+          agentName: data.agentName ?? 'orchestrator',
+          title: data.title,
+          createdAt: data.createdAt ?? new Date().toISOString(),
+        };
+      }),
+    }),
+
+  removeSession: (sessionId) =>
+    set((state) => {
+      const sessions = state.sessions.filter((s) => s.sessionId !== sessionId);
+      let activeSessionId = state.activeSessionId;
+      if (activeSessionId === sessionId) {
+        const idx = state.sessions.findIndex((s) => s.sessionId === sessionId);
+        const neighbor = state.sessions[idx + 1] ?? state.sessions[idx - 1];
+        activeSessionId = neighbor?.sessionId ?? null;
+      }
+      return { sessions, activeSessionId };
+    }),
+
+  renameSession: (sessionId, title) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.sessionId === sessionId ? { ...s, title } : s
+      ),
+    })),
+
   syncFromServer: (data) =>
     set((state) => {
       const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
@@ -119,6 +158,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
               messages,
               status: 'active',
               agentName: data.agentName ?? 'orchestrator',
+              title: data.title,
               createdAt: data.createdAt ?? new Date().toISOString(),
             },
           ],
@@ -131,6 +171,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
                 ...s,
                 messages,
                 agentName: data.agentName ?? s.agentName,
+                title: data.title ?? s.title,
               }
             : s
         ),

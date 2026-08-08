@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useSessionStore } from '@/stores/session-store';
 import { useRuntimeStore } from '@/stores/runtime-store';
 import { useRosterStore } from '@/stores/agent-roster-store';
 import { connectSocket } from '@/lib/ws';
+import { fetchOpenSessions, fetchSession, updateOpenSessions } from '@/lib/api';
 
 interface ToolEventPayload {
   sessionId: string;
@@ -15,6 +16,7 @@ interface ToolEventPayload {
 interface SessionUpdatedPayload {
   sessionId: string;
   agentName?: string;
+  title?: string;
   createdAt?: string;
   messages: Array<{
     role: 'system' | 'user' | 'assistant' | 'tool';
@@ -43,6 +45,52 @@ interface WorkerCompletedPayload {
 }
 
 export default function RuntimeSync() {
+  const sessions = useSessionStore((s) => s.sessions);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const hydrated = useRef(false);
+
+  // Boot hydration: restore the recorded open set as tabs, history only
+  // (ADR §12.3 — no runtime loads, no token spend).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const open = await fetchOpenSessions();
+        const restored = (
+          await Promise.all(
+            open.openSessionIds.map((id) => fetchSession(id).catch(() => null))
+          )
+        ).filter((s): s is NonNullable<typeof s> => s !== null);
+        if (cancelled) return;
+
+        useSessionStore.getState().hydrate(restored);
+        const openIds = new Set(open.openSessionIds);
+        const validActive =
+          open.activeSessionId !== null && openIds.has(open.activeSessionId);
+        const active = validActive
+          ? open.activeSessionId
+          : restored[0]?.sessionId ?? null;
+        if (active) useSessionStore.getState().setActiveSession(active);
+      } catch (err) {
+        console.error('[RuntimeSync] hydration failed:', err);
+      } finally {
+        hydrated.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Registry sync: the dashboard is the single writer of the open set (ADR §12.1).
+  useEffect(() => {
+    if (!hydrated.current) return;
+    updateOpenSessions({
+      activeSessionId,
+      openSessionIds: sessions.map((s) => s.sessionId),
+    }).catch((err) => console.error('[RuntimeSync] registry sync failed:', err));
+  }, [sessions, activeSessionId]);
+
   useEffect(() => {
     const socket = connectSocket();
 

@@ -6,6 +6,60 @@ export async function fetchSessions() {
   return res.json();
 }
 
+export interface SessionMeta {
+  sessionId: string;
+  title?: string;
+  agentName?: string;
+  prompt: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+export async function fetchSessionMeta(): Promise<SessionMeta[]> {
+  const res = await fetch(`${BASE_URL}/api/sessions/meta`);
+  if (!res.ok) throw new Error('Failed to fetch session metadata');
+  return res.json();
+}
+
+export interface OpenSessionsState {
+  activeSessionId: string | null;
+  openSessionIds: string[];
+}
+
+export async function fetchOpenSessions(): Promise<OpenSessionsState> {
+  const res = await fetch(`${BASE_URL}/api/sessions/open`);
+  if (!res.ok) throw new Error('Failed to fetch open sessions');
+  return res.json();
+}
+
+export async function updateOpenSessions(state: OpenSessionsState): Promise<OpenSessionsState> {
+  const res = await fetch(`${BASE_URL}/api/sessions/open`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state),
+  });
+  if (!res.ok) throw new Error('Failed to sync open sessions');
+  return res.json();
+}
+
+export async function openSession(sessionId: string): Promise<{ woke: boolean; pendingCount: number }> {
+  const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}/open`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Failed to open session');
+  return res.json();
+}
+
+export async function renameSession(sessionId: string, title: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error('Failed to rename session');
+}
+
 export async function fetchSession(sessionId: string) {
   const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`);
   if (!res.ok) throw new Error('Failed to fetch session');

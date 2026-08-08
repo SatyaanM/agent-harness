@@ -1,6 +1,7 @@
 import fs from "fs-extra";
 import path from "path";
 import type { Message, TaskId } from "../agent/types.js";
+import { getSessionIndex, type SessionMeta } from "./session-index.js";
 
 export interface PendingMessage {
   taskId: TaskId;
@@ -17,6 +18,7 @@ export interface SessionData {
   prompt: string;
   messages: Message[];
   agentName?: string;
+  title?: string;
   mailbox?: PendingMessage[];
   result?: {
     status: string;
@@ -276,7 +278,9 @@ export class SessionStore {
   }
 
   async save(session: SessionData): Promise<string> {
-    return getTranscriptState(this.sessionsDir, session.sessionId).save(session);
+    const result = getTranscriptState(this.sessionsDir, session.sessionId).save(session);
+    await getSessionIndex(this.sessionsDir).upsert(session);
+    return result;
   }
 
   /** Append to the durable, ordered mailbox. Never coalesced. */
@@ -313,6 +317,7 @@ export class SessionStore {
     const files = await fs.readdir(this.sessionsDir);
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
+      if (file === ".index.json") continue;
       const sessionId = file.slice(0, -".json".length);
       if (sessions.has(sessionId)) continue;
       const session = await fs.readJson(path.join(this.sessionsDir, file));
@@ -340,5 +345,16 @@ export class SessionStore {
     await getMailboxLog(this.sessionsDir, sessionId).clear();
     transcriptStates.delete(`${this.sessionsDir}\u0000${sessionId}`);
     mailboxLogs.delete(`${this.sessionsDir}\u0000${sessionId}`);
+    await getSessionIndex(this.sessionsDir).remove(sessionId);
+  }
+
+  /** Rebuild the metadata index from transcripts if it is missing. */
+  async ensureIndexBuilt(): Promise<void> {
+    await getSessionIndex(this.sessionsDir).ensureBuilt(() => this.list());
+  }
+
+  /** Metadata for listing/searching — cheap, reads the index, not transcripts. */
+  async listMeta(): Promise<SessionMeta[]> {
+    return getSessionIndex(this.sessionsDir).list();
   }
 }
