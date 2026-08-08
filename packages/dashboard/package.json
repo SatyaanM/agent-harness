@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -40,12 +42,19 @@
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.20",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.3",
     "@types/node": "^20.x",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.5",
     "autoprefixer": "^10.x",
+    "jsdom": "^29.1.1",
     "postcss": "^8.x",
     "tailwindcss-animate": "^1.x",
-    "typescript": "^5.x"
+    "typescript": "^5.x",
+    "vitest": "^4.1.10"
   }
 }
