@@ -70,10 +70,12 @@ export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js"
 export {
   PluginManifestSchema,
   InboxRendererManifestSchema,
+  PluginCommandManifestSchema,
 } from "./plugin/types.js";
 export type {
   PluginManifest,
   InboxRendererManifest,
+  PluginCommandManifest,
 } from "./plugin/types.js";
 
 export type {

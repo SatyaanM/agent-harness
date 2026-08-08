@@ -273,6 +273,17 @@ export interface InboxRendererMeta {
   label?: string;
 }
 
+export interface PluginCommandManifest {
+  id: string;
+  label: string;
+  keywords?: string;
+  group?: string;
+  icon?: string;
+  action:
+    | { type: 'navigate'; href: string }
+    | { type: 'builtin'; commandId: string };
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -280,6 +291,7 @@ export interface PluginManifest {
   enabled: boolean;
   provides: {
     inboxRenderers?: InboxRendererMeta[];
+    commands?: PluginCommandManifest[];
   };
 }
 

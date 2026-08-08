@@ -9,6 +9,15 @@
         "component": "MarkdownRenderer",
         "label": "Markdown"
       }
+    ],
+    "commands": [
+      {
+        "id": "markdown-renderer.go-inbox",
+        "label": "Go to Inbox",
+        "keywords": "markdown inbox renderer",
+        "icon": "inbox",
+        "action": { "type": "navigate", "href": "/" }
+      }
     ]
   }
 }

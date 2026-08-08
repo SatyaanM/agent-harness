@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { PluginManifest } from '@/lib/api';
+import type { PluginManifest, PluginCommandManifest } from '@/lib/api';
 import { fetchPlugins, updatePlugin } from '@/lib/api';
 
 interface RendererEntry {
@@ -8,9 +8,14 @@ interface RendererEntry {
   plugin: string;
 }
 
+export interface PluginCommandEntry extends PluginCommandManifest {
+  plugin: string;
+}
+
 interface PluginState {
   plugins: PluginManifest[];
   rendererIndex: Record<string, RendererEntry>;
+  commands: PluginCommandEntry[];
   isLoading: boolean;
   error: string | null;
   fetchPlugins: () => Promise<void>;
@@ -37,9 +42,21 @@ function buildRendererIndex(
   return index;
 }
 
+function buildCommands(plugins: PluginManifest[]): PluginCommandEntry[] {
+  const commands: PluginCommandEntry[] = [];
+  for (const plugin of plugins) {
+    if (!plugin.enabled) continue;
+    for (const command of plugin.provides.commands ?? []) {
+      commands.push({ ...command, plugin: plugin.name });
+    }
+  }
+  return commands;
+}
+
 export const usePluginStore = create<PluginState>((set, get) => ({
   plugins: [],
   rendererIndex: {},
+  commands: [],
   isLoading: false,
   error: null,
   fetchPlugins: async () => {
@@ -49,6 +66,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
       set({
         plugins,
         rendererIndex: buildRendererIndex(plugins),
+        commands: buildCommands(plugins),
         isLoading: false,
       });
     } catch (err) {
@@ -66,7 +84,11 @@ export const usePluginStore = create<PluginState>((set, get) => ({
       const plugins = state.plugins.map((p) =>
         p.name === name ? { ...p, enabled } : p
       );
-      return { plugins, rendererIndex: buildRendererIndex(plugins) };
+      return {
+        plugins,
+        rendererIndex: buildRendererIndex(plugins),
+        commands: buildCommands(plugins),
+      };
     });
     try {
       const updated = await updatePlugin(name, enabled);
@@ -74,14 +96,22 @@ export const usePluginStore = create<PluginState>((set, get) => ({
         const plugins = state.plugins.map((p) =>
           p.name === updated.name ? updated : p
         );
-        return { plugins, rendererIndex: buildRendererIndex(plugins) };
+        return {
+          plugins,
+          rendererIndex: buildRendererIndex(plugins),
+          commands: buildCommands(plugins),
+        };
       });
     } catch (err) {
       set((state) => {
         const plugins = state.plugins.map((p) =>
           p.name === name ? { ...p, enabled: !enabled } : p
         );
-        return { plugins, rendererIndex: buildRendererIndex(plugins) };
+        return {
+          plugins,
+          rendererIndex: buildRendererIndex(plugins),
+          commands: buildCommands(plugins),
+        };
       });
       throw err;
     }
