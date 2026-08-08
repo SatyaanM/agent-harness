@@ -15,7 +15,8 @@
   },
   "devDependencies": {
     "turbo": "^2.x",
-    "typescript": "^5.x"
+    "typescript": "^5.x",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "react": "^19.0.0",

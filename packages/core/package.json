@@ -14,6 +14,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -31,6 +33,7 @@
     "@types/fs-extra": "^11.x",
     "@types/node": "^20.x",
     "@types/uuid": "^9.x",
-    "typescript": "^5.x"
+    "typescript": "^5.x",
+    "vitest": "^4.1.10"
   }
 }
