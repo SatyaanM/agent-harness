@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { fetchSessionMeta, fetchSession, openSession } from '@/lib/api';
 import type { SessionMeta } from '@/lib/api';
 import { useSessionStore } from '@/stores/session-store';
+import { useReopenSessionStore } from '@/stores/reopen-session-store';
 
 function displayLabel(meta: SessionMeta): string {
   if (meta.title?.trim()) return meta.title;
@@ -20,13 +21,9 @@ function displayLabel(meta: SessionMeta): string {
   return `Session ${meta.sessionId.slice(0, 6)}`;
 }
 
-export default function ReopenSessionModal({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
+export default function ReopenSessionModal() {
+  const open = useReopenSessionStore((s) => s.open);
+  const setOpen = useReopenSessionStore((s) => s.setOpen);
   const [metas, setMetas] = useState<SessionMeta[] | null>(null);
   const [query, setQuery] = useState('');
   const [error, setError] = useState(false);
@@ -74,7 +71,7 @@ export default function ReopenSessionModal({
       const session = await fetchSession(meta.sessionId);
       useSessionStore.getState().syncFromServer(session);
       useSessionStore.getState().setActiveSession(meta.sessionId);
-      onClose();
+      setOpen(false);
     } catch {
       setError(true);
     }
@@ -84,7 +81,7 @@ export default function ReopenSessionModal({
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        if (!o) onClose();
+        if (!o) setOpen(false);
       }}
     >
       <DialogContent className="max-w-xl">
