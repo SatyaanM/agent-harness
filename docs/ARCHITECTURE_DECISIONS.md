@@ -519,4 +519,69 @@ A delegated worker is no less transparent than the main agent:
 
 ---
 
+## 12. Session Lifecycle and Open-Session State
+
+A session's transcript is durable (10.7). Its open/closed state in the dashboard is a separate, much smaller piece of state that must also survive restarts — otherwise a reopened app shows an empty tab bar despite all sessions being on disk.
+
+### 12.1 The open set is durable, server-owned state
+
+The set of open sessions (and which is active) is persisted by the server, not held ephemerally in the browser. It survives browser reloads, incognito sessions, and different devices pointed at the same server.
+
+- The dashboard submits its open set as a whole snapshot; the server persists it. One writer, full-state snapshots — the same discipline as 10.7.
+- On boot the dashboard restores the recorded open set. Sessions that no longer exist are dropped silently.
+
+### 12.2 Closed is not deleted
+
+Closing a session removes it from the open set only. The session file is untouched and the session remains fully recoverable.
+
+- **Deletion is an explicit, separate, destructive action.** No routine lifecycle step may erase a session transcript.
+- The set of closed sessions is always discoverable, so reopening is possible at any time. Closing is reversible; deletion is not.
+
+### 12.3 Boot restores the layout, never the runtimes
+
+Restoring the open set on boot renders history from the persisted transcript. It does not load runtimes, drain mailboxes, or spend tokens.
+
+### 12.4 Opening is a delivery decision, not a display decision
+
+Opening a session (a deliberate act: creating one or reopening a closed one) decides delivery, per the loaded gate (10.3, 10.5):
+
+- If the durable mailbox holds undelivered messages, opening loads the runtime and wakes it — the mailbox drains and results are reported (10.9, 10.10).
+- If the mailbox is empty, opening renders history only. No runtime is created.
+
+### 12.5 Worker sessions are not part of the open set
+
+Auto-spawned worker sessions belong to their delegating session's lifecycle. They are never surfaced as independent open tabs.
+
+---
+
+## 13. Lifecycle Hooks
+
+The system exposes lifecycle events so external functionality can react to — or gate — core actions. This is a pattern baked into the system's events, not a one-off for one feature. Consumers are built-in modules and, later, plugins.
+
+### 13.1 Two families: before-middleware and after-observers
+
+Every lifecycle event is defined once, up front, as one of two families. A hook subscribes to an event and inherits that event's semantics — a hook never declares its own blocking behavior.
+
+- **Before-middleware** runs *before* an action commits, **in registration order**, and is **awaited by definition**. Each piece may **mutate** the event's payload — the payload is a typed shape and mutation is validated — and may **veto** the action by throwing, in which case the action does not happen. This is the pre-commit-hook model: the action literally cannot complete until every middleware has passed. A piece that only vetoes without mutating is a *guard*; one that shapes the payload is an *interceptor* — the same mechanism, two behaviors. Order is meaningful here because middleware builds on the previous step's mutation.
+- **After-observers** run *after* an action commits and are **fire-and-forget by definition** — the action never waits for them. Errors are logged and isolated: a failing observer never changes the action's outcome and never affects other observers.
+
+### 13.2 Waiting is a property of the event, never of the hook
+
+A hook cannot choose to block or not block the action. Before-middleware blocks; after-observers don't. This makes misuse impossible: an observer cannot accidentally stall the system, and a middleware cannot accidentally skip its gate.
+
+- "React to an action" → subscribe to the after-event.
+- "Gate or shape an action" → subscribe to the before-event.
+
+### 13.3 After-observers: serialized by default, parallel when opted in
+
+After-observers do not form a pipeline — each independently reacts to the same event, and one's output is never passed to the next. They are nonetheless **serialized in registration order by default**. This is a race-safety measure for observers that touch shared resources (e.g., two observers appending to the same learnings store), never a semantic precedence contract. If one observer genuinely depends on another's work, that is a signal to compose them into a single handler or read the source of truth — not to rely on ordering.
+
+An observer may opt into **immediate parallel execution**: it is then fired concurrently, bypassing the queue, and neither waits for nor is waited on by other observers. Opting in is a declaration by the observer author that the work is independent and race-safe. Both modes remain fire-and-forget — the action never waits for any observer.
+
+### 13.4 Initial events
+
+Session lifecycle events are hookable: opened, closed, created, deleted. Middleware exists where gating or shaping is meaningful (before-close, before-delete). The set grows as the app's events grow; the two-family contract is fixed.
+
+---
+
 *This document should be updated when a new design decision is made that affects how the system is built. Implementation details belong in code comments and README files — not here.*
