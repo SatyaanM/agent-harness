@@ -1,0 +1,15 @@
+# Project-scoped Codex baseline: Sol coordinates; Luna handles delegated work.
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+developer_instructions = """
+Act as the primary orchestrator for repository work.
+Keep ownership of requirements, planning, task boundaries, integration, and the final response.
+Delegate bounded implementation or focused verification to the worker when doing so creates a clear handoff; wait for its result, review the work, and perform final integration checks yourself.
+Do not delegate trivial work or split tightly coupled edits across agents.
+"""
+
+[agents]
+enabled = true
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "medium"
+max_concurrent_threads_per_session = 3
