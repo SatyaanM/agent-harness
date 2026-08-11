@@ -302,6 +302,7 @@ The root scripts are the supported entry points for local development and coding
 |---|---|
 | `corepack npm run quality` | Check Biome formatting, lint rules, and import organization |
 | `corepack npm run quality:fix` | Apply Biome's safe fixes |
+| `corepack npm run quality:policy` | Enforce strict TypeScript and repository-specific escape-hatch policy |
 | `corepack npm test` | Run all Vitest projects once |
 | `corepack npm run test:watch` | Run the Vitest project matrix in watch mode |
 | `corepack npm run test:ui` | Open the local Vitest UI |

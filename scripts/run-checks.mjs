@@ -8,6 +8,7 @@ const originalNextEnv = existsSync(nextEnvPath) ? readFileSync(nextEnvPath) : un
 
 const checks = [
   [corepack, ["npm", "run", "quality"]],
+  [corepack, ["npm", "run", "quality:policy"]],
   [corepack, ["npm", "run", "skills:validate"]],
   [corepack, ["npm", "run", "docs:check"]],
   [corepack, ["npm", "run", "typecheck"]],

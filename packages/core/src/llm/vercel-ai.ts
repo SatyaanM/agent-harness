@@ -125,10 +125,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           ...(tools ? { tools } : {}),
           ...(params.signal ? { signal: params.signal } : {}),
         });
-        const resultWithReasoning = result as unknown as {
-          reasoning?: unknown;
-          reasoning_content?: unknown;
-        };
+        const resultWithReasoning = optionalRecord(result);
         console.log("[llm] generateText succeeded:", {
           finishReason: result.finishReason,
           textLength: result.text?.length,
@@ -150,7 +147,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           ? result.toolCalls.map((tc) => ({
               toolCallId: tc.toolCallId,
               toolName: tc.toolName,
-              args: tc.input as Record<string, unknown>,
+              args: requireRecord(tc.input, `tool call ${tc.toolCallId} input`),
             }))
           : undefined;
 
@@ -172,6 +169,21 @@ export function createVercelAILLMClient(config: Config): LLMClient {
       }
     },
   };
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function requireRecord(value: unknown, boundary: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid provider response: ${boundary} must be an object`);
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function convertMessages(messages: Message[]) {

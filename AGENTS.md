@@ -16,10 +16,15 @@ Read `README.md`, then `docs/architecture/CURRENT_STATE.md` for verified impleme
 ## Hard invariants
 
 - Preserve the package boundary: core must not depend on HTTP or UI frameworks; server and dashboard remain adapters.
+- Keep every TypeScript project in strict mode. Package configurations must not weaken strict compiler flags or suppress type errors to cross a trust boundary.
+- Treat HTTP, WebSocket, environment, filesystem, persisted, plugin, provider, subprocess, and tool data as `unknown` until the owning boundary parses it. Parse once, then use validated types internally.
+- Validation failure must follow the data's durability profile: reject invalid input, preserve invalid durable truth for diagnosis, and rebuild only derived state. Never silently drop mailbox or transcript records.
 - Delivery is system-owned. Agents do not poll workers; completion enters a durable mailbox and wakes a loaded delegating runtime.
 - Preserve transcript fidelity, the single-writer persistence path, atomic mailbox drain, and wake-run guard semantics.
 - Durable session, open-session, plugin, and runtime state is server-owned. Dashboard stores may cache or present it but must resynchronize from server APIs and events.
 - Extend tools and renderers through their registries and manifests. Do not add hard-coded dispatch branches that bypass an extension point.
+- Enforce performance and cost through explicit limits on concurrency, steps, delegation, retries, time, tokens, and bytes. A configured limit that is not enforced is not a capability.
+- Behavior changes require focused automated tests for their success and important failure paths. Coverage is a ratchet and supporting evidence, not a substitute for meaningful assertions.
 - Treat `.agents/skills/` as repository-development workflows. The reserved future product `skills/` capability needs its own runtime design and must not be introduced incidentally.
 
 ## Working method

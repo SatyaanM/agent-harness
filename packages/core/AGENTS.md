@@ -6,6 +6,8 @@
 - Register tools through `ToolRegistry`; filesystem tools must enforce the configured root boundary.
 - Keep provider integration behind `LLMClient` and capability discovery behind the capability interfaces.
 - Put shared contracts in core only when server and dashboard genuinely share a domain concept; do not move adapter concerns inward for convenience.
+- Parse filesystem, persisted, provider, subprocess, and tool inputs at their owning boundary. Invalid durable records must be preserved or surfaced rather than silently skipped.
+- Keep validation outside hot internal loops, and enforce explicit resource budgets where core performs repeated or privileged work.
 - Add focused tests for changed behavior, especially concurrency, persistence ordering, cancellation, and failure paths.
 
 Verify with `corepack npm run typecheck --workspace @agent-harness/core` and `corepack npm test --workspace @agent-harness/core`. Run the root suite when exported contracts or build behavior changes.

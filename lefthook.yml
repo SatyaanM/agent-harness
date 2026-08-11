@@ -6,6 +6,8 @@ pre-commit:
     biome:
       run: corepack npm run quality:staged
       stage_fixed: true
+    policy:
+      run: corepack npm run quality:policy
     docs:
       run: corepack npm run docs:check
     skills:

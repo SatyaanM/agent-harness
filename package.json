@@ -25,6 +25,7 @@
     "quality": "biome check .",
     "quality:ci": "biome ci .",
     "quality:fix": "biome check --write .",
+    "quality:policy": "node scripts/check-quality-policy.mjs",
     "quality:staged": "biome check --write --staged --no-errors-on-unmatched",
     "skills:validate": "node scripts/validate-skills.mjs",
     "start": "turbo run start",

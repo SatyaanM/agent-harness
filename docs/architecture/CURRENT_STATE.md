@@ -114,7 +114,7 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 
 ## Verification reality
 
-The root Vitest project matrix currently discovers four test files and eight tests:
+The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests the executable strict-TypeScript and forbidden-escape-hatch policy with negative fixtures. Before the quality-hardening implementation began, the product packages discovered four test files and eight tests:
 
 - core configuration parsing/defaults: three tests;
 - server health route: one test;
@@ -124,6 +124,8 @@ The root Vitest project matrix currently discovers four test files and eight tes
 [`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) is a manual console script, not part of the configured Vitest suite. There are no automated tests for `SessionStore`, mailbox ordering/drain, `SessionRuntime`, delegation/wake behavior, cancellation, session routes, plugin discovery, provider routing, or dashboard resynchronization. The current build and typecheck are green, but the highest-value runtime invariants are largely protected by prose rather than executable evidence.
 
 `corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The 2026-08-11 baseline is 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. No threshold is enforced yet: coverage reporting is present to make the gap measurable, not to imply that the current sparse suite is sufficient.
+
+`corepack npm run quality:policy` now resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript ignore directives, explicit `any`, and double assertions. It does not yet prove complete boundary validation; that migration and its additional static rules are tracked by [`specs/quality-hardening`](../../specs/quality-hardening/README.md).
 
 ## Immediate architecture risks
 

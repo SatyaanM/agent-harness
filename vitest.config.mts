@@ -5,6 +5,7 @@ export default defineConfig({
     clearMocks: true,
     restoreMocks: true,
     projects: [
+      "vitest.tooling.config.mts",
       "packages/core/vitest.config.ts",
       "packages/server/vitest.config.ts",
       "packages/dashboard/vitest.config.mts",
