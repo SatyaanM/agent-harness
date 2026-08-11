@@ -7,6 +7,7 @@ import type { ExcalidrawInitialDataState, ExcalidrawProps } from "@excalidraw/ex
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { updateInboxFile } from "@/lib/api";
+import { parseExcalidrawContent } from "@/lib/excalidraw";
 import { useInboxHeaderActions } from "../header-actions";
 
 const ExcalidrawComponent = dynamic(
@@ -50,21 +51,21 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
     setSaved(false);
     sceneRef.current = null;
     try {
-      const data = JSON.parse(content) as ExcalidrawInitialDataState;
+      const data = parseExcalidrawContent(content);
       const appState = data?.appState && typeof data.appState === "object" ? data.appState : {};
-      if (!(appState.collaborators instanceof Map)) {
-        data.appState = { ...appState, collaborators: new Map() };
-      }
-      setParsed(data);
+      setParsed({
+        ...data,
+        appState:
+          appState.collaborators instanceof Map
+            ? appState
+            : { ...appState, collaborators: new Map() },
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Invalid JSON");
     }
   }, [content]);
 
-  const initialElementsJson = useMemo(
-    () => JSON.stringify((parsed?.elements as unknown[] | undefined) ?? []),
-    [parsed],
-  );
+  const initialElementsJson = useMemo(() => JSON.stringify(parsed?.elements ?? []), [parsed]);
 
   const handleChange = useCallback<ExcalidrawChangeHandler>(
     (elements, appState, files) => {

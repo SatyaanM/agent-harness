@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseBoundary } from "../validation.js";
+import { parseJsonResponseBoundary } from "../contracts/http.js";
 import type { AudioChunk, TTSConfig, TTSProvider } from "./types.js";
 
 const GEMINI_TTS_ENDPOINT =
@@ -50,31 +50,26 @@ export function createGeminiTTSProvider(): TTSProvider {
         },
       };
 
-      console.log("[gemini-tts] Request:", {
-        voice: config.voice,
-        textLength: text.length,
-      });
-
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(30_000),
       });
 
       if (!response.ok) {
-        const errorBody = await response.text();
-        console.log("[gemini-tts] Error:", response.status, errorBody);
-        throw new Error(`Gemini TTS request failed: ${response.status} - ${errorBody}`);
+        throw new Error(`Gemini TTS request failed with status ${response.status}`);
       }
 
-      const result = parseBoundary(
+      const result = await parseJsonResponseBoundary(
+        response,
         GeminiResponseSchema,
-        await response.json(),
         "Gemini TTS response",
+        25_000_000,
       );
 
       if (result.error) {
-        throw new Error(`Gemini TTS error: ${result.error.code} - ${result.error.message}`);
+        throw new Error(`Gemini TTS request failed with provider code ${result.error.code}`);
       }
 
       const audioData = result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;

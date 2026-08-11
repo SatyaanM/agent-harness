@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getConfig, parseBoundary, parseJsonBoundary } from "@agent-harness/core";
+import {
+  getConfig,
+  parseBoundary,
+  parseJsonBoundary,
+  readUtf8FileBoundedSync,
+  stringifyJsonBounded,
+} from "@agent-harness/core";
 import { z } from "zod";
 import { IdentifierSchema } from "./http/validation.js";
 
@@ -21,6 +27,7 @@ export const OpenSessionsStateSchema = z
 export type OpenSessionsState = z.infer<typeof OpenSessionsStateSchema>;
 
 const EMPTY: OpenSessionsState = { activeSessionId: null, openSessionIds: [] };
+const MAX_OPEN_SESSIONS_STATE_BYTES = 1_000_000;
 
 function stateFile(): string {
   return path.join(getConfig().ROOT, ".harness", "open-sessions.json");
@@ -30,7 +37,7 @@ export function loadOpenSessions(): OpenSessionsState {
   try {
     return parseJsonBoundary(
       OpenSessionsStateSchema,
-      fs.readFileSync(stateFile(), "utf-8"),
+      readUtf8FileBoundedSync(stateFile(), MAX_OPEN_SESSIONS_STATE_BYTES, "open sessions state"),
       "open sessions state",
     );
   } catch (error) {
@@ -47,6 +54,17 @@ export function saveOpenSessions(state: OpenSessionsState): void {
   const file = stateFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(parsed, null, 2), "utf-8");
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(
+      tmp,
+      stringifyJsonBounded(parsed, MAX_OPEN_SESSIONS_STATE_BYTES, "open sessions state"),
+      "utf-8",
+    );
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {}
+    throw error;
+  }
 }

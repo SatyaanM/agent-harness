@@ -1,8 +1,17 @@
+import type { Dirent } from "node:fs";
 import path from "node:path";
-import { getConfig, InboxManager } from "@agent-harness/core";
-import { Router } from "express";
+import {
+  assertCreatablePathWithinRoot,
+  assertExistingPathWithinRoot,
+  getConfig,
+  InboxManager,
+  readFileBounded,
+  readUtf8FileBounded,
+} from "@agent-harness/core";
+import { type Response, Router } from "express";
 import fs from "fs-extra";
 import { z } from "zod";
+import { asyncHandler } from "../http/async-handler.js";
 import { IdentifierSchema, RelativePathSchema, validateRequest } from "../http/validation.js";
 
 const router = Router();
@@ -12,7 +21,19 @@ const NonEmptyRelativePathSchema = RelativePathSchema.refine(
   "must not be empty",
 );
 const FileQuerySchema = z.object({ path: NonEmptyRelativePathSchema }).passthrough();
-const FileContentSchema = z.object({ content: z.string().max(10_000_000) }).strict();
+const MAX_INBOX_FILE_BYTES = 10_000_000;
+const MAX_INBOX_ENTRIES = 10_000;
+const FileContentSchema = z
+  .object({
+    content: z
+      .string()
+      .max(MAX_INBOX_FILE_BYTES)
+      .refine(
+        (content) => Buffer.byteLength(content, "utf8") <= MAX_INBOX_FILE_BYTES,
+        "encoded content exceeds 10 MB",
+      ),
+  })
+  .strict();
 const MoveSchema = z
   .object({ from: NonEmptyRelativePathSchema, to: RelativePathSchema.default("") })
   .strict();
@@ -33,6 +54,32 @@ function getInboxManager() {
   return new InboxManager(config.INBOX_ROOT);
 }
 
+async function authorizeExisting(filePath: string, root: string, res: Response): Promise<boolean> {
+  try {
+    await assertExistingPathWithinRoot(filePath, root);
+    return true;
+  } catch {
+    res.status(403).json({ error: "Invalid path" });
+    return false;
+  }
+}
+
+async function authorizeCreatable(filePath: string, root: string, res: Response): Promise<boolean> {
+  try {
+    await assertCreatablePathWithinRoot(filePath, root);
+    return true;
+  } catch {
+    res.status(403).json({ error: "Invalid path" });
+    return false;
+  }
+}
+
+function rejectOversizedFile(size: number, res: Response): boolean {
+  if (size <= MAX_INBOX_FILE_BYTES) return false;
+  res.status(413).json({ error: "Inbox item exceeds maximum size (10 MB)" });
+  return true;
+}
+
 interface TreeEntry {
   name: string;
   path: string;
@@ -44,227 +91,283 @@ interface TreeEntry {
   children?: TreeEntry[];
 }
 
-router.get("/", async (_req, res) => {
-  const config = getConfig();
-  const inboxManager = getInboxManager();
-  const items = await inboxManager.listItems();
-  const files = await fs.readdir(config.INBOX_ROOT);
-  const enriched = await Promise.all(
-    files
-      .filter((f) => !f.startsWith("."))
-      .map(async (f) => {
-        const stat = await fs.stat(path.join(config.INBOX_ROOT, f));
-        const meta = items.find((m) => m.id === f);
+interface TraversalBudget {
+  exceeded: boolean;
+  remaining: number;
+}
+
+router.get(
+  "/",
+  asyncHandler(async (_req, res) => {
+    const config = getConfig();
+    const inboxManager = getInboxManager();
+    const items = await inboxManager.listItems();
+    const files: Dirent[] = [];
+    const directory = await fs.opendir(config.INBOX_ROOT);
+    for await (const entry of directory) {
+      if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+      files.push(entry);
+      if (files.length > MAX_INBOX_ENTRIES) {
+        res.status(413).json({ error: "Inbox exceeds maximum entry count" });
+        return;
+      }
+    }
+    const enriched = await Promise.all(
+      files.map(async (entry) => {
+        const stat = await fs.stat(path.join(config.INBOX_ROOT, entry.name));
+        const meta = items.find((metadata) => metadata.id === entry.name);
         return {
-          id: f,
-          name: f,
-          type: path.extname(f).slice(1) || "text",
+          id: entry.name,
+          name: entry.name,
+          type: path.extname(entry.name).slice(1) || "text",
           size: stat.size,
           lastModified: stat.mtime.toISOString(),
           metadata: meta ?? null,
         };
       }),
-  );
-  res.json(enriched);
-});
+    );
+    res.json(enriched);
+  }),
+);
 
-router.get("/tree", async (_req, res) => {
-  const config = getConfig();
-  const inboxManager = getInboxManager();
-  const items = await inboxManager.listItems();
-  const tree = await walkTree(config.INBOX_ROOT, "", items);
-  res.json(tree);
-});
-
-router.get("/file", async (req, res) => {
-  const query = validateRequest(FileQuerySchema, req.query, res);
-  if (!query) return;
-  const config = getConfig();
-  const inboxManager = getInboxManager();
-  const rel = query.path;
-
-  const rootResolved = path.resolve(config.INBOX_ROOT);
-  const filePath = path.resolve(rootResolved, rel);
-  if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
-    res.status(403).json({ error: "Invalid path" });
-    return;
-  }
-  if (!(await fs.pathExists(filePath))) {
-    res.status(404).json({ error: "Inbox item not found" });
-    return;
-  }
-
-  const stat = await fs.stat(filePath);
-  const content = await readItemContent(filePath);
-  const metadata = await inboxManager.getItemMetadata(rel);
-  res.json({
-    id: rel,
-    name: path.basename(rel),
-    type: path.extname(rel).slice(1) || "text",
-    size: stat.size,
-    lastModified: stat.mtime.toISOString(),
-    content,
-    metadata,
-  });
-});
-
-router.put("/file", async (req, res) => {
-  const query = validateRequest(FileQuerySchema, req.query, res);
-  if (!query) return;
-  const body = validateRequest(FileContentSchema, req.body, res);
-  if (!body) return;
-  const config = getConfig();
-  const inboxManager = getInboxManager();
-  const rel = query.path;
-  const { content } = body;
-
-  const rootResolved = path.resolve(config.INBOX_ROOT);
-  const filePath = path.resolve(rootResolved, rel);
-  if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
-    res.status(403).json({ error: "Invalid path" });
-    return;
-  }
-  if (!(await fs.pathExists(filePath))) {
-    res.status(404).json({ error: "Inbox item not found" });
-    return;
-  }
-
-  await fs.writeFile(filePath, content, "utf-8");
-  const updated = await inboxManager.bumpVersion(rel);
-  res.json({ success: true, metadata: updated });
-});
-
-router.post("/move", async (req, res) => {
-  const body = validateRequest(MoveSchema, req.body, res);
-  if (!body) return;
-  const config = getConfig();
-  const inboxManager = getInboxManager();
-  const { from, to: toDir } = body;
-
-  const rootResolved = path.resolve(config.INBOX_ROOT);
-  const fromPath = path.resolve(rootResolved, from);
-  if (fromPath !== rootResolved && !fromPath.startsWith(rootResolved + path.sep)) {
-    res.status(403).json({ error: "Invalid source path" });
-    return;
-  }
-  if (!(await fs.pathExists(fromPath))) {
-    res.status(404).json({ error: "Source not found" });
-    return;
-  }
-
-  let toPath: string;
-  if (toDir) {
-    toPath = path.resolve(rootResolved, toDir);
-    if (toPath !== rootResolved && !toPath.startsWith(rootResolved + path.sep)) {
-      res.status(403).json({ error: "Invalid destination path" });
+router.get(
+  "/tree",
+  asyncHandler(async (_req, res) => {
+    const config = getConfig();
+    const inboxManager = getInboxManager();
+    const items = await inboxManager.listItems();
+    const budget: TraversalBudget = { exceeded: false, remaining: MAX_INBOX_ENTRIES };
+    const tree = await walkTree(config.INBOX_ROOT, "", items, budget);
+    if (budget.exceeded) {
+      res.status(413).json({ error: "Inbox tree exceeds maximum entry count" });
       return;
     }
-    const toStat = await fs.stat(toPath).catch(() => null);
-    if (!toStat?.isDirectory()) {
-      res.status(400).json({ error: "Destination is not a directory" });
+    res.json(tree);
+  }),
+);
+
+router.get(
+  "/file",
+  asyncHandler(async (req, res) => {
+    const query = validateRequest(FileQuerySchema, req.query, res);
+    if (!query) return;
+    const config = getConfig();
+    const inboxManager = getInboxManager();
+    const rel = query.path;
+
+    const rootResolved = path.resolve(config.INBOX_ROOT);
+    const filePath = path.resolve(rootResolved, rel);
+    if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
+      res.status(403).json({ error: "Invalid path" });
       return;
     }
-  } else {
-    toPath = rootResolved;
-  }
+    if (!(await fs.pathExists(filePath))) {
+      res.status(404).json({ error: "Inbox item not found" });
+      return;
+    }
+    if (!(await authorizeExisting(filePath, rootResolved, res))) return;
 
-  const base = path.basename(fromPath);
-  const destPath = path.join(toPath, base);
-  if (path.resolve(destPath) === path.resolve(fromPath)) {
-    res.status(400).json({ error: "Cannot move an item into itself" });
-    return;
-  }
-  if (path.resolve(destPath).startsWith(path.resolve(fromPath) + path.sep)) {
-    res.status(400).json({ error: "Cannot move a folder into itself" });
-    return;
-  }
-  if (await fs.pathExists(destPath)) {
-    res.status(409).json({ error: "An item with that name already exists at the destination" });
-    return;
-  }
+    const stat = await fs.stat(filePath);
+    if (rejectOversizedFile(stat.size, res)) return;
+    const content = await readItemContent(filePath);
+    const metadata = await inboxManager.getItemMetadata(rel);
+    res.json({
+      id: rel,
+      name: path.basename(rel),
+      type: path.extname(rel).slice(1) || "text",
+      size: stat.size,
+      lastModified: stat.mtime.toISOString(),
+      content,
+      metadata,
+    });
+  }),
+);
 
-  await fs.move(fromPath, destPath);
+router.put(
+  "/file",
+  asyncHandler(async (req, res) => {
+    const query = validateRequest(FileQuerySchema, req.query, res);
+    if (!query) return;
+    const body = validateRequest(FileContentSchema, req.body, res);
+    if (!body) return;
+    const config = getConfig();
+    const inboxManager = getInboxManager();
+    const rel = query.path;
+    const { content } = body;
 
-  const newId = toDir ? `${toDir.replace(/\\/g, "/")}/${base}` : base;
-  await inboxManager.renameKey(from, newId);
+    const rootResolved = path.resolve(config.INBOX_ROOT);
+    const filePath = path.resolve(rootResolved, rel);
+    if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
+      res.status(403).json({ error: "Invalid path" });
+      return;
+    }
+    if (!(await fs.pathExists(filePath))) {
+      res.status(404).json({ error: "Inbox item not found" });
+      return;
+    }
+    if (!(await authorizeExisting(filePath, rootResolved, res))) return;
 
-  res.json({ success: true, from, to: newId });
-});
+    await fs.writeFile(filePath, content, "utf-8");
+    const updated = await inboxManager.bumpVersion(rel);
+    res.json({ success: true, metadata: updated });
+  }),
+);
 
-router.post("/dir", async (req, res) => {
-  const body = validateRequest(DirectorySchema, req.body, res);
-  if (!body) return;
-  const config = getConfig();
-  const { path: rel } = body;
-  const rootResolved = path.resolve(config.INBOX_ROOT);
-  const dirPath = path.resolve(rootResolved, rel);
-  if (dirPath !== rootResolved && !dirPath.startsWith(rootResolved + path.sep)) {
-    res.status(403).json({ error: "Invalid path" });
-    return;
-  }
-  await fs.ensureDir(dirPath);
-  res.json({ success: true, path: rel });
-});
+router.post(
+  "/move",
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(MoveSchema, req.body, res);
+    if (!body) return;
+    const config = getConfig();
+    const inboxManager = getInboxManager();
+    const { from, to: toDir } = body;
 
-router.delete("/file", async (req, res) => {
-  const query = validateRequest(FileQuerySchema, req.query, res);
-  if (!query) return;
-  const config = getConfig();
-  const inboxManager = getInboxManager();
-  const rel = query.path;
-  const rootResolved = path.resolve(config.INBOX_ROOT);
-  const filePath = path.resolve(rootResolved, rel);
-  if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
-    res.status(403).json({ error: "Invalid path" });
-    return;
-  }
-  if (!(await fs.pathExists(filePath))) {
-    res.status(404).json({ error: "Item not found" });
-    return;
-  }
-  await fs.remove(filePath);
-  await inboxManager.untrackRecursive(rel);
-  res.json({ success: true });
-});
+    const rootResolved = path.resolve(config.INBOX_ROOT);
+    const fromPath = path.resolve(rootResolved, from);
+    if (fromPath !== rootResolved && !fromPath.startsWith(rootResolved + path.sep)) {
+      res.status(403).json({ error: "Invalid source path" });
+      return;
+    }
+    if (!(await fs.pathExists(fromPath))) {
+      res.status(404).json({ error: "Source not found" });
+      return;
+    }
+    if (!(await authorizeExisting(fromPath, rootResolved, res))) return;
 
-router.post("/open", async (req, res) => {
-  const body = validateRequest(OpenSchema, req.body, res);
-  if (!body) return;
-  const config = getConfig();
-  const { path: rel } = body;
-  const rootResolved = path.resolve(config.INBOX_ROOT);
-  const target = rel ? path.resolve(rootResolved, rel) : rootResolved;
-  if (target !== rootResolved && !target.startsWith(rootResolved + path.sep)) {
-    res.status(403).json({ error: "Invalid path" });
-    return;
-  }
-  if (!(await fs.pathExists(target))) {
-    res.status(404).json({ error: "Item not found" });
-    return;
-  }
-  const stat = await fs.stat(target);
-  if (process.platform === "win32") {
-    const args = stat.isDirectory() ? [target] : ["/select,", target];
-    const { spawn } = await import("node:child_process");
-    const child = spawn("explorer.exe", args, { detached: true });
-    child.unref();
-  } else {
-    res.status(501).json({ error: "Open in explorer is only supported on Windows" });
-    return;
-  }
-  res.json({ success: true });
-});
+    let toPath: string;
+    if (toDir) {
+      toPath = path.resolve(rootResolved, toDir);
+      if (toPath !== rootResolved && !toPath.startsWith(rootResolved + path.sep)) {
+        res.status(403).json({ error: "Invalid destination path" });
+        return;
+      }
+      const toStat = await fs.stat(toPath).catch(() => null);
+      if (!toStat?.isDirectory()) {
+        res.status(400).json({ error: "Destination is not a directory" });
+        return;
+      }
+      if (!(await authorizeExisting(toPath, rootResolved, res))) return;
+    } else {
+      toPath = rootResolved;
+    }
+
+    const base = path.basename(fromPath);
+    const destPath = path.join(toPath, base);
+    if (!(await authorizeCreatable(destPath, rootResolved, res))) return;
+    if (path.resolve(destPath) === path.resolve(fromPath)) {
+      res.status(400).json({ error: "Cannot move an item into itself" });
+      return;
+    }
+    if (path.resolve(destPath).startsWith(path.resolve(fromPath) + path.sep)) {
+      res.status(400).json({ error: "Cannot move a folder into itself" });
+      return;
+    }
+    if (await fs.pathExists(destPath)) {
+      res.status(409).json({ error: "An item with that name already exists at the destination" });
+      return;
+    }
+
+    await fs.move(fromPath, destPath);
+
+    const newId = toDir ? `${toDir.replace(/\\/g, "/")}/${base}` : base;
+    await inboxManager.renameKey(from, newId);
+
+    res.json({ success: true, from, to: newId });
+  }),
+);
+
+router.post(
+  "/dir",
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(DirectorySchema, req.body, res);
+    if (!body) return;
+    const config = getConfig();
+    const { path: rel } = body;
+    const rootResolved = path.resolve(config.INBOX_ROOT);
+    const dirPath = path.resolve(rootResolved, rel);
+    if (dirPath !== rootResolved && !dirPath.startsWith(rootResolved + path.sep)) {
+      res.status(403).json({ error: "Invalid path" });
+      return;
+    }
+    if (!(await authorizeCreatable(dirPath, rootResolved, res))) return;
+    await fs.ensureDir(dirPath);
+    res.json({ success: true, path: rel });
+  }),
+);
+
+router.delete(
+  "/file",
+  asyncHandler(async (req, res) => {
+    const query = validateRequest(FileQuerySchema, req.query, res);
+    if (!query) return;
+    const config = getConfig();
+    const inboxManager = getInboxManager();
+    const rel = query.path;
+    const rootResolved = path.resolve(config.INBOX_ROOT);
+    const filePath = path.resolve(rootResolved, rel);
+    if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
+      res.status(403).json({ error: "Invalid path" });
+      return;
+    }
+    if (!(await fs.pathExists(filePath))) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    if (!(await authorizeExisting(filePath, rootResolved, res))) return;
+    await fs.remove(filePath);
+    await inboxManager.untrackRecursive(rel);
+    res.json({ success: true });
+  }),
+);
+
+router.post(
+  "/open",
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(OpenSchema, req.body, res);
+    if (!body) return;
+    const config = getConfig();
+    const { path: rel } = body;
+    const rootResolved = path.resolve(config.INBOX_ROOT);
+    const target = rel ? path.resolve(rootResolved, rel) : rootResolved;
+    if (target !== rootResolved && !target.startsWith(rootResolved + path.sep)) {
+      res.status(403).json({ error: "Invalid path" });
+      return;
+    }
+    if (!(await fs.pathExists(target))) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    if (!(await authorizeExisting(target, rootResolved, res))) return;
+    const stat = await fs.stat(target);
+    if (process.platform === "win32") {
+      const args = stat.isDirectory() ? [target] : ["/select,", target];
+      const { spawn } = await import("node:child_process");
+      const child = spawn("explorer.exe", args, { detached: true });
+      child.unref();
+    } else {
+      res.status(501).json({ error: "Open in explorer is only supported on Windows" });
+      return;
+    }
+    res.json({ success: true });
+  }),
+);
 
 async function walkTree(
   dir: string,
   relDir: string,
   items: Array<{ id: string }>,
+  budget: TraversalBudget,
 ): Promise<TreeEntry[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
   const result: TreeEntry[] = [];
+  const directory = await fs.opendir(dir);
 
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
+  for await (const entry of directory) {
+    if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+    if (budget.remaining === 0) {
+      budget.exceeded = true;
+      break;
+    }
+    budget.remaining -= 1;
     const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
     const full = path.join(dir, entry.name);
 
@@ -274,7 +377,7 @@ async function walkTree(
         path: rel,
         absPath: full,
         type: "dir",
-        children: await walkTree(full, rel, items),
+        children: await walkTree(full, rel, items, budget),
       });
     } else if (entry.isFile()) {
       const stat = await fs.stat(full);
@@ -288,6 +391,7 @@ async function walkTree(
         metadata: items.find((m) => m.id === rel) ?? null,
       });
     }
+    if (budget.exceeded) break;
   }
 
   result.sort((a, b) => {
@@ -298,66 +402,89 @@ async function walkTree(
   return result;
 }
 
-router.get("/:id", async (req, res) => {
-  const params = validateRequest(ItemParamsSchema, req.params, res);
-  if (!params) return;
-  const config = getConfig();
-  const inboxManager = getInboxManager();
-  const itemId = params.id;
-  const filePath = path.join(config.INBOX_ROOT, itemId);
-  if (!(await fs.pathExists(filePath))) {
-    res.status(404).json({ error: "Inbox item not found" });
-    return;
-  }
-  const stat = await fs.stat(filePath);
-  const content = await readItemContent(filePath);
-  const metadata = await inboxManager.getItemMetadata(itemId);
-  res.json({
-    id: itemId,
-    name: itemId,
-    type: path.extname(itemId).slice(1) || "text",
-    size: stat.size,
-    lastModified: stat.mtime.toISOString(),
-    content,
-    metadata,
-  });
-});
+router.get(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(ItemParamsSchema, req.params, res);
+    if (!params) return;
+    const config = getConfig();
+    const inboxManager = getInboxManager();
+    const itemId = params.id;
+    const filePath = path.join(config.INBOX_ROOT, itemId);
+    if (!(await fs.pathExists(filePath))) {
+      res.status(404).json({ error: "Inbox item not found" });
+      return;
+    }
+    if (!(await authorizeExisting(filePath, config.INBOX_ROOT, res))) return;
+    const stat = await fs.stat(filePath);
+    if (rejectOversizedFile(stat.size, res)) return;
+    const content = await readItemContent(filePath);
+    const metadata = await inboxManager.getItemMetadata(itemId);
+    res.json({
+      id: itemId,
+      name: itemId,
+      type: path.extname(itemId).slice(1) || "text",
+      size: stat.size,
+      lastModified: stat.mtime.toISOString(),
+      content,
+      metadata,
+    });
+  }),
+);
 
-router.put("/:id", async (req, res) => {
-  const params = validateRequest(ItemParamsSchema, req.params, res);
-  if (!params) return;
-  const body = validateRequest(FileContentSchema, req.body, res);
-  if (!body) return;
-  const config = getConfig();
-  const inboxManager = getInboxManager();
-  const itemId = params.id;
-  const filePath = path.join(config.INBOX_ROOT, itemId);
-  const { content } = body;
-  await fs.writeFile(filePath, content, "utf-8");
-  const updated = await inboxManager.bumpVersion(itemId);
-  res.json({ success: true, metadata: updated });
-});
+router.put(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(ItemParamsSchema, req.params, res);
+    if (!params) return;
+    const body = validateRequest(FileContentSchema, req.body, res);
+    if (!body) return;
+    const config = getConfig();
+    const inboxManager = getInboxManager();
+    const itemId = params.id;
+    const filePath = path.join(config.INBOX_ROOT, itemId);
+    const { content } = body;
+    if (!(await authorizeCreatable(filePath, config.INBOX_ROOT, res))) return;
+    await fs.writeFile(filePath, content, "utf-8");
+    const updated = await inboxManager.bumpVersion(itemId);
+    res.json({ success: true, metadata: updated });
+  }),
+);
 
-router.delete("/:id", async (req, res) => {
-  const params = validateRequest(ItemParamsSchema, req.params, res);
-  if (!params) return;
-  const inboxManager = getInboxManager();
-  const itemId = params.id;
-  await inboxManager.deleteItem(itemId);
-  res.json({ success: true });
-});
+router.delete(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(ItemParamsSchema, req.params, res);
+    if (!params) return;
+    const inboxManager = getInboxManager();
+    const itemId = params.id;
+    const config = getConfig();
+    const filePath = path.join(config.INBOX_ROOT, itemId);
+    if (
+      (await fs.pathExists(filePath)) &&
+      !(await authorizeExisting(filePath, config.INBOX_ROOT, res))
+    ) {
+      return;
+    }
+    await inboxManager.deleteItem(itemId);
+    res.json({ success: true });
+  }),
+);
 
-router.post("/:id/track", async (req, res) => {
-  const params = validateRequest(ItemParamsSchema, req.params, res);
-  if (!params) return;
-  const body = validateRequest(TrackItemSchema, req.body, res);
-  if (!body) return;
-  const inboxManager = getInboxManager();
-  const itemId = params.id;
-  const { title, type, authorAgent } = body;
-  const metadata = await inboxManager.trackItem(itemId, { title, type, authorAgent });
-  res.json(metadata);
-});
+router.post(
+  "/:id/track",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(ItemParamsSchema, req.params, res);
+    if (!params) return;
+    const body = validateRequest(TrackItemSchema, req.body, res);
+    if (!body) return;
+    const inboxManager = getInboxManager();
+    const itemId = params.id;
+    const { title, type, authorAgent } = body;
+    const metadata = await inboxManager.trackItem(itemId, { title, type, authorAgent });
+    res.json(metadata);
+  }),
+);
 
 export default router;
 
@@ -374,8 +501,8 @@ const BINARY_MIME: Record<string, string> = {
 async function readItemContent(filePath: string): Promise<string> {
   const mime = BINARY_MIME[path.extname(filePath).toLowerCase()];
   if (!mime) {
-    return fs.readFile(filePath, "utf-8");
+    return readUtf8FileBounded(filePath, MAX_INBOX_FILE_BYTES, "inbox text file");
   }
-  const buffer = await fs.readFile(filePath);
+  const buffer = await readFileBounded(filePath, MAX_INBOX_FILE_BYTES, "inbox binary file");
   return `data:${mime};base64,${buffer.toString("base64")}`;
 }

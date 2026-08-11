@@ -10,7 +10,12 @@ export const IdentifierSchema = z
 export const RelativePathSchema = z
   .string()
   .max(2_048)
-  .refine((value) => !value.includes("\0"), "must not contain a null byte");
+  .refine((value) => !value.includes("\0"), "must not contain a null byte")
+  .refine((value) => !/^(?:[A-Za-z]:|[/\\])/u.test(value), "must be relative")
+  .refine(
+    (value) => !value.replaceAll("\\", "/").split("/").includes(".."),
+    "must not traverse outside its root",
+  );
 
 export function validateRequest<TSchema extends z.ZodTypeAny>(
   schema: TSchema,

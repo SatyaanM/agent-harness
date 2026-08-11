@@ -9,6 +9,7 @@ import {
   createReadSessionTool,
   createVercelAILLMClient,
   createWriteFileTool,
+  ExecutionLimiter,
   getConfig,
   globTool,
   grepTool,
@@ -18,6 +19,7 @@ import {
   ToolRegistry,
   webFetchTool,
 } from "@agent-harness/core";
+import { parseServerConfig } from "./server-config.js";
 import { emitAgentEvent } from "./ws/events.js";
 
 export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
@@ -49,11 +51,13 @@ export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
 export class SessionManager {
   private runtimes = new Map<string, SessionRuntime>();
   private workerControllers = new Map<string, AbortController>();
+  private executionLimiter: ExecutionLimiter | undefined;
 
   getOrCreate(sessionId: string): SessionRuntime {
+    const config = getConfig();
+    const executionLimiter = this.getExecutionLimiter(config.MAX_CONCURRENT_AGENTS);
     let runtime = this.runtimes.get(sessionId);
     if (!runtime) {
-      const config = getConfig();
       const llmClient = createVercelAILLMClient(config);
       const capabilityRegistry = new CapabilityRegistry({
         workspaceRoot: config.ROOT,
@@ -63,9 +67,15 @@ export class SessionManager {
         sessionId,
         sessionsDir: config.SESSIONS_DIR,
         resolveConfig: resolveAgentConfig,
-        toolRegistry: this.buildToolRegistry(sessionId, llmClient, capabilityRegistry),
+        toolRegistry: this.buildToolRegistry(
+          sessionId,
+          llmClient,
+          capabilityRegistry,
+          executionLimiter,
+        ),
         llmClient,
         capabilityRegistry,
+        executionLimiter,
         onEvent: (event) => this.handleRuntimeEvent(event),
       });
       this.runtimes.set(sessionId, runtime);
@@ -109,12 +119,31 @@ export class SessionManager {
     return true;
   }
 
+  metrics(): {
+    agentExecutions: { active: number; limit: number; queued: number; queueLimit: number };
+    loadedSessions: number;
+    activeWorkers: number;
+  } {
+    return {
+      agentExecutions: this.executionLimiter?.snapshot() ?? {
+        active: 0,
+        limit: getConfig().MAX_CONCURRENT_AGENTS,
+        queued: 0,
+        queueLimit: Math.max(10, getConfig().MAX_CONCURRENT_AGENTS * 10),
+      },
+      loadedSessions: this.runtimes.size,
+      activeWorkers: this.workerControllers.size,
+    };
+  }
+
   private buildToolRegistry(
     sessionId: string,
     llmClient: ReturnType<typeof createVercelAILLMClient>,
     capabilityRegistry: CapabilityRegistry,
+    executionLimiter: ExecutionLimiter,
   ): ToolRegistry {
     const config = getConfig();
+    const serverConfig = parseServerConfig();
     const registry = new ToolRegistry();
     registry.register(createReadFileTool(config.ROOT));
     registry.register(createWriteFileTool(config.ROOT));
@@ -122,8 +151,8 @@ export class SessionManager {
     registry.register(createListDirectoryTool(config.ROOT));
     registry.register(globTool);
     registry.register(grepTool);
-    registry.register(runCommandTool);
-    registry.register(webFetchTool);
+    if (serverConfig.enableRunCommand) registry.register(runCommandTool);
+    if (serverConfig.enableWebFetch) registry.register(webFetchTool);
     registry.register(
       createDelegateTool({
         sessionsDir: config.SESSIONS_DIR,
@@ -132,6 +161,7 @@ export class SessionManager {
         toolRegistry: registry,
         llmClient,
         capabilityRegistry,
+        executionLimiter,
         onWorkerSpawned: (taskId, workerSessionId, task, controller) => {
           this.workerControllers.set(taskId, controller);
           emitAgentEvent("worker:spawned", { sessionId, taskId, workerSessionId, task });
@@ -153,6 +183,15 @@ export class SessionManager {
     );
     registry.register(createReadSessionTool(config.SESSIONS_DIR));
     return registry;
+  }
+
+  private getExecutionLimiter(limit: number): ExecutionLimiter {
+    if (!this.executionLimiter) {
+      this.executionLimiter = new ExecutionLimiter(limit);
+    } else {
+      this.executionLimiter.setLimit(limit);
+    }
+    return this.executionLimiter;
   }
 
   private handleRuntimeEvent(event: SessionRuntimeEvent): void {

@@ -106,11 +106,10 @@ export class Orchestrator {
     const sessionId = `worker-${taskId}`;
 
     const workerConfig: AgentConfig = {
+      ...this.config,
       name: `worker-${taskId}`,
       model,
-      tools: this.config.tools,
-      maxSteps: this.config.maxSteps,
-      instructions: this.config.instructions,
+      tools: this.config.tools.filter((toolName) => toolName !== "delegate"),
     };
 
     const sessionData: SessionData = {

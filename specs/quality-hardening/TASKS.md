@@ -24,25 +24,25 @@ read_when:
   - Acceptance: boundary values enter as `unknown`; invalid API, disk, provider, and browser payloads cannot enter trusted state
   - Verify: core/server/dashboard focused contract tests and root check
   - Docs/handoff: update current-state validation evidence and compatibility notes
-- [ ] **T03 - Protect critical runtime invariants**
+- [x] **T03 - Protect critical runtime invariants**
   - Depends on: T02
   - Scope: SessionStore/mailbox, SessionRuntime, delegation/wake/cancellation, path authorization
   - Acceptance: ordering, corruption, concurrency, cancellation, and failure paths have deterministic tests
   - Verify: focused package tests, coverage report, root check
   - Docs/handoff: record threshold baseline and uncovered residual risk
-- [ ] **T04 - Harden privileged capabilities and supply chain**
+- [x] **T04 - Harden privileged capabilities and supply chain**
   - Depends on: T02
   - Scope: subprocess environment/policy, filesystem containment, outbound fetch policy, server exposure, audit exceptions
   - Acceptance: privileged operations default to bounded behavior; new high/critical production advisories fail without an unexpired exception
   - Verify: hardening tests; security audit; root check
   - Docs/handoff: threat-boundary and exception policy documentation
-- [ ] **T05 - Enforce runtime performance and cost budgets**
+- [x] **T05 - Enforce runtime performance and cost budgets**
   - Depends on: T03
   - Scope: concurrency limiter, run/delegation/tool/provider budgets, metrics, deterministic budget tests, benchmark reporting
   - Acceptance: configured limits are enforced and observable; no paid provider calls are required
   - Verify: budget tests; `perf:report`; root check
   - Docs/handoff: measured baselines and stable-runner requirements
-- [ ] **T06 - Make CI authoritative and close the baseline**
+- [x] **T06 - Make CI authoritative and close the baseline**
   - Depends on: T01-T05
   - Scope: layered scripts, CI/nightly workflows, branch-check documentation, final adversarial review
   - Acceptance: clean checkout reproduces required checks; hooks mirror but do not replace CI; current-state docs match implementation

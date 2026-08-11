@@ -2,19 +2,18 @@ import path from "node:path";
 import fs from "fs-extra";
 import { z } from "zod";
 import type { Tool } from "./types.js";
+import {
+  assertCreatablePathWithinRoot,
+  WorkspaceContentSchema,
+  WorkspacePathSchema,
+} from "./utils.js";
 
-function assertWithinRoot(resolvedPath: string, root: string): void {
-  const normalized = path.resolve(resolvedPath);
-  const normalizedRoot = path.resolve(root);
-  if (!normalized.startsWith(normalizedRoot + path.sep) && normalized !== normalizedRoot) {
-    throw new Error(`Path "${resolvedPath}" is outside the allowed root directory`);
-  }
-}
-
-const parameters = z.object({
-  path: z.string(),
-  content: z.string(),
-});
+const parameters = z
+  .object({
+    path: WorkspacePathSchema,
+    content: WorkspaceContentSchema,
+  })
+  .strict();
 
 export function createWriteFileTool(root: string): Tool<typeof parameters> {
   return {
@@ -24,7 +23,7 @@ export function createWriteFileTool(root: string): Tool<typeof parameters> {
     parameters,
     async execute({ path: filePath, content }) {
       const resolved = path.resolve(root, filePath);
-      assertWithinRoot(resolved, root);
+      await assertCreatablePathWithinRoot(resolved, root);
 
       await fs.ensureDir(path.dirname(resolved));
       await fs.writeFile(resolved, content, "utf-8");

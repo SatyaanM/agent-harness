@@ -1,9 +1,10 @@
-import { parseBoundary } from "@agent-harness/core/contracts";
+import { parseJsonResponseBoundary } from "@agent-harness/core/contracts";
 import { z } from "zod";
 
 export type PlaybackState = "idle" | "playing" | "paused";
 
 const TTS_BASE_URL = "http://localhost:3001";
+const MAX_AUDIO_BYTES = 25_000_000;
 const TTSErrorSchema = z.object({ error: z.string().optional() }).passthrough();
 
 export interface TTSPlayer {
@@ -145,22 +146,37 @@ export function createTTSPlayer(): TTSPlayer {
         });
 
         if (!response.ok) {
-          const error = parseBoundary(TTSErrorSchema, await response.json(), "TTS error response");
+          const error = await parseJsonResponseBoundary(
+            response,
+            TTSErrorSchema,
+            "TTS error response",
+            64_000,
+          );
           throw new Error(error.error || "TTS request failed");
+        }
+
+        const declaredLength = Number(response.headers.get("content-length"));
+        if (Number.isFinite(declaredLength) && declaredLength > MAX_AUDIO_BYTES) {
+          throw new Error("TTS audio exceeds maximum size");
         }
 
         const reader = response.body?.getReader();
         if (!reader) throw new Error("No response body");
 
         const chunks: Uint8Array[] = [];
+        let totalLength = 0;
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           chunks.push(value);
+          totalLength += value.byteLength;
+          if (totalLength > MAX_AUDIO_BYTES) {
+            await reader.cancel();
+            throw new Error("TTS audio exceeds maximum size");
+          }
         }
 
         // Combine all chunks into a single buffer
-        const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
         const combinedBuffer = new Uint8Array(totalLength);
         let offset = 0;
         for (const chunk of chunks) {

@@ -2,14 +2,28 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { getConfig } from "../config.js";
+import { readUtf8FileBounded } from "../filesystem/bounded-io.js";
 import type { Tool } from "./types.js";
-import { assertWithinRoot } from "./utils.js";
+import {
+  assertExistingPathWithinRoot,
+  assertWithinRoot,
+  MAX_TOOL_ENTRIES,
+  MAX_WORKSPACE_FILE_BYTES,
+  WorkspacePathSchema,
+} from "./utils.js";
 
-const GrepParams = z.object({
-  pattern: z.string().min(1),
-  path: z.string().optional(),
-  include: z.array(z.string()).optional(),
-});
+const MAX_GREP_PATTERN_CHARS = 1_000;
+const MAX_GREP_RESULTS = 500;
+const MAX_GREP_TOTAL_BYTES = 50_000_000;
+const MAX_RESULT_LINE_CHARS = 10_000;
+
+const GrepParams = z
+  .object({
+    pattern: z.string().min(1).max(MAX_GREP_PATTERN_CHARS),
+    path: WorkspacePathSchema.optional(),
+    include: z.array(z.string().min(1).max(128)).max(128).optional(),
+  })
+  .strict();
 
 interface Match {
   file: string;
@@ -17,19 +31,38 @@ interface Match {
   text: string;
 }
 
-async function searchFile(filePath: string, regex: RegExp, root: string): Promise<Match[]> {
-  const content = await fs.readFile(filePath, "utf-8").catch(() => null);
-  if (content === null) return [];
+async function searchFile(
+  filePath: string,
+  regex: RegExp,
+  root: string,
+  matchLimit: number,
+  byteBudget: number,
+): Promise<{ bytesRead: number; matches: Match[] }> {
+  const stat = await fs.stat(filePath).catch(() => null);
+  if (!stat?.isFile() || stat.size > MAX_WORKSPACE_FILE_BYTES || stat.size > byteBudget) {
+    return { bytesRead: 0, matches: [] };
+  }
+  const content = await readUtf8FileBounded(
+    filePath,
+    Math.min(MAX_WORKSPACE_FILE_BYTES, byteBudget),
+    "grep input file",
+  ).catch(() => null);
+  if (content === null) return { bytesRead: 0, matches: [] };
 
   const matches: Match[] = [];
   const lines = content.split("\n");
   for (let i = 0; i < lines.length; i++) {
     if (regex.test(lines[i])) {
       const rel = path.relative(root, filePath).replace(/\\/g, "/");
-      matches.push({ file: rel, line: i + 1, text: lines[i].trimEnd() });
+      matches.push({
+        file: rel,
+        line: i + 1,
+        text: lines[i].trimEnd().slice(0, MAX_RESULT_LINE_CHARS),
+      });
+      if (matches.length >= matchLimit) break;
     }
   }
-  return matches;
+  return { bytesRead: stat.size, matches };
 }
 
 async function* walkDir(dir: string): AsyncGenerator<string> {
@@ -41,6 +74,7 @@ async function* walkDir(dir: string): AsyncGenerator<string> {
   }
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
       if (entry.name === "node_modules" || entry.name === ".git") continue;
       yield* walkDir(full);
@@ -70,32 +104,48 @@ export const grepTool: Tool<typeof GrepParams> = {
 
     const regex = new RegExp(args.pattern, "i");
     const results: Match[] = [];
+    let bytesRead = 0;
+    let filesScanned = 0;
 
     const stat = await fs.stat(searchPath).catch(() => null);
     if (!stat) {
       return `Path not found: ${args.path ?? root}`;
     }
+    await assertExistingPathWithinRoot(searchPath, root);
 
-    const files: string[] = [];
-    if (stat.isDirectory()) {
-      for await (const f of walkDir(searchPath)) {
-        if (args.include && !matchesInclude(f, args.include)) continue;
-        files.push(f);
-      }
-    } else {
-      files.push(searchPath);
+    const files = stat.isDirectory() ? walkDir(searchPath) : singleFile(searchPath);
+    for await (const file of files) {
+      if (args.include && !matchesInclude(file, args.include)) continue;
+      if (filesScanned >= MAX_TOOL_ENTRIES || bytesRead >= MAX_GREP_TOTAL_BYTES) break;
+      filesScanned += 1;
+      const searched = await searchFile(
+        file,
+        regex,
+        root,
+        MAX_GREP_RESULTS - results.length,
+        MAX_GREP_TOTAL_BYTES - bytesRead,
+      );
+      bytesRead += searched.bytesRead;
+      results.push(...searched.matches);
+      if (results.length >= MAX_GREP_RESULTS) break;
     }
 
-    for (const f of files) {
-      const m = await searchFile(f, regex, root);
-      results.push(...m);
-      if (results.length >= 500) break;
+    async function* singleFile(filePath: string): AsyncGenerator<string> {
+      yield filePath;
     }
 
     if (results.length === 0) {
       return "No matches found.";
     }
 
-    return results.map((m) => `${m.file}:${m.line}: ${m.text}`).join("\n");
+    const output = results.map((match) => `${match.file}:${match.line}: ${match.text}`);
+    if (
+      results.length >= MAX_GREP_RESULTS ||
+      filesScanned >= MAX_TOOL_ENTRIES ||
+      bytesRead >= MAX_GREP_TOTAL_BYTES
+    ) {
+      output.push("[truncated: grep resource limit reached]");
+    }
+    return output.join("\n");
   },
 };

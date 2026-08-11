@@ -1,19 +1,16 @@
 import path from "node:path";
 import fs from "fs-extra";
 import { z } from "zod";
+import { readUtf8FileBounded } from "../filesystem/bounded-io.js";
 import type { Tool } from "./types.js";
+import {
+  assertExistingPathWithinRoot,
+  assertWithinRoot,
+  MAX_WORKSPACE_FILE_BYTES,
+  WorkspacePathSchema,
+} from "./utils.js";
 
-function assertWithinRoot(resolvedPath: string, root: string): void {
-  const normalized = path.resolve(resolvedPath);
-  const normalizedRoot = path.resolve(root);
-  if (!normalized.startsWith(normalizedRoot + path.sep) && normalized !== normalizedRoot) {
-    throw new Error(`Path "${resolvedPath}" is outside the allowed root directory`);
-  }
-}
-
-const parameters = z.object({
-  path: z.string(),
-});
+const parameters = z.object({ path: WorkspacePathSchema }).strict();
 
 export function createReadFileTool(root: string): Tool<typeof parameters> {
   return {
@@ -27,13 +24,21 @@ export function createReadFileTool(root: string): Tool<typeof parameters> {
       if (!(await fs.pathExists(resolved))) {
         return `Error: File not found: ${filePath}`;
       }
+      await assertExistingPathWithinRoot(resolved, root);
 
       const stat = await fs.stat(resolved);
       if (stat.isDirectory()) {
         return `Error: Path is a directory, not a file: ${filePath}`;
       }
+      if (stat.size > MAX_WORKSPACE_FILE_BYTES) {
+        return "Error: File exceeds maximum readable size (10 MB).";
+      }
 
-      const content = await fs.readFile(resolved, "utf-8");
+      const content = await readUtf8FileBounded(
+        resolved,
+        MAX_WORKSPACE_FILE_BYTES,
+        "readFile content",
+      );
       return content;
     },
   };

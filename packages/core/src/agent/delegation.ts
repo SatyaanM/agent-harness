@@ -5,6 +5,7 @@ import { messageBus } from "../collaboration/message-bus.js";
 import type { LLMClient } from "../llm/client.js";
 import type { PendingMessage } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
+import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { Tool, ToolRegistry } from "../tool/types.js";
 import type { AgentConfig, TaskId } from "./types.js";
 import { Worker } from "./worker.js";
@@ -16,6 +17,7 @@ export interface DelegationDeps {
   toolRegistry: ToolRegistry;
   llmClient: LLMClient;
   capabilityRegistry: CapabilityRegistry;
+  executionLimiter?: ExecutionLimiter;
   onWorkerSpawned?: (
     taskId: TaskId,
     workerSessionId: string,
@@ -55,11 +57,10 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
       const delegating = await store.load(deps.sessionId);
       const delegatingAgent = deps.resolveConfig(delegating?.agentName ?? "orchestrator");
       const workerConfig: AgentConfig = {
+        ...delegatingAgent,
         name: `worker-${taskId}`,
         model: model || delegatingAgent.model,
-        tools: delegatingAgent.tools,
-        maxSteps: delegatingAgent.maxSteps,
-        instructions: delegatingAgent.instructions,
+        tools: delegatingAgent.tools.filter((toolName) => toolName !== "delegate"),
       };
 
       const createdAt = new Date().toISOString();
@@ -103,6 +104,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
           }
           deps.onWorkerTool?.(sessionId, e);
         },
+        deps.executionLimiter,
       );
 
       deps.onWorkerSpawned?.(taskId, sessionId, task, controller);

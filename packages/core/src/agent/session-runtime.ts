@@ -3,6 +3,7 @@ import type { CapabilityRegistry } from "../capability/registry.js";
 import type { LLMClient } from "../llm/client.js";
 import type { SessionData } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
+import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
 import { Agent } from "./agent.js";
 import type { AgentConfig, AgentResult } from "./types.js";
@@ -37,6 +38,7 @@ export interface SessionRuntimeOptions {
   toolRegistry: ToolRegistry;
   llmClient: LLMClient;
   capabilityRegistry: CapabilityRegistry;
+  executionLimiter?: ExecutionLimiter;
   onEvent?: (event: SessionRuntimeEvent) => void;
 }
 
@@ -170,7 +172,10 @@ export class SessionRuntime {
 
     let result: AgentResult;
     try {
-      result = await agent.run(message, [...baseHistory, ...deliveredSystem]);
+      const execute = () => agent.run(message, [...baseHistory, ...deliveredSystem]);
+      result = this.options.executionLimiter
+        ? await this.options.executionLimiter.run(execute)
+        : await execute();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.emit({ type: "agent:error", agentName: agentConfig.name, error: errorMessage });

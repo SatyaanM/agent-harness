@@ -5,16 +5,55 @@ import { z } from "zod";
 import { getConfig } from "../config.js";
 import { isRecord } from "../validation.js";
 import type { Tool } from "./types.js";
-import { assertWithinRoot } from "./utils.js";
+import { assertExistingPathWithinRoot, assertWithinRoot, WorkspacePathSchema } from "./utils.js";
 
 const execFileAsync = promisify(execFile);
 
-const RunCommandParams = z.object({
-  command: z.string().min(1),
-  cwd: z.string().optional(),
-});
+const RunCommandParams = z
+  .object({
+    command: z
+      .string()
+      .min(1)
+      .max(100_000)
+      .refine((value) => !value.includes("\0"), "must not contain a null byte"),
+    cwd: WorkspacePathSchema.optional(),
+  })
+  .strict();
 
 const TIMEOUT_MS = 30_000;
+const ALLOWED_ENVIRONMENT_KEYS = new Set([
+  "APPDATA",
+  "COLORTERM",
+  "COMSPEC",
+  "FORCE_COLOR",
+  "HOME",
+  "LANG",
+  "LOCALAPPDATA",
+  "NO_COLOR",
+  "PATH",
+  "PATHEXT",
+  "PROGRAMDATA",
+  "PROGRAMFILES",
+  "PROGRAMFILES(X86)",
+  "SYSTEMROOT",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "USERPROFILE",
+  "WINDIR",
+]);
+
+export function buildSubprocessEnvironment(
+  source: Readonly<Record<string, string | undefined>>,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(source).filter(
+      ([key, value]) =>
+        value !== undefined &&
+        (ALLOWED_ENVIRONMENT_KEYS.has(key.toUpperCase()) || key.toUpperCase().startsWith("LC_")),
+    ),
+  );
+}
 
 export const runCommandTool: Tool<typeof RunCommandParams> = {
   name: "runCommand",
@@ -25,6 +64,7 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
     const root = getConfig().ROOT;
     const cwd = args.cwd ? path.resolve(root, args.cwd) : root;
     assertWithinRoot(cwd, root);
+    await assertExistingPathWithinRoot(cwd, root);
 
     try {
       const { stdout, stderr } = await execFileAsync(
@@ -36,6 +76,7 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
           maxBuffer: 1024 * 1024,
           windowsHide: true,
           shell: false,
+          env: buildSubprocessEnvironment(process.env),
         },
       );
 

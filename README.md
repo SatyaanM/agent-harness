@@ -141,8 +141,13 @@ These are read from the environment or the dashboard **Settings** page (persiste
 | `PROVIDER_ENDPOINT` | `https://opencode.ai/zen/go/v1` | LLM API base URL |
 | `API_KEY_ENV` | `OPENCODE_API_KEY` | Env var that holds the provider key |
 | `DEFAULT_MODEL` | `opencode-go/qwen3.7-plus` | Default model for new agents |
-| `MAX_CONCURRENT_AGENTS` | `10` | Max parallel agent executions |
+| `MAX_CONCURRENT_AGENTS` | `10` | Process-wide cap for active parent and worker agent executions |
 | `PORT` | `3001` | Server port |
+| `HOST` | `127.0.0.1` | Server bind host; defaults to loopback rather than all interfaces |
+| `CORS_ORIGINS` | local dashboard origins | Comma-separated browser origins allowed by HTTP and WebSocket CORS |
+| `ENABLE_RUN_COMMAND` | `false` | Explicitly enable the OS-privileged shell tool |
+| `ENABLE_WEB_FETCH` | `false` | Explicitly enable the public-network fetch tool |
+| `PLUGINS_DIR` | dashboard plugin directory | Optional absolute directory containing plugin manifests |
 | `GEMINI_API_KEY` | — | Optional — enables Gemini TTS voice output |
 
 ## Architecture
@@ -207,10 +212,15 @@ tasks to specialized worker agents.
 | `model` | string | yes | Model name |
 | `tools` | string[] | yes | List of tool names |
 | `maxSteps` | number | yes | Max tool-call iterations |
+| `maxToolCalls` | number | no | Run-wide tool-call cap; defaults to 64 |
+| `maxToolResultChars` | number | no | Per-result model/transcript cap; defaults to 100,000 characters |
+| `maxOutputTokens` | number | no | Per-provider-call output cap; defaults to 4,096 tokens |
+| `maxTotalTokens` | number | no | Run-wide token cap; uses provider usage or a conservative fallback estimate and defaults to 100,000 tokens |
+| `runTimeoutMs` | number | no | Run deadline; defaults to 300,000 ms |
 | `capabilities` | object | no | Manual capability overrides |
 | `modelIdMapping` | string | no | Explicit models.dev ID |
 
-**Available tools:** `readFile`, `writeFile`, `editFile`, `listDirectory`, `glob`, `grep`, `runCommand`, `webFetch`.
+**Available tools:** `readFile`, `writeFile`, `editFile`, `listDirectory`, `glob`, and `grep`. The privileged `runCommand` and `webFetch` tools are disabled by default; opt in with `ENABLE_RUN_COMMAND=true` and `ENABLE_WEB_FETCH=true` after reviewing [the security boundary](docs/SECURITY.md).
 
 ## API Reference
 
@@ -243,6 +253,7 @@ GET    /api/settings                # Get settings
 PUT    /api/settings                # Update settings
 POST   /api/tts                     # Text-to-speech
 GET    /api/health                  # Health check
+GET    /api/metrics                 # Active/queued execution and runtime counts
 ```
 
 ### WebSocket Events
@@ -307,7 +318,12 @@ The root scripts are the supported entry points for local development and coding
 | `corepack npm run test:watch` | Run the Vitest project matrix in watch mode |
 | `corepack npm run test:ui` | Open the local Vitest UI |
 | `corepack npm run test:coverage` | Run V8 coverage and write text, HTML, and LCOV reports under `coverage/` |
+| `corepack npm run check:fast` | Run local static checks, typecheck, and tests without a production build |
 | `corepack npm run check` | Run the complete credential-free repository verification suite |
+| `corepack npm run check:ci` | Run authoritative CI checks, coverage, builds, and the production audit |
+| `corepack npm run security:audit` | Reject high/critical production advisories without an unexpired exception |
+| `corepack npm run perf:report` | Report the local validation throughput benchmark without a noisy timing gate |
+| `corepack npm run check:nightly` | Run CI checks plus the informational performance report |
 
 Run the complete check before handing work off:
 
@@ -315,7 +331,7 @@ Run the complete check before handing work off:
 corepack npm run check
 ```
 
-The check runs Biome, validates skills and documentation, typechecks, tests, builds, and checks the diff for whitespace errors. Coverage is reported but has no threshold yet; the current suite is deliberately recorded as a starting baseline rather than presented as broad runtime protection.
+The check runs Biome, the repository policy, documentation and skill validation, typecheck, tests, builds, and diff whitespace checks. Coverage has a conservative non-regression floor; deterministic runtime budgets and security tests carry more weight than the still-low global percentage. GitHub Actions runs `check:ci` on pull requests and main, while the nightly workflow adds the benchmark report. Workflow actions are pinned to immutable commit SHAs. CI is authoritative; local hooks are early feedback.
 
 Lefthook is installed automatically by `corepack npm ci` or `corepack npm install`. The pre-commit hook applies safe Biome fixes to staged files, re-stages those fixes, and runs documentation, skill, and whitespace checks. The pre-push hook runs the full `check` suite. Repair or refresh the hooks manually with:
 
@@ -324,6 +340,8 @@ corepack npm run hooks:install
 ```
 
 The installer removes only this repository's obsolete `core.hooksPath=hooks` setting. It preserves and skips installation when a contributor has configured a different custom hook path.
+
+Privileged tools are application-level controls, not a process sandbox. File operations resolve symlinks before authorization, subprocesses inherit only a small operating-system allowlist, and outbound fetches reject credentials, private/reserved addresses, and unsafe redirects. The server binds to loopback by default. See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat boundary and residual risks.
 
 ### Adding a New Tool
 

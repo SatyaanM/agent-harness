@@ -1,18 +1,53 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { readUtf8FileBoundedSync } from "./filesystem/bounded-io.js";
 import { parseJsonBoundary } from "./validation.js";
 
-export const ConfigSchema = z.object({
-  ROOT: z.string().default(process.cwd()),
-  INBOX_ROOT: z.string(),
-  SESSIONS_DIR: z.string(),
-  AGENTS_DIR: z.string(),
-  PROVIDER_ENDPOINT: z.string().url().default("https://opencode.ai/zen/go/v1"),
-  API_KEY_ENV: z.string().default("OPENCODE_API_KEY"),
-  DEFAULT_MODEL: z.string().default("opencode-go/qwen3.7-plus"),
-  MAX_CONCURRENT_AGENTS: z.coerce.number().int().positive().default(10),
-});
+const MAX_CONFIG_FILE_BYTES = 2_000_000;
+
+const AbsolutePathSchema = z
+  .string()
+  .min(1)
+  .max(32_767)
+  .refine((value) => path.isAbsolute(value), "must be an absolute path");
+const ProviderEndpointSchema = z
+  .string()
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
+  }, "must be an HTTP(S) URL without credentials, query, or fragment");
+
+export const ConfigSchema = z
+  .object({
+    ROOT: AbsolutePathSchema.default(process.cwd()),
+    INBOX_ROOT: AbsolutePathSchema,
+    SESSIONS_DIR: AbsolutePathSchema,
+    AGENTS_DIR: AbsolutePathSchema,
+    PROVIDER_ENDPOINT: ProviderEndpointSchema.default("https://opencode.ai/zen/go/v1"),
+    API_KEY_ENV: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Z_][A-Z0-9_]*$/u, "must be an uppercase environment variable name")
+      .default("OPENCODE_API_KEY"),
+    DEFAULT_MODEL: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u, "contains unsupported characters")
+      .default("opencode-go/qwen3.7-plus"),
+    MAX_CONCURRENT_AGENTS: z.coerce.number().int().min(1).max(1_000).default(10),
+  })
+  .strict();
 const PersistedConfigSchema = ConfigSchema.partial().strict();
 const PackageWorkspaceSchema = z.object({ workspaces: z.unknown().optional() }).passthrough();
 
@@ -26,7 +61,7 @@ function findProjectRoot(): string {
       try {
         const pkg = parseJsonBoundary(
           PackageWorkspaceSchema,
-          fs.readFileSync(pkgPath, "utf-8"),
+          readUtf8FileBoundedSync(pkgPath, MAX_CONFIG_FILE_BYTES, `package metadata ${pkgPath}`),
           `package metadata ${pkgPath}`,
         );
         if (pkg.workspaces) return dir;
@@ -42,7 +77,7 @@ function loadPersistedSettings(root: string): Record<string, unknown> {
   if (fs.existsSync(file)) {
     return parseJsonBoundary(
       PersistedConfigSchema,
-      fs.readFileSync(file, "utf-8"),
+      readUtf8FileBoundedSync(file, MAX_CONFIG_FILE_BYTES, "persisted settings"),
       "persisted settings",
     );
   }

@@ -20,7 +20,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.16",
@@ -30,13 +30,12 @@
     "fast-glob": "^3.x",
     "fs-extra": "^11.x",
     "gray-matter": "^4.x",
-    "uuid": "^9.x",
+    "uuid": "^14.0.1",
     "zod": "^3.x"
   },
   "devDependencies": {
     "@types/fs-extra": "^11.x",
     "@types/node": "^20.x",
-    "@types/uuid": "^9.x",
     "typescript": "^5.x",
     "vitest": "4.1.10"
   }

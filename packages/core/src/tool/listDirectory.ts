@@ -2,18 +2,14 @@ import path from "node:path";
 import fs from "fs-extra";
 import { z } from "zod";
 import type { Tool } from "./types.js";
+import {
+  assertExistingPathWithinRoot,
+  assertWithinRoot,
+  MAX_TOOL_ENTRIES,
+  WorkspacePathSchema,
+} from "./utils.js";
 
-function assertWithinRoot(resolvedPath: string, root: string): void {
-  const normalized = path.resolve(resolvedPath);
-  const normalizedRoot = path.resolve(root);
-  if (!normalized.startsWith(normalizedRoot + path.sep) && normalized !== normalizedRoot) {
-    throw new Error(`Path "${resolvedPath}" is outside the allowed root directory`);
-  }
-}
-
-const parameters = z.object({
-  path: z.string(),
-});
+const parameters = z.object({ path: WorkspacePathSchema }).strict();
 
 export function createListDirectoryTool(root: string): Tool<typeof parameters> {
   return {
@@ -27,18 +23,22 @@ export function createListDirectoryTool(root: string): Tool<typeof parameters> {
       if (!(await fs.pathExists(resolved))) {
         return `Error: Directory not found: ${dirPath}`;
       }
+      await assertExistingPathWithinRoot(resolved, root);
 
       const stat = await fs.stat(resolved);
       if (!stat.isDirectory()) {
         return `Error: Path is not a directory: ${dirPath}`;
       }
 
-      const entries = await fs.readdir(resolved, { withFileTypes: true });
       const lines: string[] = [];
-
-      for (const entry of entries) {
+      const directory = await fs.opendir(resolved);
+      for await (const entry of directory) {
         const type = entry.isDirectory() ? "dir" : "file";
         lines.push(`[${type}] ${entry.name}`);
+        if (lines.length >= MAX_TOOL_ENTRIES) {
+          lines.push(`[truncated: directory exceeds ${MAX_TOOL_ENTRIES} entries]`);
+          break;
+        }
       }
 
       if (lines.length === 0) {

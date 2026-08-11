@@ -1,121 +1,207 @@
 import path from "node:path";
 import fs from "fs-extra";
-import type { TaskId } from "../agent/types.js";
+import { z } from "zod";
+import { TaskIdSchema } from "../agent/types.js";
+import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded-io.js";
+import { assertExistingPathWithinRoot } from "../tool/utils.js";
+import { BoundaryValidationError, parseBoundary, parseJsonBoundary } from "../validation.js";
 
-export interface InboxItemMetadata {
-  id: string;
-  title: string;
-  type: string;
-  authorAgent: TaskId;
-  createdAt: string;
-  updatedAt: string;
-  version: number;
+const MAX_INBOX_METADATA_BYTES = 10_000_000;
+const MAX_INBOX_METADATA_ENTRIES = 10_000;
+const InboxItemIdSchema = z
+  .string()
+  .min(1)
+  .max(2_048)
+  .refine((value) => !value.includes("\0"), "must not contain a null byte")
+  .refine((value) => !path.isAbsolute(value), "must be relative")
+  .refine(
+    (value) => !value.replaceAll("\\", "/").split("/").includes(".."),
+    "must not traverse outside the inbox",
+  );
+
+export const InboxItemMetadataSchema = z
+  .object({
+    id: InboxItemIdSchema,
+    title: z.string().min(1).max(512),
+    type: z.string().min(1).max(128),
+    authorAgent: TaskIdSchema,
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    version: z.number().int().positive(),
+  })
+  .strict();
+const InboxMetadataFileSchema = z
+  .record(InboxItemMetadataSchema)
+  .refine((value) => Object.keys(value).length <= MAX_INBOX_METADATA_ENTRIES);
+
+export type InboxItemMetadata = z.infer<typeof InboxItemMetadataSchema>;
+
+const TrackItemInputSchema = z
+  .object({
+    title: z.string().min(1).max(512),
+    type: z.string().min(1).max(128),
+    authorAgent: TaskIdSchema,
+  })
+  .strict();
+export type TrackItemInput = z.infer<typeof TrackItemInputSchema>;
+
+interface InboxState {
+  metadata: Map<string, InboxItemMetadata>;
+  loaded: boolean;
+  loading: Promise<void> | null;
+  persistQueue: Promise<void>;
 }
 
-export interface TrackItemInput {
-  title: string;
-  type: string;
-  authorAgent: TaskId;
+const states = new Map<string, InboxState>();
+
+function getState(metadataFile: string): InboxState {
+  let state = states.get(metadataFile);
+  if (!state) {
+    state = {
+      metadata: new Map(),
+      loaded: false,
+      loading: null,
+      persistQueue: Promise.resolve(),
+    };
+    states.set(metadataFile, state);
+  }
+  return state;
 }
 
 export class InboxManager {
-  private inboxDir: string;
-  private metadataFile: string;
-  private metadata: Map<string, InboxItemMetadata> = new Map();
-  private loaded = false;
+  private readonly metadataFile: string;
+  private readonly state: InboxState;
 
-  constructor(inboxDir: string) {
-    this.inboxDir = inboxDir;
+  constructor(private readonly inboxDir: string) {
     this.metadataFile = path.join(inboxDir, ".harness", "inbox-metadata.json");
+    this.state = getState(this.metadataFile);
   }
 
   private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
-    await fs.ensureDir(path.dirname(this.metadataFile));
-    if (await fs.pathExists(this.metadataFile)) {
-      const raw: Record<string, InboxItemMetadata> = await fs.readJson(this.metadataFile);
-      for (const [key, value] of Object.entries(raw)) {
-        this.metadata.set(key, value);
+    if (this.state.loaded) return;
+    if (this.state.loading) return this.state.loading;
+    this.state.loading = (async () => {
+      await fs.ensureDir(path.dirname(this.metadataFile));
+      if (await fs.pathExists(this.metadataFile)) {
+        const parsed = parseJsonBoundary(
+          InboxMetadataFileSchema,
+          await readUtf8FileBounded(this.metadataFile, MAX_INBOX_METADATA_BYTES, "inbox metadata"),
+          "inbox metadata",
+        );
+        this.state.metadata.clear();
+        for (const [key, value] of Object.entries(parsed)) {
+          this.state.metadata.set(key, value);
+        }
       }
-    }
-    this.loaded = true;
+      this.state.loaded = true;
+    })().finally(() => {
+      this.state.loading = null;
+    });
+    return this.state.loading;
   }
 
   private async persist(): Promise<void> {
-    const obj: Record<string, InboxItemMetadata> = {};
-    for (const [key, value] of this.metadata.entries()) {
-      obj[key] = value;
-    }
-    await fs.writeJson(this.metadataFile, obj, { spaces: 2 });
+    const snapshot = Object.fromEntries(this.state.metadata.entries());
+    const write = this.state.persistQueue.then(async () => {
+      const temporaryFile = `${this.metadataFile}.tmp`;
+      try {
+        await fs.writeFile(
+          temporaryFile,
+          stringifyJsonBounded(snapshot, MAX_INBOX_METADATA_BYTES, "inbox metadata"),
+          "utf8",
+        );
+        await fs.rename(temporaryFile, this.metadataFile);
+      } catch (error) {
+        await fs.remove(temporaryFile).catch(() => undefined);
+        throw error;
+      }
+    });
+    this.state.persistQueue = write.catch(() => undefined);
+    await write;
   }
 
   async trackItem(itemId: string, input: TrackItemInput): Promise<InboxItemMetadata> {
     await this.ensureLoaded();
-    const existing = this.metadata.get(itemId);
+    const parsedItemId = parseBoundary(InboxItemIdSchema, itemId, "inbox item identifier");
+    const parsedInput = parseBoundary(TrackItemInputSchema, input, "inbox item metadata");
+    const existing = this.state.metadata.get(parsedItemId);
+    if (!existing && this.state.metadata.size >= MAX_INBOX_METADATA_ENTRIES) {
+      throw new BoundaryValidationError(
+        "inbox metadata",
+        `entry count exceeds ${MAX_INBOX_METADATA_ENTRIES}`,
+      );
+    }
     const now = new Date().toISOString();
     const entry: InboxItemMetadata = {
-      id: itemId,
-      title: input.title,
-      type: input.type,
-      authorAgent: input.authorAgent,
+      id: parsedItemId,
+      title: parsedInput.title,
+      type: parsedInput.type,
+      authorAgent: parsedInput.authorAgent,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       version: existing ? existing.version + 1 : 1,
     };
-    this.metadata.set(itemId, entry);
+    this.state.metadata.set(parsedItemId, entry);
     await this.persist();
     return entry;
   }
 
   async getItemMetadata(itemId: string): Promise<InboxItemMetadata | null> {
     await this.ensureLoaded();
-    return this.metadata.get(itemId) ?? null;
+    const parsedItemId = parseBoundary(InboxItemIdSchema, itemId, "inbox item identifier");
+    return this.state.metadata.get(parsedItemId) ?? null;
   }
 
   async listItems(): Promise<InboxItemMetadata[]> {
     await this.ensureLoaded();
-    return [...this.metadata.values()];
+    return [...this.state.metadata.values()];
   }
 
   async deleteItem(itemId: string): Promise<void> {
     await this.ensureLoaded();
-    const filePath = path.join(this.inboxDir, itemId);
+    const parsedItemId = parseBoundary(InboxItemIdSchema, itemId, "inbox item identifier");
+    const filePath = path.join(this.inboxDir, parsedItemId);
     if (await fs.pathExists(filePath)) {
+      await assertExistingPathWithinRoot(filePath, this.inboxDir);
       await fs.remove(filePath);
     }
-    this.metadata.delete(itemId);
+    this.state.metadata.delete(parsedItemId);
     await this.persist();
   }
 
   async bumpVersion(itemId: string): Promise<InboxItemMetadata | null> {
     await this.ensureLoaded();
-    const existing = this.metadata.get(itemId);
+    const parsedItemId = parseBoundary(InboxItemIdSchema, itemId, "inbox item identifier");
+    const existing = this.state.metadata.get(parsedItemId);
     if (!existing) return null;
     const updated: InboxItemMetadata = {
       ...existing,
       updatedAt: new Date().toISOString(),
       version: existing.version + 1,
     };
-    this.metadata.set(itemId, updated);
+    this.state.metadata.set(parsedItemId, updated);
     await this.persist();
     return updated;
   }
 
   async renameKey(oldId: string, newId: string): Promise<void> {
     await this.ensureLoaded();
-    const existing = this.metadata.get(oldId);
+    const parsedOldId = parseBoundary(InboxItemIdSchema, oldId, "old inbox item identifier");
+    const parsedNewId = parseBoundary(InboxItemIdSchema, newId, "new inbox item identifier");
+    const existing = this.state.metadata.get(parsedOldId);
     if (!existing) return;
-    this.metadata.set(newId, { ...existing, id: newId });
-    this.metadata.delete(oldId);
+    this.state.metadata.set(parsedNewId, { ...existing, id: parsedNewId });
+    this.state.metadata.delete(parsedOldId);
     await this.persist();
   }
 
   async untrackRecursive(prefix: string): Promise<void> {
     await this.ensureLoaded();
+    const parsedPrefix = parseBoundary(InboxItemIdSchema, prefix, "inbox item prefix");
     let changed = false;
-    for (const key of this.metadata.keys()) {
-      if (key === prefix || key.startsWith(`${prefix}/`)) {
-        this.metadata.delete(key);
+    for (const key of this.state.metadata.keys()) {
+      if (key === parsedPrefix || key.startsWith(`${parsedPrefix}/`)) {
+        this.state.metadata.delete(key);
         changed = true;
       }
     }

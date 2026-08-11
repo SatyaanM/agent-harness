@@ -7,7 +7,7 @@ read_when:
 
 # Quality hardening specification
 
-Status: Accepted — implementation in progress
+Status: Completed — implementation and adversarial verification finished 2026-08-11
 
 ## Problem and evidence
 

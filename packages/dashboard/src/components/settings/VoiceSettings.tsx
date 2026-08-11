@@ -135,9 +135,15 @@ export function VoiceSettings() {
                 <Label>Tag Style</Label>
                 <Select
                   value={tagStyle}
-                  onValueChange={(v) =>
-                    setTagStyle(v as "conservative" | "balanced" | "expressive")
-                  }
+                  onValueChange={(value) => {
+                    if (
+                      value === "conservative" ||
+                      value === "balanced" ||
+                      value === "expressive"
+                    ) {
+                      setTagStyle(value);
+                    }
+                  }}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select tag style" />

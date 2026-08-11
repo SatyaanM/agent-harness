@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { type RegistryEntry, RegistryEntrySchema } from "../capability/types.js";
+import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded-io.js";
 import { parseBoundary, parseJsonBoundary } from "../validation.js";
 
-const CapabilityCacheSchema = z.array(RegistryEntrySchema);
+const CapabilityCacheSchema = z.array(RegistryEntrySchema).max(10_000);
+const MAX_CAPABILITY_CACHE_BYTES = 10_000_000;
 
 const CACHE_DIR = ".harness";
 const CACHE_FILE = "capabilities.json";
@@ -21,7 +23,11 @@ export class CapabilityCache {
   async loadCache(): Promise<RegistryEntry[]> {
     if (this.loaded) return this.entries;
     try {
-      const raw = await fs.readFile(this.cachePath, "utf-8");
+      const raw = await readUtf8FileBounded(
+        this.cachePath,
+        MAX_CAPABILITY_CACHE_BYTES,
+        "capability cache",
+      );
       this.entries = parseJsonBoundary(CapabilityCacheSchema, raw, "capability cache");
     } catch {
       this.entries = [];
@@ -35,7 +41,11 @@ export class CapabilityCache {
     this.loaded = true;
     const dir = path.dirname(this.cachePath);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(this.cachePath, JSON.stringify(this.entries, null, 2), "utf-8");
+    await fs.writeFile(
+      this.cachePath,
+      stringifyJsonBounded(this.entries, MAX_CAPABILITY_CACHE_BYTES, "capability cache"),
+      "utf-8",
+    );
   }
 
   async getEntry(provider: string, model: string, sdk: string): Promise<RegistryEntry | undefined> {

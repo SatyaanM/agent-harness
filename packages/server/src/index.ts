@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import type express from "express";
 import { Server as SocketIOServer } from "socket.io";
 import { createApp } from "./app.js";
+import { parseServerConfig } from "./server-config.js";
 import { initWebSocket } from "./ws/events.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,9 +14,10 @@ const rootDir = path.resolve(__dirname, "../../..");
 dotenv.config({ path: path.join(rootDir, ".env") });
 
 export function createServer(app: express.Express): { server: HTTPServer; io: SocketIOServer } {
-  const server = app.listen(Number(process.env.PORT ?? 3001));
+  const config = parseServerConfig();
+  const server = app.listen(config.port, config.host);
   const io = new SocketIOServer(server, {
-    cors: { origin: "*" },
+    cors: { origin: config.allowedOrigins },
   });
 
   io.on("connection", (socket) => {

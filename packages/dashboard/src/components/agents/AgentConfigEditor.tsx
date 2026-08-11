@@ -20,6 +20,15 @@ function configToMarkdown(config: AgentConfig): string {
   lines.push(`name: ${config.name}`);
   lines.push(`model: ${config.model}`);
   lines.push(`maxSteps: ${config.maxSteps}`);
+  for (const key of [
+    "maxToolCalls",
+    "maxToolResultChars",
+    "maxOutputTokens",
+    "maxTotalTokens",
+    "runTimeoutMs",
+  ] as const) {
+    if (config[key] !== undefined) lines.push(`${key}: ${config[key]}`);
+  }
   if (config.tools && config.tools.length > 0) {
     lines.push("tools:");
     for (const t of config.tools) {
@@ -63,6 +72,17 @@ function parseMarkdownConfig(content: string): Partial<AgentConfig> {
 
   const maxStepsMatch = yamlStr.match(/^maxSteps:\s*(\d+)$/m);
   if (maxStepsMatch) config.maxSteps = Number(maxStepsMatch[1]);
+
+  for (const key of [
+    "maxToolCalls",
+    "maxToolResultChars",
+    "maxOutputTokens",
+    "maxTotalTokens",
+    "runTimeoutMs",
+  ] as const) {
+    const match = yamlStr.match(new RegExp(`^${key}:\\s*(\\d+)$`, "m"));
+    if (match) config[key] = Number(match[1]);
+  }
 
   const toolsMatch = yamlStr.match(/^tools:\s*\n((?:\s+-\s+.+\n?)*)/m);
   if (toolsMatch) {

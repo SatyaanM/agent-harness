@@ -6,3 +6,10 @@ export class AgentCancelledError extends Error {
     this.name = "AgentCancelledError";
   }
 }
+
+export class AgentBudgetExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentBudgetExceededError";
+  }
+}

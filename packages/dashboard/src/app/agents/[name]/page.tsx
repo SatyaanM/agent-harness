@@ -9,12 +9,17 @@ import { type AgentConfig, fetchAgent } from "@/lib/api";
 export default function AgentEditorPage() {
   const params = useParams();
   const router = useRouter();
-  const name = decodeURIComponent(params.name as string);
+  const name = typeof params.name === "string" ? decodeURIComponent(params.name) : "";
   const [agent, setAgent] = useState<AgentConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!name) {
+      setError("Invalid agent name");
+      setLoading(false);
+      return;
+    }
     fetchAgent(name)
       .then(setAgent)
       .catch(() => setError("Failed to load agent"))

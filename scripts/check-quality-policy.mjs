@@ -34,6 +34,7 @@ export function checkQualityPolicy(rootDir) {
   const absoluteRoot = path.resolve(rootDir);
   return [
     ...checkTypeScriptConfigs(absoluteRoot),
+    ...checkWorkflowActionPins(absoluteRoot),
     ...findFiles(absoluteRoot, (file) => SOURCE_EXTENSIONS.has(path.extname(file))).flatMap(
       (file) => checkSourceFile(absoluteRoot, file),
     ),
@@ -41,11 +42,41 @@ export function checkQualityPolicy(rootDir) {
 }
 
 /** @param {string} rootDir */
+function checkWorkflowActionPins(rootDir) {
+  const workflowsDir = path.join(rootDir, ".github", "workflows");
+  if (!fs.existsSync(workflowsDir)) return [];
+  const workflowFiles = findFiles(workflowsDir, (file) => /\.ya?ml$/u.test(file));
+  /** @type {PolicyDiagnostic[]} */
+  const diagnostics = [];
+
+  for (const workflowFile of workflowFiles) {
+    const source = fs.readFileSync(workflowFile, "utf8");
+    for (const [index, line] of source.split("\n").entries()) {
+      const match = line.match(/^\s*-?\s*uses:\s*([^\s#]+)/u);
+      const action = match?.[1];
+      if (
+        action &&
+        !action.startsWith("./") &&
+        !action.startsWith("docker://") &&
+        !/@[0-9a-f]{40}$/u.test(action)
+      ) {
+        diagnostics.push({
+          file: relativePath(rootDir, workflowFile),
+          line: index + 1,
+          rule: "supply-chain/pinned-action",
+          message: "Third-party GitHub Actions must be pinned to a full commit SHA.",
+        });
+      }
+    }
+  }
+
+  return diagnostics;
+}
+
+/** @param {string} rootDir */
 function checkTypeScriptConfigs(rootDir) {
-  const configFiles = findFiles(
-    rootDir,
-    (file) =>
-      path.basename(file) === "tsconfig.json" || path.basename(file) === "tsconfig.base.json",
+  const configFiles = findFiles(rootDir, (file) =>
+    /^tsconfig(?:\.[^.]+)*\.json$/u.test(path.basename(file)),
   );
   /** @type {PolicyDiagnostic[]} */
   const diagnostics = [];
@@ -110,7 +141,7 @@ function checkSourceFile(rootDir, filePath) {
     if (
       (token === ts.SyntaxKind.SingleLineCommentTrivia ||
         token === ts.SyntaxKind.MultiLineCommentTrivia) &&
-      /@ts-(?:ignore|nocheck)/.test(scanner.getTokenText())
+      /@ts-(?:expect-error|ignore|nocheck)/.test(scanner.getTokenText())
     ) {
       diagnostics.push({
         file: relative,
@@ -148,6 +179,45 @@ function checkSourceFile(rootDir, filePath) {
     }
 
     if (
+      ts.isTypeAssertionExpression(node) ||
+      (ts.isAsExpression(node) && node.type.getText(sourceFile) !== "const")
+    ) {
+      diagnostics.push({
+        file: relative,
+        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        rule: "typescript/no-assertion",
+        message: "Type assertions are forbidden; validate or narrow the value instead.",
+      });
+    }
+
+    if (ts.isNonNullExpression(node)) {
+      diagnostics.push({
+        file: relative,
+        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        rule: "typescript/no-non-null-assertion",
+        message: "Non-null assertions are forbidden; narrow or validate the value instead.",
+      });
+    }
+
+    if (
+      relative.startsWith("packages/") &&
+      ts.isCallExpression(node) &&
+      node.arguments.length === 0 &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "json" &&
+      !(
+        ts.isIdentifier(node.expression.expression) && node.expression.expression.text === "express"
+      )
+    ) {
+      diagnostics.push({
+        file: relative,
+        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        rule: "boundaries/bounded-json-response",
+        message: "HTTP JSON responses must be byte-bounded and schema-validated before use.",
+      });
+    }
+
+    if (
       relative.startsWith("packages/server/src/routes/") &&
       ts.isPropertyAccessExpression(node) &&
       ts.isIdentifier(node.expression) &&
@@ -164,8 +234,25 @@ function checkSourceFile(rootDir, filePath) {
     }
 
     if (
+      relative.startsWith("packages/server/src/routes/") &&
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ["delete", "get", "patch", "post", "put"].includes(node.expression.name.text) &&
+      node.arguments.slice(1).some(isAsyncFunction)
+    ) {
+      diagnostics.push({
+        file: relative,
+        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        rule: "express/handled-async-route",
+        message:
+          "Async Express handlers must be wrapped so rejected promises reach error middleware.",
+      });
+    }
+
+    if (
       (relative.startsWith("packages/core/src/persistence/") ||
-        relative.startsWith("packages/server/src/")) &&
+        relative.startsWith("packages/server/src/") ||
+        relative.startsWith("packages/dashboard/src/")) &&
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
       ts.isIdentifier(node.expression.expression) &&
@@ -206,6 +293,14 @@ function checkSourceFile(rootDir, filePath) {
 
     ts.forEachChild(node, visit);
   }
+}
+
+/** @param {ts.Node} node */
+function isAsyncFunction(node) {
+  return (
+    (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
+    node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)
+  );
 }
 
 /** @param {ts.Node} node @param {string} name */

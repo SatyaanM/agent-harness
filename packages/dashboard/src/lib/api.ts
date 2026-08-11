@@ -3,8 +3,8 @@ import {
   PluginManifestSchema as CorePluginManifestSchema,
   type InboxRendererManifestSchema,
   type PluginCommandManifestSchema,
-  parseBoundary,
   parseJsonBoundary,
+  parseJsonResponseBoundary,
   SessionDataSchema,
 } from "@agent-harness/core/contracts";
 import { z } from "zod";
@@ -43,8 +43,7 @@ async function parseJsonResponse<TSchema extends z.ZodTypeAny>(
   schema: TSchema,
   boundary: string,
 ): Promise<z.output<TSchema>> {
-  const value: unknown = await response.json();
-  return parseBoundary(schema, value, boundary);
+  return parseJsonResponseBoundary(response, schema, boundary, 10_000_000);
 }
 
 export function parseChatStreamEvent(data: string): ChatStreamEvent {
@@ -188,7 +187,12 @@ export async function moveInboxItem(from: string, toDir: string): Promise<void> 
     body: JSON.stringify({ from, to: toDir }),
   });
   if (!res.ok) {
-    const value: unknown = await res.json().catch(() => null);
+    const value: unknown = await parseJsonResponseBoundary(
+      res,
+      z.unknown(),
+      "inbox move error",
+      64_000,
+    ).catch(() => null);
     const parsed = ErrorEnvelopeSchema.safeParse(value);
     const detail = parsed.success
       ? typeof parsed.data.error === "string"

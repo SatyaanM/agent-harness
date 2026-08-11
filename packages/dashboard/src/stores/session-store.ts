@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { create } from "zustand";
 import type {
   CouncilCreatedEvent,
@@ -6,6 +7,15 @@ import type {
 } from "@/components/chat/CouncilCard";
 import type { DelegationCompleteEvent, DelegationEvent } from "@/components/chat/DelegationCard";
 import type { InboxLinkEvent } from "@/components/chat/InboxLink";
+
+const WorkerCompletedMetaSchema = z
+  .object({
+    kind: z.literal("worker_completed"),
+    taskId: z.string().optional(),
+    summary: z.string().optional(),
+    status: z.enum(["done", "error", "cancelled"]).optional(),
+  })
+  .passthrough();
 
 export type ChatEvent =
   | DelegationEvent
@@ -186,16 +196,18 @@ function serverMessageToClient(m: ServerMessage, index: number): Message {
           : "system";
 
   let event: ChatEvent | undefined;
-  const meta = m.meta as
-    | { kind?: string; taskId?: string; summary?: string; status?: string }
-    | undefined;
-  if (meta?.kind === "worker_completed") {
+  const meta = WorkerCompletedMetaSchema.safeParse(m.meta);
+  if (meta.success) {
     event = {
       type: "delegation_complete",
-      taskId: meta.taskId ?? "",
-      summary: meta.summary ?? "",
+      taskId: meta.data.taskId ?? "",
+      summary: meta.data.summary ?? "",
       status:
-        meta.status === "error" ? "error" : meta.status === "cancelled" ? "cancelled" : "done",
+        meta.data.status === "error"
+          ? "error"
+          : meta.data.status === "cancelled"
+            ? "cancelled"
+            : "done",
       timestamp: m.createdAt ? Date.parse(m.createdAt) : Date.now(),
     };
   }

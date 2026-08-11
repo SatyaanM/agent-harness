@@ -6,9 +6,14 @@ import {
   getConfig,
   parseBoundary,
   parseJsonBoundary,
+  parseJsonResponseBoundary,
+  readUtf8FileBoundedSync,
   resetConfig,
+  stringifyJsonBounded,
 } from "@agent-harness/core";
 import { Router } from "express";
+import { z } from "zod";
+import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
 
 const SETTING_KEYS: (keyof Config)[] = [
@@ -34,6 +39,20 @@ const PersistedSettingsSchema = ConfigSchema.pick({
   .partial()
   .strict();
 const SettingsUpdateSchema = PersistedSettingsSchema;
+const MAX_SETTINGS_BYTES = 2_000_000;
+const ModelsResponseSchema = z.object({
+  object: z.string().max(128),
+  data: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(512),
+        object: z.string().max(128),
+        created: z.number().finite(),
+        owned_by: z.string().max(512),
+      }),
+    )
+    .max(10_000),
+});
 
 function getSettingsFile(): string {
   const config = getConfig();
@@ -48,20 +67,32 @@ settingsRouter.get("/", (_req, res) => {
   res.json({ ...config, ...persisted });
 });
 
-settingsRouter.get("/models", async (_req, res) => {
-  try {
-    const config = getConfig();
-    const response = await fetch(`${config.PROVIDER_ENDPOINT}/models`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch models: ${response.status}`);
+settingsRouter.get(
+  "/models",
+  asyncHandler(async (_req, res) => {
+    try {
+      const config = getConfig();
+      const apiKey = process.env[config.API_KEY_ENV];
+      const response = await fetch(`${config.PROVIDER_ENDPOINT.replace(/\/$/u, "")}/models`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models: ${response.status}`);
+      }
+      const data = await parseJsonResponseBoundary(
+        response,
+        ModelsResponseSchema,
+        "models response",
+        2_000_000,
+      );
+      res.json(data);
+    } catch {
+      console.error("[settings] Failed to fetch models");
+      res.status(502).json({ error: "Failed to fetch models" });
     }
-    const data = await response.json();
-    res.json(data);
-  } catch (err) {
-    console.error("[settings] Failed to fetch models:", err);
-    res.status(500).json({ error: "Failed to fetch models", details: String(err) });
-  }
-});
+  }),
+);
 
 settingsRouter.put("/", (req, res) => {
   const body = validateRequest(SettingsUpdateSchema, req.body, res);
@@ -80,8 +111,9 @@ settingsRouter.put("/", (req, res) => {
     savePersistedSettings(parsed);
     resetConfig();
     res.json(parsed);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to save settings", details: String(err) });
+  } catch {
+    console.error("[settings] Failed to save settings");
+    res.status(500).json({ error: "Failed to save settings" });
   }
 });
 
@@ -89,7 +121,7 @@ function loadPersistedSettings(): Partial<Config> {
   try {
     const file = getSettingsFile();
     if (fs.existsSync(file)) {
-      const raw = fs.readFileSync(file, "utf-8");
+      const raw = readUtf8FileBoundedSync(file, MAX_SETTINGS_BYTES, "persisted settings");
       return parseJsonBoundary(PersistedSettingsSchema, raw, "persisted settings");
     }
   } catch {}
@@ -100,5 +132,18 @@ function savePersistedSettings(settings: Config): void {
   const file = getSettingsFile();
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2), "utf-8");
+  const temporaryFile = `${file}.tmp`;
+  try {
+    fs.writeFileSync(
+      temporaryFile,
+      stringifyJsonBounded(settings, MAX_SETTINGS_BYTES, "persisted settings"),
+      "utf-8",
+    );
+    fs.renameSync(temporaryFile, file);
+  } catch (error) {
+    try {
+      fs.rmSync(temporaryFile, { force: true });
+    } catch {}
+    throw error;
+  }
 }

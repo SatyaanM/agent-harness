@@ -14,6 +14,7 @@ export type {
   ToolCall,
 } from "./agent/types.js";
 export {
+  AgentBudgetExceededError,
   AgentCancelledError,
   AgentConfigSchema,
   AgentResultSchema,
@@ -40,12 +41,21 @@ export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supe
 export { callSupervisor } from "./collaboration/supervision.js";
 export type { Config } from "./config.js";
 export { ConfigSchema, getConfig, resetConfig } from "./config.js";
+export { parseJsonResponseBoundary, readResponseTextBounded } from "./contracts/http.js";
+export {
+  readFileBounded,
+  readUtf8FileBounded,
+  readUtf8FileBoundedSync,
+  stringifyJsonBounded,
+} from "./filesystem/bounded-io.js";
 export type {
   LLMChatParams,
   LLMClient,
   LLMResponse,
   LLMToolDefinition,
+  LLMUsage,
 } from "./llm/client.js";
+export { LLMResponseSchema, LLMUsageSchema } from "./llm/client.js";
 export { createVercelAILLMClient } from "./llm/vercel-ai.js";
 export { CapabilityCache } from "./persistence/capability-cache.js";
 export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
@@ -64,6 +74,8 @@ export {
 } from "./plugin/types.js";
 export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js";
 export { InboxManager } from "./presentation/inbox.js";
+export type { ExecutionLimiterSnapshot } from "./runtime/execution-limiter.js";
+export { ExecutionLimiter, ExecutionQueueFullError } from "./runtime/execution-limiter.js";
 export { createEditFileTool } from "./tool/editFile.js";
 export { globTool } from "./tool/glob.js";
 export { grepTool } from "./tool/grep.js";
@@ -72,6 +84,11 @@ export { createReadFileTool } from "./tool/readFile.js";
 export { ToolRegistry } from "./tool/registry.js";
 export { runCommandTool } from "./tool/runCommand.js";
 export type { Tool, ToolRegistry as IToolRegistry } from "./tool/types.js";
+export {
+  assertCreatablePathWithinRoot,
+  assertExistingPathWithinRoot,
+  assertWithinRoot,
+} from "./tool/utils.js";
 export { webFetchTool } from "./tool/webFetch.js";
 export { createWriteFileTool } from "./tool/writeFile.js";
 export type { SpeechChunker } from "./tts/chunker.js";

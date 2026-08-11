@@ -1,6 +1,7 @@
 import type { CapabilityRegistry } from "../capability/registry.js";
 import type { MessageBus } from "../collaboration/message-bus.js";
 import type { LLMClient } from "../llm/client.js";
+import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
 import type { AgentEventCallback } from "./agent.js";
 import { Agent } from "./agent.js";
@@ -28,13 +29,17 @@ export class Worker {
     private readonly bus: MessageBus,
     private readonly abortSignal?: AbortSignal,
     onEvent?: AgentEventCallback,
+    private readonly executionLimiter?: ExecutionLimiter,
   ) {
     this.agent = new Agent(config, toolRegistry, llmClient, capabilityRegistry, onEvent);
   }
 
   async run(task: string): Promise<WorkerResult> {
     try {
-      const result = await this.agent.run(task, [], this.abortSignal);
+      const execute = () => this.agent.run(task, [], this.abortSignal);
+      const result = this.executionLimiter
+        ? await this.executionLimiter.run(execute)
+        : await execute();
       this.messages = result.messages;
 
       const workerResult: WorkerResult = {

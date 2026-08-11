@@ -1,19 +1,26 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { getConfig } from "@agent-harness/core";
 import { Router } from "express";
 import { z } from "zod";
 import { IdentifierSchema, validateRequest } from "../http/validation.js";
 import { PluginRegistry } from "../plugin/registry.js";
+import { parseServerConfig } from "../server-config.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, "../../../..");
+let cachedRegistry: PluginRegistry | undefined;
+let cachedRegistryKey: string | undefined;
 
-const pluginsDir =
-  process.env.PLUGINS_DIR ?? path.join(rootDir, "packages", "dashboard", "src", "plugins");
-
-const registry = new PluginRegistry(pluginsDir, getConfig().ROOT);
+function getRegistry(): PluginRegistry {
+  const config = getConfig();
+  const pluginsDir =
+    parseServerConfig().pluginsDir ??
+    path.join(config.ROOT, "packages", "dashboard", "src", "plugins");
+  const key = `${config.ROOT}\0${pluginsDir}`;
+  if (!cachedRegistry || cachedRegistryKey !== key) {
+    cachedRegistry = new PluginRegistry(pluginsDir, config.ROOT);
+    cachedRegistryKey = key;
+  }
+  return cachedRegistry;
+}
 
 export const pluginsRouter = Router();
 
@@ -25,7 +32,7 @@ const PluginUpdateSchema = z
   .strict();
 
 pluginsRouter.get("/", (_req, res) => {
-  res.json(registry.list());
+  res.json(getRegistry().list());
 });
 
 pluginsRouter.put("/:name", (req, res) => {
@@ -34,7 +41,7 @@ pluginsRouter.put("/:name", (req, res) => {
   const { name } = request.params;
   const { enabled } = request.body;
 
-  const plugin = registry.setEnabled(name, enabled);
+  const plugin = getRegistry().setEnabled(name, enabled);
   if (!plugin) {
     res.status(404).json({ error: `Plugin "${name}" not found` });
     return;

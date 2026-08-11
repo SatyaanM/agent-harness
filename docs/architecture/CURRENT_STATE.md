@@ -104,8 +104,8 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 | Plugin hot reload | Not implemented | No watcher, reload endpoint, or plugin-change WebSocket event exists. A later GET rescans manifests only. |
 | Multi-provider support | Partial | One endpoint/key setting is used. A hard-coded model-name set chooses Anthropic format; every other model uses OpenAI chat format. There is no provider registry or per-agent endpoint. |
 | Four-tier capability discovery | Library present, execution integration absent | `CapabilityRegistry.lookup()` exists, but the active `Agent` path does not call it. |
-| Max concurrent agents | Configuration only | `MAX_CONCURRENT_AGENTS` is parsed and editable but not used by `SessionManager` or delegation. |
-| Recursive delegation | Incorrectly bound | Workers inherit the `delegate` tool, but share the parent registry whose delegate closure retains the original parent `sessionId`; nested work is attributed/delivered to that original parent. |
+| Max concurrent agents | Implemented | A process-wide FIFO `ExecutionLimiter` bounds parent and worker model executions, rejects work beyond a bounded wait queue, updates from `MAX_CONCURRENT_AGENTS`, and exposes active/queued counts through `/api/metrics`. |
+| Recursive delegation | Deliberately disabled | Workers no longer inherit the parent-bound `delegate` tool. Proper recursive delegation remains a future session-scoped design rather than misattributing nested work. |
 | Live streaming | Partial | Socket events expose steps/tools; `/api/chat` waits for completion and then emits synthetic text chunks. |
 | Worker history after reconnect | Partial | Worker transcripts persist, but the browser roster is live-event-only and is not rebuilt on hydration. |
 | Councils and supervision | Library/UI remnants only | Core primitives and dashboard card types exist, but the server runtime does not create councils or emit council events. |
@@ -114,26 +114,33 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 
 ## Verification reality
 
-The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests the executable strict-TypeScript and trust-boundary policy with negative fixtures. As of the first boundary-hardening increment, the matrix discovers nine test files and 30 tests. New coverage includes:
+The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. As of the completed quality-hardening baseline, the matrix discovers 29 test files and 116 tests. Production and test sources are both typechecked under strict mode. Coverage includes:
 
 - malformed persisted configuration;
 - valid and invalid session transcript/mailbox records, including preservation of a corrupt mailbox line;
 - provider-supplied tool argument validation before execution;
 - stable server request-validation errors and path-like identifier rejection;
 - dashboard HTTP, chat-stream, and WebSocket payload validation.
+- per-session delivery serialization, ordered atomic mailbox drain, wake-run delegation suppression, worker completion, and cancellation;
+- process-wide concurrency and queue limits, tool-call, tool-result, provider-output, reported-or-estimated total-token, and wall-time budgets;
+- bounded provider/browser response parsing, workspace file/search limits, symlink-aware path containment, subprocess environment minimization, public-only outbound fetch policy, redirect revalidation, loopback binding, CORS, and stable malformed/oversized/internal error envelopes;
+- dependency-audit exceptions and their expiry behavior.
+- plugin discovery/state persistence, capability probing, inbox metadata mutations, bounded file I/O, provider response envelopes, and rejected async Express handler propagation.
 
-[`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) remains a manual console script, not part of the configured Vitest suite. There are still no automated tests for `SessionRuntime`, delegation/wake behavior, cancellation, plugin discovery, provider routing, or end-to-end dashboard resynchronization. The most important remaining runtime invariants are tracked by the quality-hardening plan.
+[`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) remains a manual console script, not part of the configured Vitest suite. There are still no automated tests for provider routing, the legacy exported `Orchestrator`, or end-to-end dashboard resynchronization. Those gaps remain visible rather than being hidden by the improved global percentage.
 
-`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. Boundary hardening raised the measured baseline to 10.75% statements, 4.62% branches, 7.23% functions, and 11.68% lines. Conservative global thresholds of 10/4/7/11 now prevent regression while critical-module tests and tighter thresholds are added; these low global floors are not presented as broad runtime protection.
+`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. The completed hardening increment measures 24.51% statements, 18.44% branches, 19.88% functions, and 26.14% lines. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules now have focused tests, while the low UI and adapter totals are not presented as broad product protection.
 
-`corepack npm run quality:policy` resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript ignore directives, explicit `any`, double assertions, direct Express request-data use outside `validateRequest`, raw JSON parsing in server or core persistence code, and Node/runtime imports from the browser-safe core contracts surface. Core session/config/cache data, server request bodies/params/query, plugin state, provider-specific TTS/capability responses, dashboard HTTP/chat-stream/WebSocket responses, and local TTS settings now have explicit schemas. Dashboard code consumes those schemas through `@agent-harness/core/contracts`, which cannot import the Node-backed core runtime. Remaining boundary work is tracked by [`specs/quality-hardening`](../../specs/quality-hardening/README.md).
+`corepack npm run quality:policy` resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript suppression directives, explicit `any`, type and non-null assertions other than `as const`, unwrapped async Express routes, direct Express request-data use outside `validateRequest`, raw boundary JSON parsing, unbounded HTTP JSON parsing, mutable GitHub Action tags, and Node/runtime imports from the browser-safe core contracts surface. Core session/config/cache data, server request bodies/params/query, plugin state, provider responses, dashboard HTTP/chat-stream/WebSocket responses, and local TTS settings now have explicit schemas. Dashboard code consumes those schemas through `@agent-harness/core/contracts`, which cannot import the Node-backed core runtime.
+
+Privileged operations are default-off or application-bounded: shell and network tools require explicit environment opt-in; enabled file/shell/network operations have symlink-aware authorization, byte/time/entry limits, credential-minimized subprocesses, and public-network redirect checks. The server is loopback-only by default, uses an origin allowlist and stable error envelopes, and enforces deterministic execution/resource budgets. `corepack npm run security:audit` currently reports zero production vulnerabilities and fails future high/critical findings unless an explicit exception has a reason and future expiry. The informational 50,000-iteration agent-config validation sample completed in 75.85 ms (about 659,173 operations/second) on the local 2026-08-11 run; it is not a portable timing gate. These controls do not claim process isolation; residual risks are documented in [`docs/SECURITY.md`](../SECURITY.md).
 
 ## Immediate architecture risks
 
 1. The overloaded `SessionData`/`taskId` vocabulary makes future persistence changes ambiguous and migration-prone.
 2. Mailbox drain and transcript materialization are separate writes, leaving a completion-loss crash window and no durable acknowledgement/idempotency ledger.
 3. Durable delivery is stronger than worker execution recovery after append: an in-flight worker disappears on restart with no terminal reconciliation.
-4. Recursive delegation is not session-scoped because a worker reuses its parent's bound tool registry.
-5. Boot hydration restores tabs as history only, so an already-open session with a pending mailbox is not automatically woken after a server/browser restart.
-6. Settings and documentation expose behavior that is not enforced or integrated, especially concurrency and capability discovery.
-7. The sparse test suite makes it easy to regress transcript fidelity, mailbox delivery, and runtime ownership while attempting unrelated features.
+4. Boot hydration restores tabs as history only, so an already-open session with a pending mailbox is not automatically woken after a server/browser restart.
+5. Capability discovery is present but not integrated into active execution, and provider routing remains a hard-coded protocol choice rather than a registry.
+6. CORS and loopback binding are not authentication or process isolation; deliberately exposed deployments need an authenticating reverse proxy and OS/network containment.
+7. Provider routing, dashboard resynchronization, the legacy `Orchestrator`, and broad UI behavior remain substantially less tested than the critical agent/persistence path.

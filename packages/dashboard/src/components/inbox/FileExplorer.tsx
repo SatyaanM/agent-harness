@@ -447,7 +447,7 @@ export function FileExplorer({
           setIsRootDropTarget(true);
         }}
         onDragLeave={(e) => {
-          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
           setIsRootDropTarget(false);
         }}
         onDrop={handleRootDrop}

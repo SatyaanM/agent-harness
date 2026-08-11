@@ -35,20 +35,35 @@ describe("getConfig", () => {
   });
 
   it("respects environment variables", () => {
-    setEnv("ROOT", "C:\\tmp\\agent-harness");
-    setEnv("INBOX_ROOT", "C:\\tmp\\agent-harness\\inbox");
+    const root = path.resolve("tmp", "agent-harness");
+    const inbox = path.join(root, "inbox");
+    setEnv("ROOT", root);
+    setEnv("INBOX_ROOT", inbox);
     setEnv("MAX_CONCURRENT_AGENTS", "4");
 
     const cfg = getConfig();
 
-    expect(cfg.ROOT).toBe("C:\\tmp\\agent-harness");
-    expect(cfg.INBOX_ROOT).toBe("C:\\tmp\\agent-harness\\inbox");
+    expect(cfg.ROOT).toBe(root);
+    expect(cfg.INBOX_ROOT).toBe(inbox);
     expect(cfg.MAX_CONCURRENT_AGENTS).toBe(4);
   });
 
   it("rejects invalid config", () => {
     setEnv("ROOT", "C:\\tmp\\agent-harness");
     setEnv("MAX_CONCURRENT_AGENTS", "0");
+
+    expect(() => getConfig()).toThrow();
+  });
+
+  it.each([
+    ["ROOT", "relative/path"],
+    ["PROVIDER_ENDPOINT", "file:///tmp/provider"],
+    ["PROVIDER_ENDPOINT", "https://user:secret@example.com/v1"],
+    ["API_KEY_ENV", "INVALID-NAME"],
+    ["MAX_CONCURRENT_AGENTS", "1001"],
+  ])("rejects unsafe %s values", (key, value) => {
+    setEnv("ROOT", path.resolve("tmp", "agent-harness"));
+    setEnv(key, value);
 
     expect(() => getConfig()).toThrow();
   });

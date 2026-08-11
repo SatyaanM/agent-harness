@@ -1,23 +1,50 @@
-import type { CapabilityMatrix } from "../agent/types.js";
-
-export interface ProbeOptions {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  timeoutMs?: number;
-  maxRetries?: number;
-}
+import { z } from "zod";
+import { type CapabilityMatrix, CapabilityMatrixSchema } from "../agent/types.js";
+import { parseBoundary } from "../validation.js";
 
 const PROBE_MAX_RETRIES = 2;
+const ProbeOptionsSchema = z
+  .object({
+    baseUrl: z
+      .string()
+      .min(1)
+      .max(2_048)
+      .url()
+      .refine((value) => {
+        const url = new URL(value);
+        return (
+          (url.protocol === "http:" || url.protocol === "https:") &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash
+        );
+      }, "must be an HTTP(S) URL without credentials, query, or fragment")
+      .transform((value) => value.replace(/\/+$/u, "")),
+    apiKey: z.string().min(1).max(16_384),
+    model: z.string().min(1).max(512),
+    timeoutMs: z.number().int().min(100).max(120_000).default(10_000),
+    maxRetries: z.number().int().min(0).max(5).default(PROBE_MAX_RETRIES),
+  })
+  .strict();
+export type ProbeOptions = z.input<typeof ProbeOptionsSchema>;
 
 export async function probeCapabilities(options: ProbeOptions): Promise<CapabilityMatrix> {
-  const { baseUrl, apiKey, model, timeoutMs = 10_000, maxRetries = PROBE_MAX_RETRIES } = options;
+  const { baseUrl, apiKey, model, timeoutMs, maxRetries } = parseBoundary(
+    ProbeOptionsSchema,
+    options,
+    "capability probe options",
+  );
 
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await probeOnce(baseUrl, apiKey, model, timeoutMs);
+      return parseBoundary(
+        CapabilityMatrixSchema,
+        await probeOnce(baseUrl, apiKey, model, timeoutMs),
+        "capability probe result",
+      );
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < maxRetries) {
@@ -82,7 +109,7 @@ async function testChat(
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return res.ok;
+    return releaseResponse(res);
   } catch {
     return false;
   }
@@ -118,7 +145,7 @@ async function testTools(
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return res.ok;
+    return releaseResponse(res);
   } catch {
     return false;
   }
@@ -157,7 +184,7 @@ async function testVision(
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return res.ok;
+    return releaseResponse(res);
   } catch {
     return false;
   }
@@ -184,8 +211,16 @@ async function testStreaming(
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return res.ok;
+    return releaseResponse(res);
   } catch {
     return false;
   }
+}
+
+async function releaseResponse(response: Response): Promise<boolean> {
+  const succeeded = response.ok;
+  try {
+    await response.body?.cancel();
+  } catch {}
+  return succeeded;
 }

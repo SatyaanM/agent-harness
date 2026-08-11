@@ -33,6 +33,16 @@ const FIELD_LABELS: Record<keyof HarnessSettings, string> = {
 const PATH_FIELDS: (keyof HarnessSettings)[] = ["ROOT", "INBOX_ROOT", "SESSIONS_DIR", "AGENTS_DIR"];
 const URL_FIELDS: (keyof HarnessSettings)[] = ["PROVIDER_ENDPOINT"];
 const NUMBER_FIELDS: (keyof HarnessSettings)[] = ["MAX_CONCURRENT_AGENTS"];
+const SETTINGS_FIELDS = [
+  "ROOT",
+  "INBOX_ROOT",
+  "SESSIONS_DIR",
+  "AGENTS_DIR",
+  "PROVIDER_ENDPOINT",
+  "API_KEY_ENV",
+  "DEFAULT_MODEL",
+  "MAX_CONCURRENT_AGENTS",
+] as const satisfies readonly (keyof HarnessSettings)[];
 
 export function SettingsForm() {
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
@@ -96,7 +106,7 @@ export function SettingsForm() {
 
   async function handleSave() {
     const errors: Record<string, string> = {};
-    for (const key of Object.keys(FIELD_LABELS) as (keyof HarnessSettings)[]) {
+    for (const key of SETTINGS_FIELDS) {
       const val = String(draft[key] ?? "");
       const err = validate(key, val);
       if (err) errors[key] = err;
@@ -127,7 +137,7 @@ export function SettingsForm() {
 
   return (
     <div className="flex flex-col gap-4">
-      {(Object.keys(FIELD_LABELS) as (keyof HarnessSettings)[]).map((field) => (
+      {SETTINGS_FIELDS.map((field) => (
         <div key={field} className="flex flex-col gap-1.5">
           <Label
             htmlFor={`settings-${field}`}

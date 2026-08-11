@@ -16,28 +16,15 @@ const ANTHROPIC_MODELS = new Set([
 ]);
 
 function getModelProvider(modelId: string, config: Config) {
-  console.log("[llm] getModelProvider called with:", {
-    modelId,
-    PROVIDER_ENDPOINT: config.PROVIDER_ENDPOINT,
-  });
-
   // Strip "opencode-go/" prefix if present
   const cleanModelId = modelId.startsWith("opencode-go/")
     ? modelId.slice("opencode-go/".length)
     : modelId;
 
   const isAnthropic = ANTHROPIC_MODELS.has(cleanModelId);
-  console.log("[llm] Model routing:", { cleanModelId, isAnthropic, originalModelId: modelId });
 
   if (isAnthropic) {
     const apiKey = process.env[config.API_KEY_ENV] ?? "";
-    console.log("[llm] Creating Anthropic provider:", {
-      baseURL: config.PROVIDER_ENDPOINT,
-      apiKeySet: !!apiKey,
-      apiKeyLength: apiKey.length,
-      modelPassedToSDK: cleanModelId,
-      expectedUrl: `${config.PROVIDER_ENDPOINT}/messages`,
-    });
     const provider = createAnthropic({
       baseURL: config.PROVIDER_ENDPOINT,
       apiKey,
@@ -45,13 +32,6 @@ function getModelProvider(modelId: string, config: Config) {
     return { model: provider(cleanModelId), isAnthropic: true };
   } else {
     const apiKey = process.env[config.API_KEY_ENV] ?? "";
-    console.log("[llm] Creating OpenAI provider:", {
-      baseURL: config.PROVIDER_ENDPOINT,
-      apiKeySet: !!apiKey,
-      apiKeyLength: apiKey.length,
-      modelPassedToSDK: cleanModelId,
-      expectedUrl: `${config.PROVIDER_ENDPOINT}/chat/completions`,
-    });
     const provider = createOpenAI({
       baseURL: config.PROVIDER_ENDPOINT,
       apiKey,
@@ -63,14 +43,6 @@ function getModelProvider(modelId: string, config: Config) {
 export function createVercelAILLMClient(config: Config): LLMClient {
   return {
     async chat(params: LLMChatParams): Promise<LLMResponse> {
-      console.log("[llm] chat() called with:", {
-        model: params.model,
-        messageCount: params.messages.length,
-        hasTools: !!params.tools,
-        toolCount: params.tools?.length ?? 0,
-        systemPromptLength: params.system?.length ?? 0,
-      });
-
       const { model } = getModelProvider(params.model, config);
 
       const systemParts = [
@@ -93,80 +65,51 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           )
         : undefined;
 
-      console.log("[llm] Tools being passed to generateText:", tools ? Object.keys(tools) : "none");
-      if (tools) {
-        console.log(
-          "[llm] Tool details:",
-          Object.entries(tools).map(([name, def]) => ({
-            name,
-            description: def.description,
-            hasSchema: !!def.inputSchema,
-            schemaType: typeof def.inputSchema,
-          })),
-        );
+      const result = await generateText({
+        model,
+        messages,
+        ...(instructions ? { instructions } : {}),
+        ...(tools ? { tools } : {}),
+        ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+      const resultWithReasoning = optionalRecord(result);
 
-        // Log the first tool's schema structure
-        const firstTool = Object.entries(tools)[0];
-        if (firstTool) {
-          const [toolName, toolDef] = firstTool;
-          console.log("[llm] First tool schema:", {
-            name: toolName,
-            schemaKeys: Object.keys(toolDef),
-          });
+      // Handle reasoning models: extract text from reasoning if content is empty
+      let responseText = result.text;
+      const rawReasoning = resultWithReasoning.reasoning ?? resultWithReasoning.reasoning_content;
+      const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
+      if (!responseText || responseText.trim().length === 0) {
+        if (reasoning) {
+          responseText = reasoning;
         }
       }
 
-      console.log("[llm] Calling generateText...");
-      try {
-        const result = await generateText({
-          model,
-          messages,
-          ...(instructions ? { instructions } : {}),
-          ...(tools ? { tools } : {}),
-          ...(params.signal ? { signal: params.signal } : {}),
-        });
-        const resultWithReasoning = optionalRecord(result);
-        console.log("[llm] generateText succeeded:", {
-          finishReason: result.finishReason,
-          textLength: result.text?.length,
-          hasReasoning: !!resultWithReasoning.reasoning,
-        });
+      const toolCalls = result.toolCalls?.length
+        ? result.toolCalls.map((tc) => ({
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+            args: requireRecord(tc.input, `tool call ${tc.toolCallId} input`),
+          }))
+        : undefined;
 
-        // Handle reasoning models: extract text from reasoning if content is empty
-        let responseText = result.text;
-        const rawReasoning = resultWithReasoning.reasoning ?? resultWithReasoning.reasoning_content;
-        const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
-        if (!responseText || responseText.trim().length === 0) {
-          if (reasoning) {
-            console.log("[llm] Using reasoning as text:", { reasoningLength: reasoning.length });
-            responseText = reasoning;
-          }
-        }
+      const message: Message = {
+        role: "assistant",
+        content: responseText || "",
+        ...(reasoning ? { reasoning } : {}),
+        ...(toolCalls ? { toolCalls } : {}),
+      };
 
-        const toolCalls = result.toolCalls?.length
-          ? result.toolCalls.map((tc) => ({
-              toolCallId: tc.toolCallId,
-              toolName: tc.toolName,
-              args: requireRecord(tc.input, `tool call ${tc.toolCallId} input`),
-            }))
-          : undefined;
-
-        const message: Message = {
-          role: "assistant",
-          content: responseText || "",
-          ...(reasoning ? { reasoning } : {}),
-          ...(toolCalls ? { toolCalls } : {}),
-        };
-
-        return {
-          message,
-          finishReason: result.finishReason === "tool-calls" ? "tool-calls" : "stop",
-          ...(toolCalls ? { toolCalls } : {}),
-        };
-      } catch (err) {
-        console.error("[llm] generateText failed:", err);
-        throw err;
-      }
+      return {
+        message,
+        finishReason: result.finishReason === "tool-calls" ? "tool-calls" : "stop",
+        ...(toolCalls ? { toolCalls } : {}),
+        usage: {
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          totalTokens: result.usage.totalTokens,
+        },
+      };
     },
   };
 }

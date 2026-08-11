@@ -12,6 +12,9 @@
   "scripts": {
     "build": "turbo run build",
     "check": "node scripts/run-checks.mjs",
+    "check:ci": "node scripts/run-checks.mjs ci",
+    "check:fast": "node scripts/run-checks.mjs fast",
+    "check:nightly": "node scripts/run-checks.mjs nightly",
     "dev": "turbo run dev",
     "docs:list": "node scripts/docs-list.mjs",
     "docs:check": "node scripts/docs-list.mjs --check",
@@ -20,6 +23,7 @@
     "hooks:install": "node scripts/install-hooks.mjs",
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",
+    "perf:report": "node scripts/perf-report.mjs",
     "preinstall": "node scripts/install-hooks.mjs --migrate-only",
     "prepare": "node scripts/install-hooks.mjs",
     "quality": "biome check .",
@@ -27,6 +31,7 @@
     "quality:fix": "biome check --write .",
     "quality:policy": "node scripts/check-quality-policy.mjs",
     "quality:staged": "biome check --write --staged --no-errors-on-unmatched",
+    "security:audit": "node scripts/security-audit.mjs",
     "skills:validate": "node scripts/validate-skills.mjs",
     "start": "turbo run start",
     "test": "vitest run",
@@ -46,9 +51,17 @@
     "vitest": "4.1.10"
   },
   "overrides": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "@excalidraw/excalidraw": {
+      "@excalidraw/mermaid-to-excalidraw": {
+        "nanoid": "^5.1.16"
+      },
+      "nanoid": "^3.3.17"
+    },
     "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0"
+    "@types/react-dom": "^19.0.0",
+    "dompurify": "^3.4.13",
+    "lodash-es": "^4.18.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }

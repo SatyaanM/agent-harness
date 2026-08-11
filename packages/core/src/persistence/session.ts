@@ -5,9 +5,16 @@ import {
   PendingMessageSchema,
   type SessionData,
   SessionDataSchema,
+  SessionIdSchema,
 } from "../contracts/session.js";
-import { parseBoundary, parseJsonBoundary } from "../validation.js";
+import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded-io.js";
+import { BoundaryValidationError, parseBoundary, parseJsonBoundary } from "../validation.js";
 import { getSessionIndex, type SessionMeta } from "./session-index.js";
+
+const MAX_SESSION_TRANSCRIPT_BYTES = 25_000_000;
+const MAX_SESSION_MAILBOX_BYTES = 25_000_000;
+const MAX_SESSION_MAILBOX_MESSAGES = 10_000;
+const MAX_SESSION_FILES = 10_000;
 
 export type { PendingMessage, SessionData } from "../contracts/session.js";
 export { PendingMessageSchema, SessionDataSchema } from "../contracts/session.js";
@@ -128,7 +135,11 @@ class TranscriptState {
 async function atomicWrite(filePath: string, snapshot: SessionData): Promise<void> {
   const tmpPath = `${filePath}.tmp`;
   try {
-    await fs.writeJson(tmpPath, snapshot, { spaces: 2 });
+    await fs.writeFile(
+      tmpPath,
+      stringifyJsonBounded(snapshot, MAX_SESSION_TRANSCRIPT_BYTES, "session transcript"),
+      "utf8",
+    );
     await fs.rename(tmpPath, filePath);
   } catch (err) {
     await fs.remove(tmpPath).catch(() => undefined);
@@ -142,6 +153,7 @@ class MailboxLog {
   private chain: Promise<unknown> = Promise.resolve();
   private messages: PendingMessage[] | null = null;
   private fileExists = false;
+  private loadedBytes = 0;
 
   constructor(
     dir: string,
@@ -163,7 +175,12 @@ class MailboxLog {
     if (this.messages !== null) return this.messages;
     this.fileExists = await fs.pathExists(this.filePath);
     if (this.fileExists) {
-      const text = await fs.readFile(this.filePath, "utf-8");
+      const text = await readUtf8FileBounded(
+        this.filePath,
+        MAX_SESSION_MAILBOX_BYTES,
+        `session mailbox ${this.sessionId}`,
+      );
+      this.loadedBytes = Buffer.byteLength(text, "utf8");
       const messages: PendingMessage[] = [];
       for (const [index, line] of text.split("\n").entries()) {
         const trimmed = line.trim();
@@ -191,8 +208,23 @@ class MailboxLog {
         `session mailbox ${this.sessionId} append`,
       );
       const messages = await this.ensureLoaded();
+      if (messages.length >= MAX_SESSION_MAILBOX_MESSAGES) {
+        throw new BoundaryValidationError(
+          `session mailbox ${this.sessionId}`,
+          `message count exceeds ${MAX_SESSION_MAILBOX_MESSAGES}`,
+        );
+      }
+      const line = `${JSON.stringify(parsed)}\n`;
+      const lineBytes = Buffer.byteLength(line, "utf8");
+      if (this.loadedBytes + lineBytes > MAX_SESSION_MAILBOX_BYTES) {
+        throw new BoundaryValidationError(
+          `session mailbox ${this.sessionId}`,
+          `file exceeds ${MAX_SESSION_MAILBOX_BYTES} bytes`,
+        );
+      }
+      await fs.appendFile(this.filePath, line, "utf-8");
       messages.push(parsed);
-      await fs.appendFile(this.filePath, `${JSON.stringify(parsed)}\n`, "utf-8");
+      this.loadedBytes += lineBytes;
       this.fileExists = true;
     });
   }
@@ -205,6 +237,7 @@ class MailboxLog {
         await fs.writeFile(this.filePath, "", "utf-8");
       }
       this.messages = [];
+      this.loadedBytes = 0;
       return delivered;
     });
   }
@@ -221,6 +254,7 @@ class MailboxLog {
     return this.enqueue(async () => {
       this.messages = [];
       this.fileExists = false;
+      this.loadedBytes = 0;
       await fs.remove(this.filePath).catch(() => undefined);
     });
   }
@@ -255,7 +289,11 @@ async function readTranscript(sessionsDir: string, sessionId: string): Promise<S
   if (await fs.pathExists(filePath)) {
     return parseJsonBoundary(
       SessionDataSchema,
-      await fs.readFile(filePath, "utf-8"),
+      await readUtf8FileBounded(
+        filePath,
+        MAX_SESSION_TRANSCRIPT_BYTES,
+        `session transcript ${sessionId}`,
+      ),
       `session transcript ${sessionId}`,
     );
   }
@@ -279,20 +317,23 @@ export class SessionStore {
 
   /** Append to the durable, ordered mailbox. Never coalesced. */
   async appendMailbox(sessionId: string, pending: PendingMessage): Promise<void> {
-    await getMailboxLog(this.sessionsDir, sessionId).append(pending);
+    const parsedSessionId = parseBoundary(SessionIdSchema, sessionId, "session identifier");
+    await getMailboxLog(this.sessionsDir, parsedSessionId).append(pending);
   }
 
   /** Atomically remove and return the whole pending mailbox. */
   async drainMailbox(sessionId: string): Promise<PendingMessage[]> {
-    return getMailboxLog(this.sessionsDir, sessionId).drain();
+    const parsedSessionId = parseBoundary(SessionIdSchema, sessionId, "session identifier");
+    return getMailboxLog(this.sessionsDir, parsedSessionId).drain();
   }
 
   async load(sessionId: string): Promise<SessionData | null> {
-    const state = getTranscriptState(this.sessionsDir, sessionId);
+    const parsedSessionId = parseBoundary(SessionIdSchema, sessionId, "session identifier");
+    const state = getTranscriptState(this.sessionsDir, parsedSessionId);
     const latest = state.peek();
-    const transcript = latest ?? (await readTranscript(this.sessionsDir, sessionId));
+    const transcript = latest ?? (await readTranscript(this.sessionsDir, parsedSessionId));
     if (!transcript) return null;
-    const mailbox = await getMailboxLog(this.sessionsDir, sessionId).peek();
+    const mailbox = await getMailboxLog(this.sessionsDir, parsedSessionId).peek();
     return cleanSession({
       ...transcript,
       mailbox: mailbox ?? transcript.mailbox ?? [],
@@ -306,17 +347,35 @@ export class SessionStore {
       if (!key.startsWith(`${this.sessionsDir}\u0000`)) continue;
       const latest = state.peek();
       if (latest) sessions.set(state.sessionId, latest);
+      if (sessions.size > MAX_SESSION_FILES) {
+        throw new BoundaryValidationError(
+          "session listing",
+          `session count exceeds ${MAX_SESSION_FILES}`,
+        );
+      }
     }
 
-    const files = await fs.readdir(this.sessionsDir);
-    for (const file of files) {
+    const directory = await fs.opendir(this.sessionsDir);
+    for await (const entry of directory) {
+      if (!entry.isFile()) continue;
+      const file = entry.name;
       if (!file.endsWith(".json")) continue;
       if (file === ".index.json") continue;
       const sessionId = file.slice(0, -".json".length);
       if (sessions.has(sessionId)) continue;
+      if (sessions.size >= MAX_SESSION_FILES) {
+        throw new BoundaryValidationError(
+          "session listing",
+          `session count exceeds ${MAX_SESSION_FILES}`,
+        );
+      }
       const session = parseJsonBoundary(
         SessionDataSchema,
-        await fs.readFile(path.join(this.sessionsDir, file), "utf-8"),
+        await readUtf8FileBounded(
+          path.join(this.sessionsDir, file),
+          MAX_SESSION_TRANSCRIPT_BYTES,
+          `session transcript ${sessionId}`,
+        ),
         `session transcript ${sessionId}`,
       );
       sessions.set(sessionId, session);
@@ -337,11 +396,12 @@ export class SessionStore {
   }
 
   async delete(sessionId: string): Promise<void> {
-    await getTranscriptState(this.sessionsDir, sessionId).delete();
-    await getMailboxLog(this.sessionsDir, sessionId).clear();
-    transcriptStates.delete(`${this.sessionsDir}\u0000${sessionId}`);
-    mailboxLogs.delete(`${this.sessionsDir}\u0000${sessionId}`);
-    await getSessionIndex(this.sessionsDir).remove(sessionId);
+    const parsedSessionId = parseBoundary(SessionIdSchema, sessionId, "session identifier");
+    await getTranscriptState(this.sessionsDir, parsedSessionId).delete();
+    await getMailboxLog(this.sessionsDir, parsedSessionId).clear();
+    transcriptStates.delete(`${this.sessionsDir}\u0000${parsedSessionId}`);
+    mailboxLogs.delete(`${this.sessionsDir}\u0000${parsedSessionId}`);
+    await getSessionIndex(this.sessionsDir).remove(parsedSessionId);
   }
 
   /** Rebuild the metadata index from transcripts if it is missing. */

@@ -1,14 +1,19 @@
 import type { TTSConfig } from "@agent-harness/core";
-import { createGeminiTTSProvider, GEMINI_VOICES, parseBoundary } from "@agent-harness/core";
+import {
+  createGeminiTTSProvider,
+  GEMINI_VOICES,
+  parseJsonResponseBoundary,
+} from "@agent-harness/core";
 import { Router } from "express";
 import { z } from "zod";
+import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
 
 export const ttsRouter = Router();
 
 const TTSRequestSchema = z
   .object({
-    text: z.string().min(1).max(100_000),
+    text: z.string().min(1).max(20_000),
     voice: z.string().min(1).max(128).optional(),
     persona: z.string().max(10_000).optional(),
     emotiveTags: z.boolean().optional(),
@@ -32,98 +37,95 @@ const ParaphraseResponseSchema = z.object({
     .optional(),
 });
 
-ttsRouter.post("/", async (req, res) => {
-  const request = validateRequest(TTSRequestSchema, req.body, res);
-  if (!request) return;
-  const { text, voice, persona, emotiveTags, tagStyle, customTagInstructions } = request;
+ttsRouter.post(
+  "/",
+  asyncHandler(async (req, res) => {
+    const request = validateRequest(TTSRequestSchema, req.body, res);
+    if (!request) return;
+    const { text, voice, persona, emotiveTags, tagStyle, customTagInstructions } = request;
 
-  const geminiApiKey = process.env.GEMINI_API_KEY;
-  const openCodeApiKey = process.env.OPENCODE_API_KEY;
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const openCodeApiKey = process.env.OPENCODE_API_KEY;
 
-  if (!geminiApiKey) {
-    res.status(503).json({
-      error: "Voice requires a Gemini API key. Configure in Settings > Voice.",
-    });
-    return;
-  }
+    if (!geminiApiKey) {
+      res.status(503).json({
+        error: "Voice requires a Gemini API key. Configure in Settings > Voice.",
+      });
+      return;
+    }
 
-  try {
-    // Step 1: Paraphrase with MiMo-V2.5
-    const paraphrasePrompt = buildParaphrasePrompt(text, {
-      emotiveTags: emotiveTags ?? true,
-      tagStyle: tagStyle ?? "balanced",
-      customTagInstructions: customTagInstructions ?? "",
-    });
+    try {
+      // Step 1: Paraphrase with MiMo-V2.5
+      const paraphrasePrompt = buildParaphrasePrompt(text, {
+        emotiveTags: emotiveTags ?? true,
+        tagStyle: tagStyle ?? "balanced",
+        customTagInstructions: customTagInstructions ?? "",
+      });
 
-    console.log("[tts] Paraphrasing...", { textLength: text.length });
+      let paraphrasedText = text; // fallback to original
 
-    const paraphraseResponse = await fetch("https://opencode.ai/zen/go/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${openCodeApiKey}`,
-      },
-      body: JSON.stringify({
-        model: "mimo-v2.5",
-        messages: [{ role: "user", content: paraphrasePrompt }],
-        temperature: 0.7,
-      }),
-    });
-
-    let paraphrasedText = text; // fallback to original
-
-    if (paraphraseResponse.ok) {
-      const result = parseBoundary(
-        ParaphraseResponseSchema,
-        await paraphraseResponse.json(),
-        "TTS paraphrase response",
-      );
-      const message = result.choices?.[0]?.message;
-      const content = message?.content || message?.reasoning || message?.reasoning_content || "";
-      if (content) {
-        paraphrasedText = content;
-        console.log("[tts] Paraphrased:", {
-          original: text.length,
-          paraphrased: paraphrasedText.length,
+      if (openCodeApiKey) {
+        const paraphraseResponse = await fetch("https://opencode.ai/zen/go/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openCodeApiKey}`,
+          },
+          body: JSON.stringify({
+            model: "mimo-v2.5",
+            messages: [{ role: "user", content: paraphrasePrompt }],
+            temperature: 0.7,
+          }),
+          signal: AbortSignal.timeout(15_000),
         });
+
+        if (paraphraseResponse.ok) {
+          const result = await parseJsonResponseBoundary(
+            paraphraseResponse,
+            ParaphraseResponseSchema,
+            "TTS paraphrase response",
+            1_000_000,
+          );
+          const message = result.choices?.[0]?.message;
+          const content =
+            message?.content || message?.reasoning || message?.reasoning_content || "";
+          if (content) paraphrasedText = content;
+        }
       }
-    } else {
-      console.log("[tts] Paraphrase failed, using original text");
+
+      // Step 2: Synthesize with Gemini TTS
+      const ttsConfig: TTSConfig = {
+        provider: "gemini",
+        model: "gemini-3.1-flash-tts-preview",
+        voice: voice || "Gacrux",
+        persona: persona || "",
+        emotiveTags: emotiveTags ?? true,
+        tagStyle: tagStyle ?? "balanced",
+        customTagInstructions: customTagInstructions ?? "",
+        apiKey: geminiApiKey,
+      };
+
+      const ttsProvider = createGeminiTTSProvider();
+      const audioChunks = await ttsProvider.synthesize(paraphrasedText, ttsConfig);
+
+      // Stream audio chunks to client
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+
+      for await (const chunk of audioChunks) {
+        const buffer = Buffer.from(chunk.data.buffer);
+        res.write(buffer);
+      }
+
+      res.end();
+    } catch {
+      console.error("[tts] Request failed");
+      res.status(502).json({ error: "Voice generation failed" });
     }
-
-    // Step 2: Synthesize with Gemini TTS
-    const ttsConfig: TTSConfig = {
-      provider: "gemini",
-      model: "gemini-3.1-flash-tts-preview",
-      voice: voice || "Gacrux",
-      persona: persona || "",
-      emotiveTags: emotiveTags ?? true,
-      tagStyle: tagStyle ?? "balanced",
-      customTagInstructions: customTagInstructions ?? "",
-      apiKey: geminiApiKey,
-    };
-
-    const ttsProvider = createGeminiTTSProvider();
-    const audioChunks = await ttsProvider.synthesize(paraphrasedText, ttsConfig);
-
-    // Stream audio chunks to client
-    res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    for await (const chunk of audioChunks) {
-      const buffer = Buffer.from(chunk.data.buffer);
-      res.write(buffer);
-    }
-
-    res.end();
-  } catch (error) {
-    console.error("[tts] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: errorMessage });
-  }
-});
+  }),
+);
 
 function buildParaphrasePrompt(
   text: string,

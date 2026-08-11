@@ -48,6 +48,12 @@ describe("SessionStore boundary validation", () => {
     await expect(store.load("broken")).rejects.toBeInstanceOf(BoundaryValidationError);
   });
 
+  it("rejects session identifiers that could escape the sessions directory", async () => {
+    const { store } = await makeStore();
+
+    await expect(store.load("../outside")).rejects.toBeInstanceOf(BoundaryValidationError);
+  });
+
   it("preserves and rejects a corrupt mailbox line instead of silently dropping it", async () => {
     const { dir, store } = await makeStore();
     await store.save(session());
@@ -56,5 +62,41 @@ describe("SessionStore boundary validation", () => {
 
     await expect(store.drainMailbox("session-1")).rejects.toBeInstanceOf(BoundaryValidationError);
     await expect(readFile(mailboxPath, "utf8")).resolves.toBe("{corrupt-json}\n");
+  });
+
+  it("preserves concurrent mailbox appends in submission order and drains them once", async () => {
+    const { store } = await makeStore();
+    await store.save(session());
+    const pending = ["task-1", "task-2", "task-3"].map((taskId, index) => ({
+      taskId,
+      from: `worker-${index + 1}`,
+      agentName: `worker-${index + 1}`,
+      status: "done" as const,
+      summary: `result-${index + 1}`,
+      receivedAt: `2026-08-11T00:0${index}:00.000Z`,
+    }));
+
+    await Promise.all(pending.map((message) => store.appendMailbox("session-1", message)));
+
+    await expect(store.drainMailbox("session-1")).resolves.toEqual(pending);
+    await expect(store.drainMailbox("session-1")).resolves.toEqual([]);
+  });
+
+  it("persists the latest submitted snapshot when saves overlap", async () => {
+    const { store } = await makeStore();
+    const saves = Array.from({ length: 20 }, (_value, index) =>
+      store.save(
+        session({
+          prompt: `version-${index}`,
+          messages: [{ role: "user", content: `version-${index}` }],
+        }),
+      ),
+    );
+
+    await Promise.all(saves);
+
+    await expect(store.load("session-1")).resolves.toEqual(
+      expect.objectContaining({ prompt: "version-19" }),
+    );
   });
 });

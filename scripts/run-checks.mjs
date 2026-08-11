@@ -6,16 +6,39 @@ const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
 const nextEnvPath = path.join(process.cwd(), "packages", "dashboard", "next-env.d.ts");
 const originalNextEnv = existsSync(nextEnvPath) ? readFileSync(nextEnvPath) : undefined;
 
-const checks = [
-  [corepack, ["npm", "run", "quality"]],
+const mode = process.argv[2] ?? "default";
+const commonChecks = [
+  [corepack, ["npm", "run", mode === "ci" || mode === "nightly" ? "quality:ci" : "quality"]],
   [corepack, ["npm", "run", "quality:policy"]],
   [corepack, ["npm", "run", "skills:validate"]],
   [corepack, ["npm", "run", "docs:check"]],
   [corepack, ["npm", "run", "typecheck"]],
-  [corepack, ["npm", "test"]],
-  [corepack, ["npm", "run", "build"]],
-  ["git", ["diff", "--check"]],
 ];
+const modeChecks = {
+  default: [
+    [corepack, ["npm", "test"]],
+    [corepack, ["npm", "run", "build"]],
+  ],
+  fast: [[corepack, ["npm", "test"]]],
+  ci: [
+    [corepack, ["npm", "run", "test:coverage"]],
+    [corepack, ["npm", "run", "build"]],
+    [corepack, ["npm", "run", "security:audit"]],
+  ],
+  nightly: [
+    [corepack, ["npm", "run", "test:coverage"]],
+    [corepack, ["npm", "run", "build"]],
+    [corepack, ["npm", "run", "security:audit"]],
+    [corepack, ["npm", "run", "perf:report"]],
+  ],
+};
+
+if (!(mode in modeChecks)) {
+  console.error(`Unknown check mode: ${mode}`);
+  process.exit(1);
+}
+
+const checks = [...commonChecks, ...modeChecks[mode], ["git", ["diff", "--check"]]];
 
 function restoreNextEnv() {
   if (!originalNextEnv || !existsSync(nextEnvPath)) return;
