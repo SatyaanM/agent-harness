@@ -241,6 +241,20 @@ Results:
 
 The build again rewrote `packages/dashboard/next-env.d.ts`; it was restored to the same HEAD blob recorded above and has no final staged or unstaged diff.
 
+## Developer-tooling follow-up (2026-08-11)
+
+After the bootstrap work was committed, the repository added a cross-platform quality and test baseline:
+
+- Node.js `>=20.9.0` is enforced in the root manifest, matching the installed Next.js requirement.
+- Biome `2.5.5`, Lefthook `2.1.10`, Vitest `4.1.10`, `@vitest/ui` `4.1.10`, and `@vitest/coverage-v8` `4.1.10` are exact-pinned.
+- Biome owns formatting, recommended lint rules, and import organization. The vendored minified PDF worker and generated Next.js environment declaration are excluded.
+- Lefthook replaces the historical `hooks/` directory. Installation migrates only the repository's legacy hook path, pre-commit checks staged work, and pre-push runs the full check suite.
+- Root Vitest project mode runs the core, server, and dashboard configurations. Watch, UI, package, and V8 coverage commands are available without adding browser-mode or end-to-end infrastructure prematurely.
+
+Fresh tests still discover only four files and eight tests. The first V8 report measured 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines, so no coverage threshold is claimed. The runtime-invariant gaps listed in `docs/architecture/CURRENT_STATE.md` remain the priority before the harness can safely perform more of its own development.
+
+`corepack npm audit fix` applied four non-breaking transitive updates without `--force`. The follow-up audit still reports 15 advisories (1 low, 9 moderate, 5 high), primarily through the Next/PostCSS/Sharp and Excalidraw/Monaco/Mermaid dependency trees plus `uuid`. Resolving those residual findings requires explicit upstream or breaking-version decisions and was not disguised with forced overrides.
+
 ## Handoff
 
 T00 stops here. The next sequential bootstrap task is [`specs/pre-development-bootstrap/T01-instruction-hierarchy.md`](../specs/pre-development-bootstrap/T01-instruction-hierarchy.md).

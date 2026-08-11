@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CapabilityMatrix } from "../agent/types.js";
 import type { RegistryEntry } from "../capability/types.js";
 
 const CACHE_DIR = ".harness";
@@ -36,27 +35,15 @@ export class CapabilityCache {
     await fs.writeFile(this.cachePath, JSON.stringify(entries, null, 2), "utf-8");
   }
 
-  async getEntry(
-    provider: string,
-    model: string,
-    sdk: string,
-  ): Promise<RegistryEntry | undefined> {
+  async getEntry(provider: string, model: string, sdk: string): Promise<RegistryEntry | undefined> {
     await this.loadCache();
-    return this.entries.find(
-      (e) =>
-        e.provider === provider &&
-        e.model === model &&
-        e.sdk === sdk,
-    );
+    return this.entries.find((e) => e.provider === provider && e.model === model && e.sdk === sdk);
   }
 
   async upsertEntry(entry: RegistryEntry): Promise<void> {
     await this.loadCache();
     const idx = this.entries.findIndex(
-      (e) =>
-        e.provider === entry.provider &&
-        e.model === entry.model &&
-        e.sdk === entry.sdk,
+      (e) => e.provider === entry.provider && e.model === entry.model && e.sdk === entry.sdk,
     );
     if (idx >= 0) {
       this.entries[idx] = entry;

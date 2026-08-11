@@ -1,8 +1,8 @@
-import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { getConfig, resetConfig } from "@agent-harness/core";
 import type { Config } from "@agent-harness/core";
+import { getConfig, resetConfig } from "@agent-harness/core";
+import { Router } from "express";
 
 const SETTING_KEYS: (keyof Config)[] = [
   "ROOT",
@@ -54,8 +54,8 @@ settingsRouter.put("/", (req, res) => {
     }
   }
 
-  if (typeof updated["MAX_CONCURRENT_AGENTS"] === "string") {
-    updated["MAX_CONCURRENT_AGENTS"] = Number(updated["MAX_CONCURRENT_AGENTS"]);
+  if (typeof updated.MAX_CONCURRENT_AGENTS === "string") {
+    updated.MAX_CONCURRENT_AGENTS = Number(updated.MAX_CONCURRENT_AGENTS);
   }
 
   try {

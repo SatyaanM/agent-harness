@@ -1,16 +1,16 @@
-'use client';
+"use client";
 
-import { useState, useEffect, type FormEvent, type KeyboardEvent } from 'react';
-import { useSessionStore } from '@/stores/session-store';
-import { useTTSStore } from '@/stores/tts-store';
-import { useChatInputStore } from '@/stores/chat-input-store';
-import { sendMessage } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import { TTSButton } from './TTSButton';
+import { type KeyboardEvent, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { sendMessage } from "@/lib/api";
+import { useChatInputStore } from "@/stores/chat-input-store";
+import { useSessionStore } from "@/stores/session-store";
+import { useTTSStore } from "@/stores/tts-store";
+import { TTSButton } from "./TTSButton";
 
 export default function ChatInput() {
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
   const addMessage = useSessionStore((s) => s.addMessage);
@@ -33,7 +33,7 @@ export default function ChatInput() {
     const userMessageId = crypto.randomUUID();
     addMessage(activeSessionId, {
       id: userMessageId,
-      role: 'user',
+      role: "user",
       content: input.trim(),
       createdAt: new Date().toISOString(),
     });
@@ -41,50 +41,46 @@ export default function ChatInput() {
     const assistantMessageId = crypto.randomUUID();
     addMessage(activeSessionId, {
       id: assistantMessageId,
-      role: 'assistant',
-      content: '',
+      role: "assistant",
+      content: "",
       createdAt: new Date().toISOString(),
     });
 
     const content = input.trim();
-    setInput('');
+    setInput("");
 
     const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
 
     try {
-      const stream = await sendMessage(
-        activeSessionId,
-        content,
-        activeSession?.agentName
-      );
+      const stream = await sendMessage(activeSessionId, content, activeSession?.agentName);
       if (!stream) return;
 
       const reader = stream.getReader();
       const decoder = new TextDecoder();
-      let accumulated = '';
-      let buffer = '';
+      let accumulated = "";
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
+          if (!line.startsWith("data: ")) continue;
           const data = line.slice(6);
-          if (data === '[DONE]') break;
+          if (data === "[DONE]") break;
 
           try {
             const parsed = JSON.parse(data);
-            if (parsed.type === 'text-delta') {
+            if (parsed.type === "text-delta") {
               accumulated += parsed.text;
               updateMessage(activeSessionId, assistantMessageId, accumulated);
-            } else if (parsed.type === 'done') {
+            } else if (parsed.type === "done") {
               break;
-            } else if (parsed.type === 'error') {
+            } else if (parsed.type === "error") {
               updateMessage(activeSessionId, assistantMessageId, `Error: ${parsed.error}`);
               break;
             }
@@ -99,16 +95,12 @@ export default function ChatInput() {
         playTTS(accumulated);
       }
     } catch {
-      updateMessage(
-        activeSessionId,
-        assistantMessageId,
-        'Error: Failed to get response'
-      );
+      updateMessage(activeSessionId, assistantMessageId, "Error: Failed to get response");
     }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
     }
@@ -122,15 +114,12 @@ export default function ChatInput() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={activeSessionId ? 'Type a message...' : 'Create a session first'}
+          placeholder={activeSessionId ? "Type a message..." : "Create a session first"}
           disabled={!activeSessionId}
           rows={1}
           className="flex-1 min-h-9 max-h-40 resize-none"
         />
-        <Button
-          onClick={handleSubmit}
-          disabled={!activeSessionId || !input.trim()}
-        >
+        <Button onClick={handleSubmit} disabled={!activeSessionId || !input.trim()}>
           Send
         </Button>
       </div>

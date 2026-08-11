@@ -1,25 +1,20 @@
-import type { Metadata } from 'next';
-import { cookies } from 'next/headers';
-import { ThemeProvider } from '@/components/layout/ThemeProvider';
-import { Sidebar } from '@/components/layout/Sidebar';
-import { PluginProvider } from '@/components/layout/PluginProvider';
-import DashboardPanels from '@/components/layout/DashboardPanels';
-import './globals.css';
+import type { Metadata } from "next";
+import { cookies } from "next/headers";
+import DashboardPanels from "@/components/layout/DashboardPanels";
+import { PluginProvider } from "@/components/layout/PluginProvider";
+import { Sidebar } from "@/components/layout/Sidebar";
+import { ThemeProvider } from "@/components/layout/ThemeProvider";
+import "./globals.css";
 
 export const metadata: Metadata = {
-  title: 'Agent Harness Dashboard',
-  description: 'Dashboard for the Agent Harness',
+  title: "Agent Harness Dashboard",
+  description: "Dashboard for the Agent Harness",
 };
 
-export default async function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const cookieStore = await cookies();
-  const theme = cookieStore.get('theme')?.value;
-  const themeClass =
-    theme === 'light' || theme === 'dark' ? theme : undefined;
+  const theme = cookieStore.get("theme")?.value;
+  const themeClass = theme === "light" || theme === "dark" ? theme : undefined;
 
   return (
     <html lang="en" suppressHydrationWarning className={themeClass}>

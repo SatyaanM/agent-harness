@@ -1,10 +1,10 @@
-import { z } from "zod";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { z } from "zod";
 import { getConfig } from "../config.js";
-import { assertWithinRoot } from "./utils.js";
 import type { Tool } from "./types.js";
+import { assertWithinRoot } from "./utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,14 +25,10 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
     const cwd = args.cwd ? path.resolve(root, args.cwd) : root;
     assertWithinRoot(cwd, root);
 
-    const shell = process.platform === "win32";
-
     try {
       const { stdout, stderr } = await execFileAsync(
         process.platform === "win32" ? "cmd.exe" : "/bin/sh",
-        process.platform === "win32"
-          ? ["/c", args.command]
-          : ["-c", args.command],
+        process.platform === "win32" ? ["/c", args.command] : ["-c", args.command],
         {
           cwd,
           timeout: TIMEOUT_MS,

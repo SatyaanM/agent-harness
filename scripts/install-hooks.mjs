@@ -10,55 +10,72 @@ function git(args, options = {}) {
   });
 }
 
+function fail(result, fallback) {
+  const message = result.error?.message ?? result.stderr?.trim() ?? fallback;
+  console.error(message);
+  process.exit(result.status ?? 1);
+}
+
 const rootResult = git(["rev-parse", "--show-toplevel"]);
 if (rootResult.status !== 0) {
-  console.error(rootResult.stderr.trim() || "Not inside a Git repository.");
-  process.exit(1);
+  console.warn("Skipped Git hook setup because this install is not inside a Git repository.");
+  process.exit(0);
 }
 
 const root = rootResult.stdout.trim();
-const requiredHooks = ["pre-commit", "pre-push"];
-const missingHooks = requiredHooks.filter(
-  (name) => !existsSync(path.join(root, "hooks", name)),
-);
-
-if (missingHooks.length > 0) {
-  console.error(`Cannot install hooks; missing: ${missingHooks.join(", ")}`);
-  process.exit(1);
-}
-
-const configuredResult = git(
-  ["config", "--local", "--get", "core.hooksPath"],
-  { cwd: root },
-);
+const configuredResult = git(["config", "--local", "--get", "core.hooksPath"], {
+  cwd: root,
+});
 
 if (configuredResult.status !== 0 && configuredResult.status !== 1) {
-  console.error(configuredResult.stderr.trim() || "Unable to read core.hooksPath.");
-  process.exit(1);
+  fail(configuredResult, "Unable to read core.hooksPath.");
 }
 
 const configured = configuredResult.stdout.trim();
-const desired = path.join(root, "hooks");
-const configuredPath = configured
-  ? path.resolve(root, configured)
-  : undefined;
-const force = process.argv.includes("--force");
+const configuredPath = configured ? path.resolve(root, configured) : undefined;
+const legacyPath = path.resolve(root, "hooks");
+const pathsMatch =
+  configuredPath &&
+  (process.platform === "win32"
+    ? configuredPath.toLowerCase() === legacyPath.toLowerCase()
+    : configuredPath === legacyPath);
 
-if (configuredPath && configuredPath !== desired && !force) {
-  console.error(
-    `Refusing to replace existing core.hooksPath (${configured}). ` +
-      "Re-run with --force only after reviewing that configuration.",
+if (pathsMatch) {
+  const migrationResult = git(["config", "--local", "--unset", "core.hooksPath"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+
+  if (migrationResult.status !== 0) {
+    process.exit(migrationResult.status ?? 1);
+  }
+
+  console.log("Removed the legacy core.hooksPath=hooks configuration.");
+}
+
+if (process.argv.includes("--migrate-only")) {
+  process.exit(0);
+}
+
+if (configured && !pathsMatch) {
+  console.warn(
+    `Skipped Lefthook installation because core.hooksPath is already set to ${configured}.`,
   );
+  process.exit(0);
+}
+
+const lefthookEntry = path.join(root, "node_modules", "lefthook", "bin", "index.js");
+if (!existsSync(lefthookEntry)) {
+  console.error("Unable to install Lefthook. Run corepack npm install first.");
   process.exit(1);
 }
 
-const installResult = git(
-  ["config", "--local", "core.hooksPath", "hooks"],
-  { cwd: root, stdio: "inherit" },
-);
+const installResult = spawnSync(process.execPath, [lefthookEntry, "install"], {
+  cwd: root,
+  encoding: "utf8",
+  stdio: "inherit",
+});
 
 if (installResult.status !== 0) {
-  process.exit(installResult.status ?? 1);
+  fail(installResult, "Unable to install Lefthook. Run corepack npm install first.");
 }
-
-console.log("Installed repository hooks via core.hooksPath=hooks.");

@@ -1,6 +1,6 @@
-import { z } from "zod";
 import path from "node:path";
 import fs from "fs-extra";
+import { z } from "zod";
 import type { Tool } from "./types.js";
 
 function assertWithinRoot(resolvedPath: string, root: string): void {
@@ -24,7 +24,7 @@ export function createReadFileTool(root: string): Tool<typeof parameters> {
       const resolved = path.resolve(root, filePath);
       assertWithinRoot(resolved, root);
 
-      if (!await fs.pathExists(resolved)) {
+      if (!(await fs.pathExists(resolved))) {
         return `Error: File not found: ${filePath}`;
       }
 

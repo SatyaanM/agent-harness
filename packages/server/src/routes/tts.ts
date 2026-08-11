@@ -1,18 +1,11 @@
-import { Router } from "express";
-import { createGeminiTTSProvider, GEMINI_VOICES } from "@agent-harness/core";
 import type { TTSConfig } from "@agent-harness/core";
+import { createGeminiTTSProvider, GEMINI_VOICES } from "@agent-harness/core";
+import { Router } from "express";
 
 export const ttsRouter = Router();
 
 ttsRouter.post("/", async (req, res) => {
-  const {
-    text,
-    voice,
-    persona,
-    emotiveTags,
-    tagStyle,
-    customTagInstructions,
-  } = req.body as {
+  const { text, voice, persona, emotiveTags, tagStyle, customTagInstructions } = req.body as {
     text?: string;
     voice?: string;
     persona?: string;
@@ -46,21 +39,18 @@ ttsRouter.post("/", async (req, res) => {
 
     console.log("[tts] Paraphrasing...", { textLength: text.length });
 
-    const paraphraseResponse = await fetch(
-      "https://opencode.ai/zen/go/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openCodeApiKey}`,
-        },
-        body: JSON.stringify({
-          model: "mimo-v2.5",
-          messages: [{ role: "user", content: paraphrasePrompt }],
-          temperature: 0.7,
-        }),
-      }
-    );
+    const paraphraseResponse = await fetch("https://opencode.ai/zen/go/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${openCodeApiKey}`,
+      },
+      body: JSON.stringify({
+        model: "mimo-v2.5",
+        messages: [{ role: "user", content: paraphrasePrompt }],
+        temperature: 0.7,
+      }),
+    });
 
     let paraphrasedText = text; // fallback to original
 
@@ -75,8 +65,7 @@ ttsRouter.post("/", async (req, res) => {
         }>;
       };
       const message = result.choices?.[0]?.message;
-      const content =
-        message?.content || message?.reasoning || message?.reasoning_content || "";
+      const content = message?.content || message?.reasoning || message?.reasoning_content || "";
       if (content) {
         paraphrasedText = content;
         console.log("[tts] Paraphrased:", {
@@ -128,7 +117,7 @@ function buildParaphrasePrompt(
     emotiveTags: boolean;
     tagStyle: string;
     customTagInstructions: string;
-  }
+  },
 ): string {
   const parts: string[] = [];
 

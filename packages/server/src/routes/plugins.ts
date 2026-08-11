@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Router } from "express";
 import { getConfig } from "@agent-harness/core";
+import { Router } from "express";
 import { PluginRegistry } from "../plugin/registry.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -9,8 +9,7 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "../../../..");
 
 const pluginsDir =
-  process.env["PLUGINS_DIR"] ??
-  path.join(rootDir, "packages", "dashboard", "src", "plugins");
+  process.env.PLUGINS_DIR ?? path.join(rootDir, "packages", "dashboard", "src", "plugins");
 
 const registry = new PluginRegistry(pluginsDir, getConfig().ROOT);
 

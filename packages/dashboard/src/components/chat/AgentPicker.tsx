@@ -1,19 +1,19 @@
-'use client';
+"use client";
 
-import { useEffect } from 'react';
-import { Bot } from 'lucide-react';
+import { Bot } from "lucide-react";
+import { useEffect } from "react";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { useAgentsStore } from '@/stores/agents-store';
-import { useSessionStore } from '@/stores/session-store';
+} from "@/components/ui/select";
+import { useAgentsStore } from "@/stores/agents-store";
+import { useSessionStore } from "@/stores/session-store";
 
 function isOrchestrator(tools: string[]): boolean {
-  return tools.includes('delegate');
+  return tools.includes("delegate");
 }
 
 export default function AgentPicker() {
@@ -29,13 +29,13 @@ export default function AgentPicker() {
   }, [agents.length, fetchAgents]);
 
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
-  const value = activeSession?.agentName ?? 'orchestrator';
+  const value = activeSession?.agentName ?? "orchestrator";
 
   if (!activeSessionId || loading) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-zinc-400 dark:text-zinc-500">
         <Bot className="h-3.5 w-3.5" />
-        {activeSessionId ? 'Loading agents…' : 'Create a session first'}
+        {activeSessionId ? "Loading agents…" : "Create a session first"}
       </div>
     );
   }
@@ -59,9 +59,7 @@ export default function AgentPicker() {
                 )}
               </span>
               {agent.description && (
-                <span className="text-xs text-muted-foreground">
-                  {agent.description}
-                </span>
+                <span className="text-xs text-muted-foreground">{agent.description}</span>
               )}
             </span>
           </SelectItem>

@@ -1,26 +1,22 @@
 import path from "node:path";
+import type { AgentConfig, PendingMessage, SessionRuntimeEvent } from "@agent-harness/core";
 import {
   CapabilityRegistry,
-  SessionRuntime,
-  ToolRegistry,
-  createVercelAILLMClient,
-  getConfig,
-  loadAgentConfig,
-  createReadFileTool,
-  createWriteFileTool,
+  createDelegateTool,
   createEditFileTool,
   createListDirectoryTool,
+  createReadFileTool,
+  createReadSessionTool,
+  createVercelAILLMClient,
+  createWriteFileTool,
+  getConfig,
   globTool,
   grepTool,
+  loadAgentConfig,
   runCommandTool,
+  SessionRuntime,
+  ToolRegistry,
   webFetchTool,
-  createDelegateTool,
-  createReadSessionTool,
-} from "@agent-harness/core";
-import type {
-  AgentConfig,
-  PendingMessage,
-  SessionRuntimeEvent,
 } from "@agent-harness/core";
 import { emitAgentEvent } from "./ws/events.js";
 
@@ -33,9 +29,7 @@ export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
     return agentConfig;
   } catch {
     try {
-      const orchestratorConfig = loadAgentConfig(
-        path.join(config.AGENTS_DIR, "orchestrator.md")
-      );
+      const orchestratorConfig = loadAgentConfig(path.join(config.AGENTS_DIR, "orchestrator.md"));
       if (orchestratorConfig.model === "DEFAULT") {
         orchestratorConfig.model = config.DEFAULT_MODEL;
       }
@@ -118,7 +112,7 @@ export class SessionManager {
   private buildToolRegistry(
     sessionId: string,
     llmClient: ReturnType<typeof createVercelAILLMClient>,
-    capabilityRegistry: CapabilityRegistry
+    capabilityRegistry: CapabilityRegistry,
   ): ToolRegistry {
     const config = getConfig();
     const registry = new ToolRegistry();
@@ -155,7 +149,7 @@ export class SessionManager {
             tool,
           });
         },
-      })
+      }),
     );
     registry.register(createReadSessionTool(config.SESSIONS_DIR));
     return registry;

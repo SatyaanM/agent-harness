@@ -1,15 +1,15 @@
-import express from "express";
-import type { Request, Response, NextFunction } from "express";
 import cors from "cors";
+import type { NextFunction, Request, Response } from "express";
+import express from "express";
 import helmet from "helmet";
-import { sessionsRouter } from "./routes/sessions.js";
-import { chatRouter } from "./routes/chat.js";
 import { agentsRouter } from "./routes/agents.js";
+import { chatRouter } from "./routes/chat.js";
 import inboxRouter from "./routes/inbox.js";
-import { workersRouter } from "./routes/workers.js";
+import { pluginsRouter } from "./routes/plugins.js";
+import { sessionsRouter } from "./routes/sessions.js";
 import { settingsRouter } from "./routes/settings.js";
 import { ttsRouter } from "./routes/tts.js";
-import { pluginsRouter } from "./routes/plugins.js";
+import { workersRouter } from "./routes/workers.js";
 
 export function createApp() {
   const app = express();

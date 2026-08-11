@@ -1,6 +1,6 @@
-import { create } from 'zustand';
-import type { PluginManifest, PluginCommandManifest } from '@/lib/api';
-import { fetchPlugins, updatePlugin } from '@/lib/api';
+import { create } from "zustand";
+import type { PluginCommandManifest, PluginManifest } from "@/lib/api";
+import { fetchPlugins, updatePlugin } from "@/lib/api";
 
 interface RendererEntry {
   componentKey: string;
@@ -23,9 +23,7 @@ interface PluginState {
   getRenderer: (ext: string) => RendererEntry | null;
 }
 
-function buildRendererIndex(
-  plugins: PluginManifest[]
-): Record<string, RendererEntry> {
+function buildRendererIndex(plugins: PluginManifest[]): Record<string, RendererEntry> {
   const index: Record<string, RendererEntry> = {};
   for (const plugin of plugins) {
     if (!plugin.enabled) continue;
@@ -72,8 +70,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
     } catch (err) {
       set({
         isLoading: false,
-        error:
-          err instanceof Error ? err.message : 'Failed to load plugins',
+        error: err instanceof Error ? err.message : "Failed to load plugins",
       });
     }
   },
@@ -81,9 +78,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
 
   setPluginEnabled: async (name, enabled) => {
     set((state) => {
-      const plugins = state.plugins.map((p) =>
-        p.name === name ? { ...p, enabled } : p
-      );
+      const plugins = state.plugins.map((p) => (p.name === name ? { ...p, enabled } : p));
       return {
         plugins,
         rendererIndex: buildRendererIndex(plugins),
@@ -93,9 +88,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
     try {
       const updated = await updatePlugin(name, enabled);
       set((state) => {
-        const plugins = state.plugins.map((p) =>
-          p.name === updated.name ? updated : p
-        );
+        const plugins = state.plugins.map((p) => (p.name === updated.name ? updated : p));
         return {
           plugins,
           rendererIndex: buildRendererIndex(plugins),
@@ -105,7 +98,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
     } catch (err) {
       set((state) => {
         const plugins = state.plugins.map((p) =>
-          p.name === name ? { ...p, enabled: !enabled } : p
+          p.name === name ? { ...p, enabled: !enabled } : p,
         );
         return {
           plugins,

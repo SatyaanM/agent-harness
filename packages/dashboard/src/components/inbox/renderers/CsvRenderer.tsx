@@ -1,14 +1,14 @@
-'use client';
+"use client";
 
-import { useMemo, useState } from 'react';
 import {
-  useReactTable,
+  type ColumnDef,
+  flexRender,
   getCoreRowModel,
   getSortedRowModel,
-  flexRender,
-  type ColumnDef,
   type SortingState,
-} from '@tanstack/react-table';
+  useReactTable,
+} from "@tanstack/react-table";
+import { useMemo, useState } from "react";
 
 interface CsvRendererProps {
   content: string;
@@ -20,7 +20,7 @@ function parseCsv(content: string): { headers: string[]; rows: string[][] } {
 
   const parseLine = (line: string): string[] => {
     const result: string[] = [];
-    let current = '';
+    let current = "";
     let inQuotes = false;
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
@@ -36,9 +36,9 @@ function parseCsv(content: string): { headers: string[]; rows: string[][] } {
       } else {
         if (ch === '"') {
           inQuotes = true;
-        } else if (ch === ',') {
+        } else if (ch === ",") {
           result.push(current);
-          current = '';
+          current = "";
         } else {
           current += ch;
         }
@@ -70,7 +70,7 @@ export function CsvRenderer({ content }: CsvRendererProps) {
     return rows.map((row) => {
       const obj: Record<string, string> = {};
       headers.forEach((h, i) => {
-        obj[h || `col_${i}`] = row[i] ?? '';
+        obj[h || `col_${i}`] = row[i] ?? "";
       });
       return obj;
     });
@@ -87,9 +87,7 @@ export function CsvRenderer({ content }: CsvRendererProps) {
 
   if (headers.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
-        No data
-      </div>
+      <div className="flex items-center justify-center h-full text-zinc-500 text-sm">No data</div>
     );
   }
 
@@ -107,10 +105,10 @@ export function CsvRenderer({ content }: CsvRendererProps) {
                 >
                   <div className="flex items-center gap-1">
                     {flexRender(header.column.columnDef.header, header.getContext())}
-                    {header.column.getIsSorted() === 'asc' && (
+                    {header.column.getIsSorted() === "asc" && (
                       <span className="text-zinc-400">↑</span>
                     )}
-                    {header.column.getIsSorted() === 'desc' && (
+                    {header.column.getIsSorted() === "desc" && (
                       <span className="text-zinc-400">↓</span>
                     )}
                   </div>
@@ -121,15 +119,9 @@ export function CsvRenderer({ content }: CsvRendererProps) {
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row, rowIdx) => (
-            <tr
-              key={row.id}
-              className={rowIdx % 2 === 0 ? 'bg-zinc-900' : 'bg-zinc-900/50'}
-            >
+            <tr key={row.id} className={rowIdx % 2 === 0 ? "bg-zinc-900" : "bg-zinc-900/50"}>
               {row.getVisibleCells().map((cell) => (
-                <td
-                  key={cell.id}
-                  className="px-3 py-1.5 text-zinc-300 border-b border-zinc-800/50"
-                >
+                <td key={cell.id} className="px-3 py-1.5 text-zinc-300 border-b border-zinc-800/50">
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}

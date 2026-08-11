@@ -24,7 +24,7 @@ function parseArgs(argv) {
 function scalar(value, field, file) {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`${file}: ${field} must be a non-empty string`);
-  if (/^[\[\]{|}>*&!]/.test(trimmed) || /^(null|true|false|~)$/i.test(trimmed)) {
+  if (/^[[\]{|}>*&!]/.test(trimmed) || /^(null|true|false|~)$/i.test(trimmed)) {
     throw new Error(`${file}: ${field} must be a string scalar`);
   }
   if (trimmed.startsWith('"')) {
@@ -69,7 +69,9 @@ function parseSkill(file, displayPath) {
   if (!name) throw new Error(`${displayPath}: missing name`);
   if (!description) throw new Error(`${displayPath}: missing description`);
   if (!NAME_PATTERN.test(name) || name.length > 63) {
-    throw new Error(`${displayPath}: name must be at most 63 lowercase letters, digits, or hyphens`);
+    throw new Error(
+      `${displayPath}: name must be at most 63 lowercase letters, digits, or hyphens`,
+    );
   }
   if (!content.slice(end + 5).trim()) throw new Error(`${displayPath}: instructions body is empty`);
   return { name, description };
@@ -85,7 +87,7 @@ function parseQuotedYamlValue(value, field, displayPath) {
 
 function validateUiManifest(file, displayPath, skillName) {
   const lines = fs.readFileSync(file, "utf8").replaceAll("\r\n", "\n").split("\n");
-  const interfaceIndex = lines.findIndex((line) => line === "interface:");
+  const interfaceIndex = lines.indexOf("interface:");
   if (interfaceIndex === -1) throw new Error(`${displayPath}: missing interface mapping`);
 
   const values = new Map();
@@ -93,7 +95,7 @@ function validateUiManifest(file, displayPath, skillName) {
     const line = lines[index];
     if (!line.trim()) continue;
     if (!line.startsWith("  ")) break;
-    const match = /^  ([a-z_]+):\s*(.*)$/.exec(line);
+    const match = /^ {2}([a-z_]+):\s*(.*)$/.exec(line);
     if (!match) throw new Error(`${displayPath}: malformed interface line: ${line}`);
     const [, key, value] = match;
     if (values.has(key)) throw new Error(`${displayPath}: duplicate interface.${key}`);
@@ -117,7 +119,8 @@ function validate(root, repositoryRoot) {
     throw new Error(`Skills root is not a directory: ${root}`);
   }
 
-  const directories = fs.readdirSync(root, { withFileTypes: true })
+  const directories = fs
+    .readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .sort((left, right) => left.name.localeCompare(right.name));
   if (directories.length === 0) throw new Error(`No skill directories found under ${root}`);
@@ -131,11 +134,15 @@ function validate(root, repositoryRoot) {
       if (!fs.existsSync(skillFile)) throw new Error(`${displayPath}: missing SKILL.md`);
       const skill = parseSkill(skillFile, displayPath);
       if (names.has(skill.name)) {
-        throw new Error(`${displayPath}: duplicate skill name ${skill.name}; first seen in ${names.get(skill.name)}`);
+        throw new Error(
+          `${displayPath}: duplicate skill name ${skill.name}; first seen in ${names.get(skill.name)}`,
+        );
       }
       names.set(skill.name, displayPath);
       if (skill.name !== directory.name) {
-        throw new Error(`${displayPath}: name ${skill.name} does not match directory ${directory.name}`);
+        throw new Error(
+          `${displayPath}: name ${skill.name} does not match directory ${directory.name}`,
+        );
       }
 
       const uiFile = path.join(root, directory.name, "agents", "openai.yaml");
@@ -158,7 +165,10 @@ function validate(root, repositoryRoot) {
 try {
   const args = parseArgs(process.argv.slice(2));
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  validate(path.resolve(args.root ?? path.join(repositoryRoot, ".agents", "skills")), repositoryRoot);
+  validate(
+    path.resolve(args.root ?? path.join(repositoryRoot, ".agents", "skills")),
+    repositoryRoot,
+  );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

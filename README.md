@@ -25,7 +25,7 @@ These steps get a fresh copy of the app running on your machine.
 
 ### 1. Prerequisites
 
-- **Node.js 18.18+** (20.x or newer recommended) and **npm 10+**
+- **Node.js 20.9+** and the repository-pinned **npm 10.9.2** through Corepack
 - An API key for an LLM provider (see [Using any LLM provider](#using-any-llm-provider))
 
 ### 2. Clone and install
@@ -33,10 +33,10 @@ These steps get a fresh copy of the app running on your machine.
 ```bash
 git clone https://github.com/<you>/agent-harness.git
 cd agent-harness
-npm install
+corepack npm ci
 ```
 
-This installs all three workspace packages (`core`, `server`, `dashboard`).
+This installs all three workspace packages (`core`, `server`, `dashboard`) and installs the repository's Lefthook-managed Git hooks.
 
 ### 3. Configure your API key
 
@@ -59,7 +59,7 @@ PROVIDER_ENDPOINT=https://api.openai.com/v1
 ### 4. Start in development mode
 
 ```bash
-npm run dev
+corepack npm run dev
 ```
 
 This starts everything in parallel:
@@ -120,8 +120,8 @@ PROVIDER_ENDPOINT=http://localhost:11434/v1
 ## Production
 
 ```bash
-npm run build
-npm start
+corepack npm run build
+corepack npm start
 ```
 
 `npm run build` compiles all packages; `npm start` runs the built server (port `3001`) and dashboard (port `3000`).
@@ -294,21 +294,35 @@ Next.js frontend with persistent split layout:
 
 ## Development
 
-### Verification and optional Git hooks
+### Quality, tests, and Git hooks
 
-Run the complete repository check without provider credentials:
+The root scripts are the supported entry points for local development and coding agents:
+
+| Command | Purpose |
+|---|---|
+| `corepack npm run quality` | Check Biome formatting, lint rules, and import organization |
+| `corepack npm run quality:fix` | Apply Biome's safe fixes |
+| `corepack npm test` | Run all Vitest projects once |
+| `corepack npm run test:watch` | Run the Vitest project matrix in watch mode |
+| `corepack npm run test:ui` | Open the local Vitest UI |
+| `corepack npm run test:coverage` | Run V8 coverage and write text, HTML, and LCOV reports under `coverage/` |
+| `corepack npm run check` | Run the complete credential-free repository verification suite |
+
+Run the complete check before handing work off:
 
 ```bash
 corepack npm run check
 ```
 
-The check validates skills and documentation, typechecks, tests, builds, and checks the diff for whitespace errors. Repository-owned pre-commit and pre-push hooks are opt-in:
+The check runs Biome, validates skills and documentation, typechecks, tests, builds, and checks the diff for whitespace errors. Coverage is reported but has no threshold yet; the current suite is deliberately recorded as a starting baseline rather than presented as broad runtime protection.
+
+Lefthook is installed automatically by `corepack npm ci` or `corepack npm install`. The pre-commit hook applies safe Biome fixes to staged files, re-stages those fixes, and runs documentation, skill, and whitespace checks. The pre-push hook runs the full `check` suite. Repair or refresh the hooks manually with:
 
 ```bash
 corepack npm run hooks:install
 ```
 
-Installation sets the repository-local `core.hooksPath` to `hooks`. It refuses to replace a different existing hook path unless you review it and explicitly pass `--force`.
+The installer removes only this repository's obsolete `core.hooksPath=hooks` setting. It preserves and skips installation when a contributor has configured a different custom hook path.
 
 ### Adding a New Tool
 

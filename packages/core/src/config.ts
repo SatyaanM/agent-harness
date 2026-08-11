@@ -1,6 +1,6 @@
-import { z } from "zod";
-import path from "node:path";
 import fs from "node:fs";
+import path from "node:path";
+import { z } from "zod";
 
 function findProjectRoot(): string {
   let dir = process.cwd();
@@ -45,18 +45,18 @@ let cachedConfig: Config | null = null;
 export function getConfig(): Config {
   if (cachedConfig) return cachedConfig;
 
-  const root = process.env["ROOT"] ?? findProjectRoot();
+  const root = process.env.ROOT ?? findProjectRoot();
   const persisted = loadPersistedSettings(root);
 
   cachedConfig = ConfigSchema.parse({
     ROOT: root,
-    INBOX_ROOT: process.env["INBOX_ROOT"] ?? persisted.INBOX_ROOT ?? path.join(root, "inbox"),
-    SESSIONS_DIR: process.env["SESSIONS_DIR"] ?? persisted.SESSIONS_DIR ?? path.join(root, "sessions"),
-    AGENTS_DIR: process.env["AGENTS_DIR"] ?? persisted.AGENTS_DIR ?? path.join(root, "agents"),
-    PROVIDER_ENDPOINT: process.env["PROVIDER_ENDPOINT"] ?? persisted.PROVIDER_ENDPOINT,
-    API_KEY_ENV: process.env["API_KEY_ENV"] ?? persisted.API_KEY_ENV,
-    DEFAULT_MODEL: process.env["DEFAULT_MODEL"] ?? persisted.DEFAULT_MODEL,
-    MAX_CONCURRENT_AGENTS: process.env["MAX_CONCURRENT_AGENTS"] ?? persisted.MAX_CONCURRENT_AGENTS,
+    INBOX_ROOT: process.env.INBOX_ROOT ?? persisted.INBOX_ROOT ?? path.join(root, "inbox"),
+    SESSIONS_DIR: process.env.SESSIONS_DIR ?? persisted.SESSIONS_DIR ?? path.join(root, "sessions"),
+    AGENTS_DIR: process.env.AGENTS_DIR ?? persisted.AGENTS_DIR ?? path.join(root, "agents"),
+    PROVIDER_ENDPOINT: process.env.PROVIDER_ENDPOINT ?? persisted.PROVIDER_ENDPOINT,
+    API_KEY_ENV: process.env.API_KEY_ENV ?? persisted.API_KEY_ENV,
+    DEFAULT_MODEL: process.env.DEFAULT_MODEL ?? persisted.DEFAULT_MODEL,
+    MAX_CONCURRENT_AGENTS: process.env.MAX_CONCURRENT_AGENTS ?? persisted.MAX_CONCURRENT_AGENTS,
   });
 
   return cachedConfig;

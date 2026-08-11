@@ -5,13 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const SKIPPED_SEGMENTS = new Set([
-  "node_modules",
-  "vendor",
-  "generated",
-  "dist",
-  "build",
-]);
+const SKIPPED_SEGMENTS = new Set(["node_modules", "vendor", "generated", "dist", "build"]);
 
 function parseArgs(argv) {
   let check = false;
@@ -85,7 +79,7 @@ function parseStringScalar(value, field, file) {
     return trimmed.slice(1, -1).replaceAll("''", "'");
   }
 
-  if (/^[\[\]{|}>*&!]/.test(trimmed) || /^(null|true|false|~)$/i.test(trimmed)) {
+  if (/^[[\]{|}>*&!]/.test(trimmed) || /^(null|true|false|~)$/i.test(trimmed)) {
     throw new Error(`${file}: ${field} must be a string scalar`);
   }
   return trimmed;

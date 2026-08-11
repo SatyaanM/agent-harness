@@ -1,35 +1,35 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { fetchAgents, createAgent, type AgentConfig } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { type AgentConfig, createAgent, fetchAgents } from "@/lib/api";
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [newName, setNewName] = useState('');
+  const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    loadAgents();
-  }, []);
-
-  async function loadAgents() {
+  const loadAgents = useCallback(async () => {
     setLoading(true);
     try {
       const data = await fetchAgents();
       setAgents(data);
     } catch {
-      setError('Failed to load agents');
+      setError("Failed to load agents");
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void loadAgents();
+  }, [loadAgents]);
 
   async function handleCreate() {
     if (!newName.trim()) return;
@@ -38,16 +38,16 @@ export default function AgentsPage() {
     try {
       await createAgent(newName.trim(), {
         name: newName.trim(),
-        model: 'qwen3.7-plus',
+        model: "qwen3.7-plus",
         tools: [],
         maxSteps: 10,
-        instructions: '',
+        instructions: "",
       });
       setShowCreate(false);
-      setNewName('');
+      setNewName("");
       router.push(`/agents/${encodeURIComponent(newName.trim())}`);
     } catch {
-      setError('Failed to create agent');
+      setError("Failed to create agent");
     } finally {
       setCreating(false);
     }
@@ -64,9 +64,7 @@ export default function AgentsPage() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b bg-background">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">
-          Agents
-        </h2>
+        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">Agents</h2>
         <Button size="sm" onClick={() => setShowCreate(true)}>
           + New Agent
         </Button>
@@ -81,15 +79,20 @@ export default function AgentsPage() {
             placeholder="Agent name..."
             autoFocus
             className="flex-1"
-            onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleCreate();
+            }}
           />
           <Button onClick={handleCreate} disabled={creating || !newName.trim()} size="sm">
-            {creating ? '...' : 'Create'}
+            {creating ? "..." : "Create"}
           </Button>
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => { setShowCreate(false); setNewName(''); }}
+            onClick={() => {
+              setShowCreate(false);
+              setNewName("");
+            }}
           >
             Cancel
           </Button>
@@ -111,13 +114,12 @@ export default function AgentsPage() {
           {agents.map((agent) => (
             <li key={agent.name}>
               <button
+                type="button"
                 onClick={() => router.push(`/agents/${encodeURIComponent(agent.name)}`)}
                 className="w-full text-left px-4 py-3 border-b hover:bg-muted/50 transition-colors"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm text-foreground font-medium truncate">
-                    {agent.name}
-                  </span>
+                  <span className="text-sm text-foreground font-medium truncate">{agent.name}</span>
                   <span className="text-xs text-muted-foreground shrink-0">
                     {agent.tools?.length ?? 0} tools
                   </span>

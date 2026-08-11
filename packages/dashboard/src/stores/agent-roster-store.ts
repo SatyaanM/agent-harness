@@ -1,6 +1,6 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
-export type WorkerStatus = 'running' | 'done' | 'error' | 'cancelled';
+export type WorkerStatus = "running" | "done" | "error" | "cancelled";
 
 export interface WorkerEntry {
   id: string;
@@ -35,7 +35,7 @@ export const useRosterStore = create<RosterState>((set) => ({
       bySession: {
         ...state.bySession,
         [sessionId]: (state.bySession[sessionId] ?? []).map((w) =>
-          w.taskId === taskId ? { ...w, status } : w
+          w.taskId === taskId ? { ...w, status } : w,
         ),
       },
     })),

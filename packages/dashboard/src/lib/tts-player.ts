@@ -27,13 +27,15 @@ export function createTTSPlayer(): TTSPlayer {
   let audioContext: AudioContext | null = null;
   let currentSource: AudioBufferSourceNode | null = null;
   let state: PlaybackState = "idle";
-  let stateCallbacks: Array<(state: PlaybackState) => void> = [];
+  const stateCallbacks: Array<(state: PlaybackState) => void> = [];
   let audioQueue: AudioQueueItem[] = [];
   let isPlaying = false;
 
   function notifyStateChange(newState: PlaybackState) {
     state = newState;
-    stateCallbacks.forEach((cb) => cb(newState));
+    stateCallbacks.forEach((callback) => {
+      callback(newState);
+    });
   }
 
   function getAudioContext(): AudioContext {
@@ -45,7 +47,7 @@ export function createTTSPlayer(): TTSPlayer {
 
   async function decodeAudioChunk(
     pcmData: ArrayBuffer,
-    sampleRate: number = 24000
+    sampleRate: number = 24000,
   ): Promise<AudioBuffer> {
     const ctx = getAudioContext();
     // Convert Int16 PCM to Float32 for Web Audio API
@@ -64,7 +66,11 @@ export function createTTSPlayer(): TTSPlayer {
     if (isPlaying || audioQueue.length === 0) return;
 
     isPlaying = true;
-    const item = audioQueue.shift()!;
+    const item = audioQueue.shift();
+    if (!item) {
+      isPlaying = false;
+      return;
+    }
     const ctx = getAudioContext();
 
     const source = ctx.createBufferSource();
@@ -90,14 +96,10 @@ export function createTTSPlayer(): TTSPlayer {
   function addFadeEnvelope(
     buffer: AudioBuffer,
     fadeInMs: number = 5,
-    fadeOutMs: number = 5
+    fadeOutMs: number = 5,
   ): AudioBuffer {
     const ctx = getAudioContext();
-    const newBuffer = ctx.createBuffer(
-      buffer.numberOfChannels,
-      buffer.length,
-      buffer.sampleRate
-    );
+    const newBuffer = ctx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
 
     const fadeInSamples = Math.floor((fadeInMs / 1000) * buffer.sampleRate);
     const fadeOutSamples = Math.floor((fadeOutMs / 1000) * buffer.sampleRate);

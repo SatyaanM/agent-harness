@@ -1,11 +1,11 @@
-import { Agent } from "./agent.js";
+import type { CapabilityRegistry } from "../capability/registry.js";
+import type { MessageBus } from "../collaboration/message-bus.js";
+import type { LLMClient } from "../llm/client.js";
+import type { ToolRegistry } from "../tool/types.js";
 import type { AgentEventCallback } from "./agent.js";
+import { Agent } from "./agent.js";
 import type { AgentConfig, Message, TaskId } from "./types.js";
 import { AgentCancelledError } from "./types.js";
-import type { ToolRegistry } from "../tool/types.js";
-import type { LLMClient } from "../llm/client.js";
-import type { CapabilityRegistry } from "../capability/registry.js";
-import { MessageBus } from "../collaboration/message-bus.js";
 
 export interface WorkerResult {
   taskId: TaskId;
@@ -27,7 +27,7 @@ export class Worker {
     private readonly orchestratorId: TaskId,
     private readonly bus: MessageBus,
     private readonly abortSignal?: AbortSignal,
-    private readonly onEvent?: AgentEventCallback,
+    onEvent?: AgentEventCallback,
   ) {
     this.agent = new Agent(config, toolRegistry, llmClient, capabilityRegistry, onEvent);
   }
@@ -50,11 +50,12 @@ export class Worker {
       const workerResult: WorkerResult = {
         taskId: this.taskId,
         status: error instanceof AgentCancelledError ? "cancelled" : "error",
-        summary: error instanceof AgentCancelledError
-          ? "Cancelled by user"
-          : error instanceof Error
-            ? error.message
-            : String(error),
+        summary:
+          error instanceof AgentCancelledError
+            ? "Cancelled by user"
+            : error instanceof Error
+              ? error.message
+              : String(error),
         messages: this.messages,
       };
 

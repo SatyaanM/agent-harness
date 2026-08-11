@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
 interface SidebarState {
   collapsed: boolean;
@@ -9,10 +9,10 @@ interface SidebarState {
 export const useSidebarStore = create<SidebarState>((set, get) => ({
   collapsed: false,
   init: () => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === "undefined") return;
     let collapsed = false;
     try {
-      collapsed = localStorage.getItem('sidebar-collapsed') === '1';
+      collapsed = localStorage.getItem("sidebar-collapsed") === "1";
     } catch {}
     set({ collapsed });
   },
@@ -20,7 +20,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     const next = !get().collapsed;
     set({ collapsed: next });
     try {
-      localStorage.setItem('sidebar-collapsed', next ? '1' : '0');
+      localStorage.setItem("sidebar-collapsed", next ? "1" : "0");
     } catch {}
   },
 }));

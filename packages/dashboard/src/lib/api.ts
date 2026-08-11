@@ -1,8 +1,8 @@
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
 export async function fetchSessions() {
   const res = await fetch(`${BASE_URL}/api/sessions`);
-  if (!res.ok) throw new Error('Failed to fetch sessions');
+  if (!res.ok) throw new Error("Failed to fetch sessions");
   return res.json();
 }
 
@@ -18,7 +18,7 @@ export interface SessionMeta {
 
 export async function fetchSessionMeta(): Promise<SessionMeta[]> {
   const res = await fetch(`${BASE_URL}/api/sessions/meta`);
-  if (!res.ok) throw new Error('Failed to fetch session metadata');
+  if (!res.ok) throw new Error("Failed to fetch session metadata");
   return res.json();
 }
 
@@ -29,53 +29,55 @@ export interface OpenSessionsState {
 
 export async function fetchOpenSessions(): Promise<OpenSessionsState> {
   const res = await fetch(`${BASE_URL}/api/sessions/open`);
-  if (!res.ok) throw new Error('Failed to fetch open sessions');
+  if (!res.ok) throw new Error("Failed to fetch open sessions");
   return res.json();
 }
 
 export async function updateOpenSessions(state: OpenSessionsState): Promise<OpenSessionsState> {
   const res = await fetch(`${BASE_URL}/api/sessions/open`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(state),
   });
-  if (!res.ok) throw new Error('Failed to sync open sessions');
+  if (!res.ok) throw new Error("Failed to sync open sessions");
   return res.json();
 }
 
-export async function openSession(sessionId: string): Promise<{ woke: boolean; pendingCount: number }> {
+export async function openSession(
+  sessionId: string,
+): Promise<{ woke: boolean; pendingCount: number }> {
   const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}/open`, {
-    method: 'POST',
+    method: "POST",
   });
-  if (!res.ok) throw new Error('Failed to open session');
+  if (!res.ok) throw new Error("Failed to open session");
   return res.json();
 }
 
 export async function renameSession(sessionId: string, title: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
-  if (!res.ok) throw new Error('Failed to rename session');
+  if (!res.ok) throw new Error("Failed to rename session");
 }
 
 export async function fetchSession(sessionId: string) {
   const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`);
-  if (!res.ok) throw new Error('Failed to fetch session');
+  if (!res.ok) throw new Error("Failed to fetch session");
   return res.json();
 }
 
 export async function cancelWorker(taskId: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/workers/${encodeURIComponent(taskId)}/cancel`, {
-    method: 'POST',
+    method: "POST",
   });
-  if (!res.ok) throw new Error('Failed to cancel worker');
+  if (!res.ok) throw new Error("Failed to cancel worker");
 }
 
 export async function createSession() {
-  const res = await fetch(`${BASE_URL}/api/sessions`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to create session');
+  const res = await fetch(`${BASE_URL}/api/sessions`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to create session");
   return res.json();
 }
 
@@ -93,7 +95,7 @@ export interface InboxTreeEntry {
   name: string;
   path: string;
   absPath: string;
-  type: 'file' | 'dir';
+  type: "file" | "dir";
   size?: number;
   lastModified?: string;
   metadata?: unknown;
@@ -102,73 +104,73 @@ export interface InboxTreeEntry {
 
 export async function fetchInboxTree(): Promise<InboxTreeEntry[]> {
   const res = await fetch(`${BASE_URL}/api/inbox/tree`);
-  if (!res.ok) throw new Error('Failed to fetch inbox tree');
+  if (!res.ok) throw new Error("Failed to fetch inbox tree");
   return res.json();
 }
 
 export async function fetchInboxFile(path: string): Promise<InboxItem> {
   const res = await fetch(`${BASE_URL}/api/inbox/file?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error('Inbox item not found');
+  if (!res.ok) throw new Error("Inbox item not found");
   return res.json();
 }
 
 export async function updateInboxFile(path: string, content: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/inbox/file?path=${encodeURIComponent(path)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content }),
   });
-  if (!res.ok) throw new Error('Failed to save file');
+  if (!res.ok) throw new Error("Failed to save file");
 }
 
 export async function moveInboxItem(from: string, toDir: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/inbox/move`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ from, to: toDir }),
   });
   if (!res.ok) {
     const data = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(data?.error ?? 'Failed to move item');
+    throw new Error(data?.error ?? "Failed to move item");
   }
 }
 
 export async function deleteInboxItem(path: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/inbox/file?path=${encodeURIComponent(path)}`, {
-    method: 'DELETE',
+    method: "DELETE",
   });
-  if (!res.ok) throw new Error('Failed to delete item');
+  if (!res.ok) throw new Error("Failed to delete item");
 }
 
 export async function createInboxDir(path: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/inbox/dir`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
   });
-  if (!res.ok) throw new Error('Failed to create folder');
+  if (!res.ok) throw new Error("Failed to create folder");
 }
 
 export async function openInboxItem(path: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/inbox/open`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
   });
-  if (!res.ok) throw new Error('Failed to open in explorer');
+  if (!res.ok) throw new Error("Failed to open in explorer");
 }
 
 export async function sendMessage(
   sessionId: string,
   content: string,
-  agentName?: string
+  agentName?: string,
 ): Promise<ReadableStream<Uint8Array> | null> {
   const res = await fetch(`${BASE_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId, message: content, agentName }),
   });
-  if (!res.ok) throw new Error('Failed to send message');
+  if (!res.ok) throw new Error("Failed to send message");
   return res.body;
 }
 
@@ -185,17 +187,17 @@ export interface HarnessSettings {
 
 export async function fetchSettings(): Promise<HarnessSettings> {
   const res = await fetch(`${BASE_URL}/api/settings`);
-  if (!res.ok) throw new Error('Failed to fetch settings');
+  if (!res.ok) throw new Error("Failed to fetch settings");
   return res.json();
 }
 
 export async function updateSettings(settings: Partial<HarnessSettings>): Promise<HarnessSettings> {
   const res = await fetch(`${BASE_URL}/api/settings`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
   });
-  if (!res.ok) throw new Error('Failed to update settings');
+  if (!res.ok) throw new Error("Failed to update settings");
   return res.json();
 }
 
@@ -213,7 +215,7 @@ export interface ModelsResponse {
 
 export async function fetchModels(): Promise<ModelsResponse> {
   const res = await fetch(`${BASE_URL}/api/settings/models`);
-  if (!res.ok) throw new Error('Failed to fetch models');
+  if (!res.ok) throw new Error("Failed to fetch models");
   return res.json();
 }
 
@@ -230,41 +232,47 @@ export interface AgentConfig {
 
 export async function fetchAgents(): Promise<AgentConfig[]> {
   const res = await fetch(`${BASE_URL}/api/agents`);
-  if (!res.ok) throw new Error('Failed to fetch agents');
+  if (!res.ok) throw new Error("Failed to fetch agents");
   return res.json();
 }
 
 export async function fetchAgent(name: string): Promise<AgentConfig> {
   const res = await fetch(`${BASE_URL}/api/agents/${encodeURIComponent(name)}`);
-  if (!res.ok) throw new Error('Failed to fetch agent');
+  if (!res.ok) throw new Error("Failed to fetch agent");
   return res.json();
 }
 
-export async function updateAgent(name: string, content: Partial<AgentConfig>): Promise<AgentConfig> {
+export async function updateAgent(
+  name: string,
+  content: Partial<AgentConfig>,
+): Promise<AgentConfig> {
   const res = await fetch(`${BASE_URL}/api/agents/${encodeURIComponent(name)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(content),
   });
-  if (!res.ok) throw new Error('Failed to update agent');
+  if (!res.ok) throw new Error("Failed to update agent");
   return res.json();
 }
 
-export async function createAgent(name: string, content: Partial<AgentConfig>): Promise<AgentConfig> {
+export async function createAgent(
+  name: string,
+  content: Partial<AgentConfig>,
+): Promise<AgentConfig> {
   const res = await fetch(`${BASE_URL}/api/agents`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, ...content }),
   });
-  if (!res.ok) throw new Error('Failed to create agent');
+  if (!res.ok) throw new Error("Failed to create agent");
   return res.json();
 }
 
 export async function deleteAgent(name: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/agents/${encodeURIComponent(name)}`, {
-    method: 'DELETE',
+    method: "DELETE",
   });
-  if (!res.ok) throw new Error('Failed to delete agent');
+  if (!res.ok) throw new Error("Failed to delete agent");
 }
 
 export interface InboxRendererMeta {
@@ -279,9 +287,7 @@ export interface PluginCommandManifest {
   keywords?: string;
   group?: string;
   icon?: string;
-  action:
-    | { type: 'navigate'; href: string }
-    | { type: 'builtin'; commandId: string };
+  action: { type: "navigate"; href: string } | { type: "builtin"; commandId: string };
 }
 
 export interface PluginManifest {
@@ -297,19 +303,16 @@ export interface PluginManifest {
 
 export async function fetchPlugins(): Promise<PluginManifest[]> {
   const res = await fetch(`${BASE_URL}/api/plugins`);
-  if (!res.ok) throw new Error('Failed to fetch plugins');
+  if (!res.ok) throw new Error("Failed to fetch plugins");
   return res.json();
 }
 
-export async function updatePlugin(
-  name: string,
-  enabled: boolean
-): Promise<PluginManifest> {
+export async function updatePlugin(name: string, enabled: boolean): Promise<PluginManifest> {
   const res = await fetch(`${BASE_URL}/api/plugins/${encodeURIComponent(name)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enabled }),
   });
-  if (!res.ok) throw new Error('Failed to update plugin');
+  if (!res.ok) throw new Error("Failed to update plugin");
   return res.json();
 }

@@ -24,4 +24,6 @@ The agent discovers context through the repository, selects relevant skills, mak
 
 ## Handoff
 
-Commit suggestion: `chore: finalize agent-ready repository bootstrap`. Defer P1 work (CI, session handoff skill, DEVELOPMENT.md, lint/format audit, runtime spec shell) unless explicitly scheduled next.
+Commit suggestion: `chore: finalize agent-ready repository bootstrap`. Defer P1 work (CI, session handoff skill, DEVELOPMENT.md, runtime spec shell) unless explicitly scheduled next.
+
+The lint/format audit was completed as a post-bootstrap tooling follow-up on 2026-08-11 with Biome, Lefthook, and an expanded Vitest command surface. Browser-mode and end-to-end testing remain deferred until the runtime-invariant unit/integration backlog has meaningful coverage.

@@ -16,7 +16,7 @@ function isTransientError(status: number | undefined): boolean {
 async function fetchWithRetry(url: string, attempt: number): Promise<Response> {
   const res = await fetch(url);
   if (!res.ok && isTransientError(res.status) && attempt < MAX_RETRIES) {
-    const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+    const delay = BASE_DELAY_MS * 2 ** attempt;
     await new Promise((resolve) => setTimeout(resolve, delay));
     return fetchWithRetry(url, attempt + 1);
   }
@@ -38,7 +38,7 @@ async function fetchApi(): Promise<ModelsDevResponse | null> {
     if (fetchFailed) return null;
     try {
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+        const delay = BASE_DELAY_MS * 2 ** attempt;
         await new Promise((resolve) => setTimeout(resolve, delay));
         try {
           const res = await fetch(API_URL);
@@ -79,16 +79,15 @@ export async function fetchCapabilities(
   const api = await fetchApi();
   if (!api) return null;
 
-  const candidates = [
-    correlatedId,
-    `${provider}/${model}`,
-    model,
-  ].map(normalizeId);
+  const candidates = [correlatedId, `${provider}/${model}`, model].map(normalizeId);
 
   let entry: ModelsDevResponse[string] | undefined;
   for (const key of Object.keys(api)) {
     const normalized = normalizeId(key);
-    if (candidates.includes(normalized) || candidates.includes(normalizeId(key.split("/").pop() ?? ""))) {
+    if (
+      candidates.includes(normalized) ||
+      candidates.includes(normalizeId(key.split("/").pop() ?? ""))
+    ) {
       entry = api[key];
       break;
     }

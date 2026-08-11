@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { createTTSPlayer } from "@/lib/tts-player";
 import type { PlaybackState } from "@/lib/tts-player";
+import { createTTSPlayer } from "@/lib/tts-player";
 
 export interface TTSVoice {
   name: string;

@@ -55,6 +55,6 @@
     "postcss": "^8.x",
     "tailwindcss-animate": "^1.x",
     "typescript": "^5.x",
-    "vitest": "^4.1.10"
+    "vitest": "4.1.10"
   }
 }

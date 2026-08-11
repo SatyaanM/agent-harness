@@ -1,20 +1,20 @@
-import type { ComponentType } from 'react';
+import type { ComponentType } from "react";
 import {
-  MarkdownRenderer,
-  HtmlRenderer,
-  ImageRenderer,
-  PdfRenderer,
   CsvRenderer,
   ExcalidrawRenderer,
+  HtmlRenderer,
+  ImageRenderer,
+  MarkdownRenderer,
+  PdfRenderer,
   TextRenderer,
-} from '@/components/inbox/renderers';
+} from "@/components/inbox/renderers";
 
 export interface InboxRendererProps {
   content: string;
   item?: { name: string; type: string; path?: string };
 }
 
-export type InboxRendererComponent = ComponentType<any>;
+export type InboxRendererComponent = ComponentType<InboxRendererProps>;
 
 const inboxRendererComponents: Record<string, InboxRendererComponent> = {
   MarkdownRenderer,
@@ -27,8 +27,6 @@ const inboxRendererComponents: Record<string, InboxRendererComponent> = {
 
 export const fallbackRenderer: InboxRendererComponent = TextRenderer;
 
-export function resolveRenderer(
-  componentKey: string
-): InboxRendererComponent | null {
+export function resolveRenderer(componentKey: string): InboxRendererComponent | null {
   return inboxRendererComponents[componentKey] ?? null;
 }

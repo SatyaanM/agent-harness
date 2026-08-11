@@ -1,6 +1,11 @@
-import { loadAgentConfig } from "@agent-harness/core";
-import { ToolRegistry, createReadFileTool, createWriteFileTool, createListDirectoryTool } from "@agent-harness/core";
-import path from "path";
+import path from "node:path";
+import {
+  createListDirectoryTool,
+  createReadFileTool,
+  createWriteFileTool,
+  loadAgentConfig,
+  ToolRegistry,
+} from "@agent-harness/core";
 
 async function main() {
   console.log("=== Agent Harness Integration Test ===\n");
@@ -23,7 +28,12 @@ async function main() {
   registry.register(createWriteFileTool(root));
   registry.register(createListDirectoryTool(root));
   console.log(`✓ Registered ${registry.getAll().length} tools`);
-  console.log(`  Tools: ${registry.getAll().map(t => t.name).join(", ")}\n`);
+  console.log(
+    `  Tools: ${registry
+      .getAll()
+      .map((t) => t.name)
+      .join(", ")}\n`,
+  );
 
   // Test 3: Test tool execution
   console.log("Test 3: Testing tool execution...");
@@ -32,7 +42,7 @@ async function main() {
     const result = await listTool.execute({ path: "." });
     const lines = result.split("\n").slice(0, 5);
     console.log(`✓ listDirectory executed successfully`);
-    console.log(`  First 5 entries:\n${lines.map(l => `    ${l}`).join("\n")}\n`);
+    console.log(`  First 5 entries:\n${lines.map((l) => `    ${l}`).join("\n")}\n`);
   }
 
   console.log("=== All tests passed ===");

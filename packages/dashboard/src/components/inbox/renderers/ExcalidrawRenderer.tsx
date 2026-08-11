@@ -1,15 +1,16 @@
-'use client';
+"use client";
 
-import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import '@excalidraw/excalidraw/index.css';
-import { updateInboxFile } from '@/lib/api';
-import { useInboxHeaderActions } from '../header-actions';
-import { Button } from '@/components/ui/button';
-import { Save } from 'lucide-react';
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import "@excalidraw/excalidraw/index.css";
+import type { ExcalidrawInitialDataState, ExcalidrawProps } from "@excalidraw/excalidraw/types";
+import { Save } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { updateInboxFile } from "@/lib/api";
+import { useInboxHeaderActions } from "../header-actions";
 
 const ExcalidrawComponent = dynamic(
-  () => import('@excalidraw/excalidraw').then((mod) => mod.Excalidraw),
+  () => import("@excalidraw/excalidraw").then((mod) => mod.Excalidraw),
   {
     ssr: false,
     loading: () => (
@@ -17,13 +18,15 @@ const ExcalidrawComponent = dynamic(
         Loading diagram viewer...
       </div>
     ),
-  }
+  },
 );
 
+type ExcalidrawChangeHandler = NonNullable<ExcalidrawProps["onChange"]>;
+
 interface ExcalidrawScene {
-  elements: unknown[];
-  appState: unknown;
-  files: unknown;
+  elements: Parameters<ExcalidrawChangeHandler>[0];
+  appState: Parameters<ExcalidrawChangeHandler>[1];
+  files: Parameters<ExcalidrawChangeHandler>[2];
 }
 
 interface ExcalidrawRendererProps {
@@ -32,7 +35,7 @@ interface ExcalidrawRendererProps {
 }
 
 export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
-  const [parsed, setParsed] = useState<any>(null);
+  const [parsed, setParsed] = useState<ExcalidrawInitialDataState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -47,34 +50,28 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
     setSaved(false);
     sceneRef.current = null;
     try {
-      const data = JSON.parse(content);
-      const appState =
-        data?.appState && typeof data.appState === 'object'
-          ? data.appState
-          : {};
-      if (!Array.isArray(appState.collaborators)) {
-        data.appState = { ...appState, collaborators: [] };
+      const data = JSON.parse(content) as ExcalidrawInitialDataState;
+      const appState = data?.appState && typeof data.appState === "object" ? data.appState : {};
+      if (!(appState.collaborators instanceof Map)) {
+        data.appState = { ...appState, collaborators: new Map() };
       }
       setParsed(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Invalid JSON');
+      setError(e instanceof Error ? e.message : "Invalid JSON");
     }
   }, [content]);
 
   const initialElementsJson = useMemo(
-    () =>
-      JSON.stringify(
-        (parsed?.elements as unknown[] | undefined) ?? []
-      ),
-    [parsed]
+    () => JSON.stringify((parsed?.elements as unknown[] | undefined) ?? []),
+    [parsed],
   );
 
-  const handleChange = useCallback(
-    (elements: any, appState: any, files: any) => {
+  const handleChange = useCallback<ExcalidrawChangeHandler>(
+    (elements, appState, files) => {
       sceneRef.current = { elements, appState, files };
       setIsDirty(JSON.stringify(elements) !== initialElementsJson);
     },
-    [initialElementsJson]
+    [initialElementsJson],
   );
 
   const handleSave = useCallback(async () => {
@@ -92,7 +89,7 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
       setIsDirty(false);
       setSaved(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save diagram');
+      setError(e instanceof Error ? e.message : "Failed to save diagram");
     } finally {
       setSaving(false);
     }
@@ -102,8 +99,8 @@ export function ExcalidrawRenderer({ content, item }: ExcalidrawRendererProps) {
     setHeaderActions(
       <Button size="sm" onClick={handleSave} disabled={!isDirty || saving}>
         <Save className="h-4 w-4" />
-        {saving ? 'Saving...' : saved ? 'Saved' : 'Save'}
-      </Button>
+        {saving ? "Saving..." : saved ? "Saved" : "Save"}
+      </Button>,
     );
     return () => setHeaderActions(null);
   }, [isDirty, saving, saved, handleSave, setHeaderActions]);

@@ -1,9 +1,9 @@
-import { generateText, type LanguageModel } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
-import type { LLMClient, LLMChatParams, LLMResponse } from "./client.js";
+import { createOpenAI } from "@ai-sdk/openai";
+import { generateText } from "ai";
 import type { Message } from "../agent/types.js";
 import type { Config } from "../config.js";
+import type { LLMChatParams, LLMClient, LLMResponse } from "./client.js";
 
 // Models that use Anthropic-compatible endpoint
 const ANTHROPIC_MODELS = new Set([
@@ -16,7 +16,10 @@ const ANTHROPIC_MODELS = new Set([
 ]);
 
 function getModelProvider(modelId: string, config: Config) {
-  console.log("[llm] getModelProvider called with:", { modelId, PROVIDER_ENDPOINT: config.PROVIDER_ENDPOINT });
+  console.log("[llm] getModelProvider called with:", {
+    modelId,
+    PROVIDER_ENDPOINT: config.PROVIDER_ENDPOINT,
+  });
 
   // Strip "opencode-go/" prefix if present
   const cleanModelId = modelId.startsWith("opencode-go/")
@@ -68,13 +71,11 @@ export function createVercelAILLMClient(config: Config): LLMClient {
         systemPromptLength: params.system?.length ?? 0,
       });
 
-      const { model, isAnthropic } = getModelProvider(params.model, config);
+      const { model } = getModelProvider(params.model, config);
 
       const systemParts = [
         params.system,
-        ...params.messages
-          .filter((m) => m.role === "system")
-          .map((m) => m.content),
+        ...params.messages.filter((m) => m.role === "system").map((m) => m.content),
       ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
       const instructions = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
 
@@ -94,20 +95,23 @@ export function createVercelAILLMClient(config: Config): LLMClient {
 
       console.log("[llm] Tools being passed to generateText:", tools ? Object.keys(tools) : "none");
       if (tools) {
-        console.log("[llm] Tool details:", Object.entries(tools).map(([name, def]) => ({
-          name,
-          description: (def as any).description,
-          hasSchema: !!(def as any).inputSchema,
-          schemaType: typeof (def as any).inputSchema,
-        })));
-        
+        console.log(
+          "[llm] Tool details:",
+          Object.entries(tools).map(([name, def]) => ({
+            name,
+            description: def.description,
+            hasSchema: !!def.inputSchema,
+            schemaType: typeof def.inputSchema,
+          })),
+        );
+
         // Log the first tool's schema structure
         const firstTool = Object.entries(tools)[0];
         if (firstTool) {
           const [toolName, toolDef] = firstTool;
           console.log("[llm] First tool schema:", {
             name: toolName,
-            schemaKeys: Object.keys(toolDef as any),
+            schemaKeys: Object.keys(toolDef),
           });
         }
       }
@@ -121,15 +125,19 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           ...(tools ? { tools } : {}),
           ...(params.signal ? { signal: params.signal } : {}),
         });
+        const resultWithReasoning = result as unknown as {
+          reasoning?: unknown;
+          reasoning_content?: unknown;
+        };
         console.log("[llm] generateText succeeded:", {
           finishReason: result.finishReason,
           textLength: result.text?.length,
-          hasReasoning: !!(result as any).reasoning,
+          hasReasoning: !!resultWithReasoning.reasoning,
         });
 
         // Handle reasoning models: extract text from reasoning if content is empty
         let responseText = result.text;
-        const rawReasoning = (result as any).reasoning || (result as any).reasoning_content;
+        const rawReasoning = resultWithReasoning.reasoning ?? resultWithReasoning.reasoning_content;
         const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
         if (!responseText || responseText.trim().length === 0) {
           if (reasoning) {
@@ -171,46 +179,50 @@ function convertMessages(messages: Message[]) {
     .filter((msg) => msg.role !== "system")
     .map((msg, index, arr) => {
       switch (msg.role) {
-      case "user":
-        return { role: "user" as const, content: msg.content };
+        case "user":
+          return { role: "user" as const, content: msg.content };
 
-      case "assistant":
-        if (msg.toolCalls?.length) {
+        case "assistant":
+          if (msg.toolCalls?.length) {
+            return {
+              role: "assistant" as const,
+              content: [
+                { type: "text" as const, text: msg.content || "" },
+                ...msg.toolCalls.map((tc) => ({
+                  type: "tool-call" as const,
+                  toolCallId: tc.toolCallId,
+                  toolName: tc.toolName,
+                  input: tc.args,
+                })),
+              ],
+            };
+          }
+          return { role: "assistant" as const, content: msg.content };
+
+        case "tool": {
+          if (!msg.toolCallId) {
+            throw new Error("Tool messages must include a toolCallId");
+          }
+          const toolCallId = msg.toolCallId;
+          const toolName = findToolName(toolCallId, arr.slice(0, index));
           return {
-            role: "assistant" as const,
+            role: "tool" as const,
             content: [
-              { type: "text" as const, text: msg.content || "" },
-              ...msg.toolCalls.map((tc) => ({
-                type: "tool-call" as const,
-                toolCallId: tc.toolCallId,
-                toolName: tc.toolName,
-                input: tc.args,
-              })),
+              {
+                type: "tool-result" as const,
+                toolCallId,
+                toolName: toolName ?? "unknown",
+                output: {
+                  type: "text" as const,
+                  value: msg.content,
+                },
+              },
             ],
           };
         }
-        return { role: "assistant" as const, content: msg.content };
 
-      case "tool": {
-        const toolName = findToolName(msg.toolCallId!, arr.slice(0, index));
-        return {
-          role: "tool" as const,
-          content: [
-            {
-              type: "tool-result" as const,
-              toolCallId: msg.toolCallId!,
-              toolName: toolName ?? "unknown",
-              output: {
-                type: "text" as const,
-                value: msg.content,
-              },
-            },
-          ],
-        };
-      }
-
-      default:
-        return { role: "user" as const, content: msg.content };
+        default:
+          return { role: "user" as const, content: msg.content };
       }
     });
 }

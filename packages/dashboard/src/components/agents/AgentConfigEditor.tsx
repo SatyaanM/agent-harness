@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import dynamic from 'next/dynamic';
-import { updateAgent, deleteAgent, type AgentConfig } from '@/lib/api';
-import { useThemeStore } from '@/stores/theme-store';
-import { Button } from '@/components/ui/button';
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { type AgentConfig, deleteAgent, updateAgent } from "@/lib/api";
+import { useThemeStore } from "@/stores/theme-store";
 
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
 interface AgentConfigEditorProps {
   agentName: string;
@@ -16,36 +16,36 @@ interface AgentConfigEditorProps {
 }
 
 function configToMarkdown(config: AgentConfig): string {
-  const lines: string[] = ['---'];
+  const lines: string[] = ["---"];
   lines.push(`name: ${config.name}`);
   lines.push(`model: ${config.model}`);
   lines.push(`maxSteps: ${config.maxSteps}`);
   if (config.tools && config.tools.length > 0) {
-    lines.push('tools:');
+    lines.push("tools:");
     for (const t of config.tools) {
       lines.push(`  - ${t}`);
     }
   } else {
-    lines.push('tools: []');
+    lines.push("tools: []");
   }
   if (config.capabilities && config.capabilities.length > 0) {
-    lines.push('capabilities:');
+    lines.push("capabilities:");
     for (const c of config.capabilities) {
       lines.push(`  - ${c}`);
     }
   }
   if (config.modelIdMapping && Object.keys(config.modelIdMapping).length > 0) {
-    lines.push('modelIdMapping:');
+    lines.push("modelIdMapping:");
     for (const [k, v] of Object.entries(config.modelIdMapping)) {
       lines.push(`  ${k}: ${v}`);
     }
   }
-  lines.push('---');
-  lines.push('');
+  lines.push("---");
+  lines.push("");
   if (config.instructions) {
     lines.push(config.instructions);
   }
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 function parseMarkdownConfig(content: string): Partial<AgentConfig> {
@@ -67,19 +67,24 @@ function parseMarkdownConfig(content: string): Partial<AgentConfig> {
 
   const toolsMatch = yamlStr.match(/^tools:\s*\n((?:\s+-\s+.+\n?)*)/m);
   if (toolsMatch) {
-    config.tools = toolsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, '')) ?? [];
+    config.tools = toolsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, "")) ?? [];
   }
 
   const capsMatch = yamlStr.match(/^capabilities:\s*\n((?:\s+-\s+.+\n?)*)/m);
   if (capsMatch) {
-    config.capabilities = capsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, '')) ?? [];
+    config.capabilities = capsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, "")) ?? [];
   }
 
   return config;
 }
 
-export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved }: AgentConfigEditorProps) {
-  const [content, setContent] = useState('');
+export function AgentConfigEditor({
+  agentName,
+  initialConfig,
+  onDeleted,
+  onSaved,
+}: AgentConfigEditorProps) {
+  const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,7 +117,7 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
       setSuccess(true);
       onSaved?.(updated);
     } catch {
-      setError('Failed to save agent');
+      setError("Failed to save agent");
     } finally {
       setSaving(false);
     }
@@ -126,7 +131,7 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
       await deleteAgent(agentName);
       onDeleted?.();
     } catch {
-      setError('Failed to delete agent');
+      setError("Failed to delete agent");
     } finally {
       setDeleting(false);
     }
@@ -149,10 +154,10 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
             size="sm"
             className="border-destructive/50 text-destructive hover:bg-destructive/10"
           >
-            {deleting ? 'Deleting...' : 'Delete'}
+            {deleting ? "Deleting..." : "Delete"}
           </Button>
           <Button onClick={handleSave} disabled={saving || !isDirty} size="sm">
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? "Saving..." : "Save"}
           </Button>
         </div>
       </div>
@@ -172,15 +177,15 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
         <MonacoEditor
           height="100%"
           language="markdown"
-          theme={theme === 'dark' ? 'vs-dark' : 'light'}
+          theme={theme === "dark" ? "vs-dark" : "light"}
           value={content}
           onChange={handleEditorChange}
           options={{
             minimap: { enabled: false },
             fontSize: 13,
-            lineNumbers: 'on',
+            lineNumbers: "on",
             scrollBeyondLastLine: false,
-            wordWrap: 'on',
+            wordWrap: "on",
             automaticLayout: true,
             tabSize: 2,
           }}

@@ -1,5 +1,5 @@
-import { create } from 'zustand';
-import { fetchAgents, type AgentConfig } from '@/lib/api';
+import { create } from "zustand";
+import { type AgentConfig, fetchAgents } from "@/lib/api";
 
 interface AgentsState {
   agents: AgentConfig[];
@@ -19,7 +19,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
       set({ agents, loading: false });
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : 'Failed to load agents',
+        error: err instanceof Error ? err.message : "Failed to load agents",
         loading: false,
       });
     }

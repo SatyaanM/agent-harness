@@ -1,33 +1,28 @@
-'use client';
+"use client";
 
-import { useEffect } from 'react';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
 import {
-  Inbox,
   Bot,
-  Puzzle,
-  Settings as SettingsIcon,
   ChevronsLeft,
   ChevronsRight,
-  Sun,
+  Inbox,
   Moon,
-} from 'lucide-react';
-import { useSidebarStore } from '@/stores/sidebar-store';
-import { useThemeStore } from '@/stores/theme-store';
-import { Button } from '@/components/ui/button';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+  Puzzle,
+  Settings as SettingsIcon,
+  Sun,
+} from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSidebarStore } from "@/stores/sidebar-store";
+import { useThemeStore } from "@/stores/theme-store";
 
 const NAV_ITEMS = [
-  { href: '/', label: 'Inbox', icon: Inbox },
-  { href: '/agents', label: 'Agents', icon: Bot },
-  { href: '/plugins', label: 'Plugins', icon: Puzzle },
-  { href: '/settings', label: 'Settings', icon: SettingsIcon },
+  { href: "/", label: "Inbox", icon: Inbox },
+  { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/plugins", label: "Plugins", icon: Puzzle },
+  { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 export function Sidebar() {
@@ -41,8 +36,7 @@ export function Sidebar() {
   }, [init]);
 
   const link = (item: (typeof NAV_ITEMS)[number]) => {
-    const isActive =
-      item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+    const isActive = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
     const Icon = item.icon;
 
     const content = (
@@ -50,8 +44,8 @@ export function Sidebar() {
         href={item.href}
         className={`flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors ${
           isActive
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground'
+            ? "bg-accent text-accent-foreground"
+            : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground"
         }`}
         title={collapsed ? item.label : undefined}
       >
@@ -74,7 +68,7 @@ export function Sidebar() {
     <TooltipProvider>
       <aside
         className={`flex shrink-0 flex-col border-r bg-background transition-[width] duration-200 ${
-          collapsed ? 'w-14' : 'w-44'
+          collapsed ? "w-14" : "w-44"
         }`}
       >
         <div className="flex h-12 items-center justify-between border-b px-2">
@@ -87,9 +81,9 @@ export function Sidebar() {
             variant="ghost"
             size="icon"
             onClick={toggle}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-label="Toggle sidebar"
-            className={collapsed ? 'mx-auto' : ''}
+            className={collapsed ? "mx-auto" : ""}
           >
             {collapsed ? (
               <ChevronsRight className="h-4 w-4" />
@@ -109,15 +103,11 @@ export function Sidebar() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             aria-label="Toggle color theme"
           >
-            {theme === 'dark' ? (
-              <Sun className="h-4 w-4" />
-            ) : (
-              <Moon className="h-4 w-4" />
-            )}
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
         </div>
       </aside>

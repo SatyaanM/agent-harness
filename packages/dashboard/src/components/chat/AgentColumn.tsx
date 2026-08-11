@@ -1,16 +1,16 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
-import { useShallow } from 'zustand/react/shallow';
-import { useSessionStore } from '@/stores/session-store';
-import { useRosterStore } from '@/stores/agent-roster-store';
-import { useRuntimeStore } from '@/stores/runtime-store';
-import AgentDrawer from './AgentDrawer';
+import { useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { useRosterStore } from "@/stores/agent-roster-store";
+import { useRuntimeStore } from "@/stores/runtime-store";
+import { useSessionStore } from "@/stores/session-store";
+import AgentDrawer from "./AgentDrawer";
 
 interface BubbleEntry {
   id: string;
   name: string;
-  role: 'primary' | 'worker';
+  role: "primary" | "worker";
   status: string;
   taskId?: string;
   task?: string;
@@ -22,14 +22,13 @@ export default function AgentColumn() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
   const workers = useRosterStore(
-    useShallow((s) => (activeSessionId ? s.bySession[activeSessionId] ?? [] : []))
+    useShallow((s) => (activeSessionId ? (s.bySession[activeSessionId] ?? []) : [])),
   );
-  const running = useRuntimeStore((s) =>
-    activeSessionId ? !!s.running[activeSessionId] : false
-  );
+  const running = useRuntimeStore((s) => (activeSessionId ? !!s.running[activeSessionId] : false));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Changing sessions intentionally re-measures the chat column even though the id is not read inside the effect.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -39,10 +38,10 @@ export default function AgentColumn() {
     const ro = new ResizeObserver(update);
     ro.observe(el);
     if (parent) ro.observe(parent);
-    window.addEventListener('resize', update);
+    window.addEventListener("resize", update);
     return () => {
       ro.disconnect();
-      window.removeEventListener('resize', update);
+      window.removeEventListener("resize", update);
     };
   }, [activeSessionId]);
 
@@ -53,16 +52,16 @@ export default function AgentColumn() {
   };
 
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
-  const primaryName = activeSession?.agentName ?? 'orchestrator';
+  const primaryName = activeSession?.agentName ?? "orchestrator";
 
   if (!activeSessionId) return null;
 
   const entries: BubbleEntry[] = [
-    { id: primaryName, name: primaryName, role: 'primary', status: running ? 'running' : 'idle' },
+    { id: primaryName, name: primaryName, role: "primary", status: running ? "running" : "idle" },
     ...workers.map((w) => ({
       id: w.id,
       name: w.name,
-      role: 'worker' as const,
+      role: "worker" as const,
       status: w.status,
       taskId: w.taskId,
       task: w.task,
@@ -86,29 +85,30 @@ export default function AgentColumn() {
     >
       {entries.map((entry, i) => (
         <button
+          type="button"
           key={entry.id}
           onClick={() => openDrawer(entry.id)}
           title={`${entry.name} (${entry.status})`}
           className={`relative flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold text-white transition-transform hover:scale-110 ${
-            entry.role === 'primary' ? 'bg-blue-600' : 'bg-zinc-600'
-          } ${selectedEntry?.id === entry.id ? 'ring-2 ring-blue-400' : ''}`}
+            entry.role === "primary" ? "bg-blue-600" : "bg-zinc-600"
+          } ${selectedEntry?.id === entry.id ? "ring-2 ring-blue-400" : ""}`}
           style={{
-            animation: 'bubble-pop 0.25s ease-out both',
+            animation: "bubble-pop 0.25s ease-out both",
             animationDelay: `${i * 60}ms`,
           }}
         >
           {entry.name.charAt(0).toUpperCase()}
           <span
             className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-background ${
-              entry.status === 'running'
-                ? 'animate-pulse bg-green-500'
-                : entry.status === 'error'
-                  ? 'bg-red-500'
-                  : entry.status === 'cancelled'
-                    ? 'bg-amber-500'
-                    : entry.status === 'done'
-                      ? 'bg-emerald-500'
-                      : 'bg-zinc-400'
+              entry.status === "running"
+                ? "animate-pulse bg-green-500"
+                : entry.status === "error"
+                  ? "bg-red-500"
+                  : entry.status === "cancelled"
+                    ? "bg-amber-500"
+                    : entry.status === "done"
+                      ? "bg-emerald-500"
+                      : "bg-zinc-400"
             }`}
           />
         </button>

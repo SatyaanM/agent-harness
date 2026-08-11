@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from "react";
 
 interface HtmlRendererProps {
   content: string;

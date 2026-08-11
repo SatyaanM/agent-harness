@@ -1,10 +1,10 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
 export interface ToolActivity {
   id: string;
   agentName: string;
   toolName: string;
-  type: 'called' | 'completed';
+  type: "called" | "completed";
   args?: unknown;
   result?: string;
   timestamp: number;

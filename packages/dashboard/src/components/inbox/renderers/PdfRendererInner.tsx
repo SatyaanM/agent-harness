@@ -1,9 +1,9 @@
-import { useState, useCallback } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
+import { useCallback, useState } from "react";
+import { Document, Page, pdfjs } from "react-pdf";
+import "react-pdf/dist/Page/AnnotationLayer.css";
+import "react-pdf/dist/Page/TextLayer.css";
 
-pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 interface PdfRendererInnerProps {
   src: string;
@@ -23,7 +23,7 @@ export default function PdfRendererInner({ src }: PdfRendererInnerProps) {
   }, []);
 
   const onDocumentLoadError = useCallback((err: Error) => {
-    setError(err.message || 'Failed to load PDF');
+    setError(err.message || "Failed to load PDF");
     setLoading(false);
   }, []);
 
@@ -48,6 +48,7 @@ export default function PdfRendererInner({ src }: PdfRendererInnerProps) {
       {numPages > 1 && (
         <div className="flex items-center justify-center gap-3 px-4 py-2 border-b border-zinc-800">
           <button
+            type="button"
             onClick={goToPrevPage}
             disabled={pageNumber <= 1}
             className="px-2 py-1 text-xs text-zinc-300 bg-zinc-800 rounded hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
@@ -58,6 +59,7 @@ export default function PdfRendererInner({ src }: PdfRendererInnerProps) {
             Page {pageNumber} of {numPages}
           </span>
           <button
+            type="button"
             onClick={goToNextPage}
             disabled={pageNumber >= numPages}
             className="px-2 py-1 text-xs text-zinc-300 bg-zinc-800 rounded hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
@@ -79,12 +81,7 @@ export default function PdfRendererInner({ src }: PdfRendererInnerProps) {
           loading={null}
           className="flex flex-col items-center gap-4"
         >
-          <Page
-            pageNumber={pageNumber}
-            width={700}
-            loading={null}
-            className="shadow-lg"
-          />
+          <Page pageNumber={pageNumber} width={700} loading={null} className="shadow-lg" />
         </Document>
       </div>
     </div>

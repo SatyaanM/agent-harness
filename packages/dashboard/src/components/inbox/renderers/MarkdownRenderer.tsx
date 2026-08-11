@@ -1,47 +1,47 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useState } from 'react';
-import dynamic from 'next/dynamic';
-import ReactMarkdown, { type Components } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { createHighlighter, type Highlighter } from 'shiki';
-import { FilePenLine, Save, X } from 'lucide-react';
-import { updateInboxFile } from '@/lib/api';
-import { useThemeStore } from '@/stores/theme-store';
-import { useInboxHeaderActions } from '../header-actions';
-import { Button } from '@/components/ui/button';
+import { FilePenLine, Save, X } from "lucide-react";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { createHighlighter, type Highlighter } from "shiki";
+import { Button } from "@/components/ui/button";
+import { updateInboxFile } from "@/lib/api";
+import { useThemeStore } from "@/stores/theme-store";
+import { useInboxHeaderActions } from "../header-actions";
 
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
 const HIGHLIGHT_LANGS = [
-  'typescript',
-  'javascript',
-  'jsx',
-  'tsx',
-  'json',
-  'jsonc',
-  'yaml',
-  'markdown',
-  'python',
-  'rust',
-  'go',
-  'bash',
-  'shell',
-  'sql',
-  'css',
-  'scss',
-  'html',
-  'xml',
-  'java',
-  'c',
-  'cpp',
-  'csharp',
-  'ruby',
-  'php',
-  'diff',
-  'toml',
-  'graphql',
-  'powershell',
+  "typescript",
+  "javascript",
+  "jsx",
+  "tsx",
+  "json",
+  "jsonc",
+  "yaml",
+  "markdown",
+  "python",
+  "rust",
+  "go",
+  "bash",
+  "shell",
+  "sql",
+  "css",
+  "scss",
+  "html",
+  "xml",
+  "java",
+  "c",
+  "cpp",
+  "csharp",
+  "ruby",
+  "php",
+  "diff",
+  "toml",
+  "graphql",
+  "powershell",
 ];
 
 let highlighterPromise: Promise<Highlighter> | null = null;
@@ -49,7 +49,7 @@ let highlighterPromise: Promise<Highlighter> | null = null;
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: ['github-dark', 'github-light'],
+      themes: ["github-dark", "github-light"],
       langs: HIGHLIGHT_LANGS,
     });
   }
@@ -63,7 +63,7 @@ function CodeBlock({
 }: {
   code: string;
   lang: string;
-  theme: 'github-dark' | 'github-light';
+  theme: "github-dark" | "github-light";
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -91,6 +91,7 @@ function CodeBlock({
     return (
       <div
         className="not-prose my-4 overflow-x-auto rounded-lg border border-border [&_pre]:!my-0"
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: Shiki produces escaped, trusted highlighting markup from the code string.
         dangerouslySetInnerHTML={{ __html: html }}
       />
     );
@@ -99,7 +100,7 @@ function CodeBlock({
   return (
     <pre
       className={`not-prose my-4 overflow-x-auto rounded-lg border border-border bg-muted p-4 text-sm text-foreground ${
-        failed ? 'opacity-60' : ''
+        failed ? "opacity-60" : ""
       }`}
     >
       <code className={`language-${lang}`}>{code}</code>
@@ -114,7 +115,7 @@ interface MarkdownRendererProps {
 
 export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
   const theme = useThemeStore((s) => s.theme);
-  const isDark = theme === 'dark';
+  const isDark = theme === "dark";
   const [current, setCurrent] = useState(content);
   const [draft, setDraft] = useState(content);
   const [editing, setEditing] = useState(false);
@@ -140,7 +141,7 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
   }, []);
 
   const handleEditorChange = (value: string | undefined) => {
-    const next = value ?? '';
+    const next = value ?? "";
     setDraft(next);
     setDirty(next !== current);
     setSaved(false);
@@ -156,7 +157,7 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
       setDirty(false);
       setSaved(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save file');
+      setError(err instanceof Error ? err.message : "Failed to save file");
     } finally {
       setSaving(false);
     }
@@ -175,7 +176,7 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
           </Button>
           <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
             <Save className="h-4 w-4" />
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? "Saving..." : "Save"}
           </Button>
         </>
       ) : (
@@ -183,7 +184,7 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
           <FilePenLine className="h-4 w-4" />
           Edit
         </Button>
-      )
+      ),
     );
     return () => setHeaderActions(null);
   }, [editing, saved, dirty, saving, startEditing, cancelEdit, handleSave, setHeaderActions]);
@@ -191,18 +192,18 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
   const components: Components = {
     pre: ({ children }) => <>{children}</>,
     code: ({ className, children }) => {
-      const match = /language-(\w+)/.exec(className ?? '');
+      const match = /language-(\w+)/.exec(className ?? "");
       const text = String(children);
       if (match) {
         return (
           <CodeBlock
-            code={text.replace(/\n$/, '')}
+            code={text.replace(/\n$/, "")}
             lang={match[1]}
-            theme={isDark ? 'github-dark' : 'github-light'}
+            theme={isDark ? "github-dark" : "github-light"}
           />
         );
       }
-      if (text.includes('\n')) {
+      if (text.includes("\n")) {
         return (
           <pre className="not-prose my-4 overflow-x-auto rounded-lg border border-border bg-muted p-4 text-sm text-foreground">
             <code>{text}</code>
@@ -217,8 +218,8 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
     <div
       className={
         isDark
-          ? 'prose prose-invert prose-zinc max-w-none p-4 prose-headings:text-zinc-200 prose-p:text-zinc-300 prose-a:text-blue-400 prose-strong:text-zinc-200 prose-code:text-zinc-200 prose-code:bg-zinc-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-th:text-zinc-200 prose-td:text-zinc-300 prose-li:text-zinc-300 prose-blockquote:border-zinc-600 prose-blockquote:text-zinc-400'
-          : 'prose prose-zinc max-w-none p-4 prose-a:text-blue-600'
+          ? "prose prose-invert prose-zinc max-w-none p-4 prose-headings:text-zinc-200 prose-p:text-zinc-300 prose-a:text-blue-400 prose-strong:text-zinc-200 prose-code:text-zinc-200 prose-code:bg-zinc-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-th:text-zinc-200 prose-td:text-zinc-300 prose-li:text-zinc-300 prose-blockquote:border-zinc-600 prose-blockquote:text-zinc-400"
+          : "prose prose-zinc max-w-none p-4 prose-a:text-blue-600"
       }
     >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
@@ -241,15 +242,15 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
             <MonacoEditor
               height="100%"
               language="markdown"
-              theme={theme === 'dark' ? 'vs-dark' : 'light'}
+              theme={theme === "dark" ? "vs-dark" : "light"}
               value={draft}
               onChange={handleEditorChange}
               options={{
                 minimap: { enabled: false },
                 fontSize: 13,
-                lineNumbers: 'on',
+                lineNumbers: "on",
                 scrollBeyondLastLine: false,
-                wordWrap: 'on',
+                wordWrap: "on",
                 automaticLayout: true,
                 tabSize: 2,
               }}

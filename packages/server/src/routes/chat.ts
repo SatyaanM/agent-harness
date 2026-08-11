@@ -25,7 +25,10 @@ chatRouter.post("/", async (req, res) => {
   try {
     const runtime = sessionManager.getOrCreate(sessionId);
     const result = await runtime.deliver(message, agentName);
-    console.log("[chat] Agent completed:", { status: result.status, summaryLength: result.summary?.length });
+    console.log("[chat] Agent completed:", {
+      status: result.status,
+      summaryLength: result.summary?.length,
+    });
 
     const chunks = result.summary.match(/.{1,40}(\s|$)/gs) ?? [result.summary];
     for (const chunk of chunks) {

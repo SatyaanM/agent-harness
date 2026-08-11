@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
 export interface InboxItem {
   id: string;
@@ -20,7 +20,7 @@ interface InboxState {
   clearError: () => void;
 }
 
-const BASE_URL = 'http://localhost:3001';
+const BASE_URL = "http://localhost:3001";
 
 export const useInboxStore = create<InboxState>((set) => ({
   items: [],
@@ -35,7 +35,7 @@ export const useInboxStore = create<InboxState>((set) => ({
       const items: InboxItem[] = await res.json();
       set({ items, isLoading: false });
     } catch (err) {
-      set({ isLoading: false, error: err instanceof Error ? err.message : 'Failed to load inbox' });
+      set({ isLoading: false, error: err instanceof Error ? err.message : "Failed to load inbox" });
     }
   },
   setCurrentItem: (item) => set({ currentItem: item }),

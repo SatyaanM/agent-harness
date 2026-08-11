@@ -42,10 +42,7 @@ Be inventive with tags to make delivery lively and engaging`;
   return instructions;
 }
 
-function buildParaphrasePrompt(
-  text: string,
-  config: ParaphraseConfig
-): string {
+function buildParaphrasePrompt(text: string, config: ParaphraseConfig): string {
   const tagInstructions = config.emotiveTags ? getTagInstructions(config) : "";
 
   const tagSection = config.emotiveTags
@@ -74,9 +71,10 @@ ${text}`;
 
 function extractTags(text: string): string[] {
   const tags: string[] = [];
-  let match;
-  while ((match = TAG_REGEX.exec(text)) !== null) {
+  let match = TAG_REGEX.exec(text);
+  while (match !== null) {
     tags.push(match[1]);
+    match = TAG_REGEX.exec(text);
   }
   return tags;
 }
@@ -84,7 +82,7 @@ function extractTags(text: string): string[] {
 export async function paraphrase(
   text: string,
   config: ParaphraseConfig,
-  llmCall: (prompt: string) => Promise<string>
+  llmCall: (prompt: string) => Promise<string>,
 ): Promise<ParaphraseResult> {
   if (!text || text.trim().length === 0) {
     return { text: "", tags: [] };

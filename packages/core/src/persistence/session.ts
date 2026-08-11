@@ -1,5 +1,5 @@
+import path from "node:path";
 import fs from "fs-extra";
-import path from "path";
 import type { Message, TaskId } from "../agent/types.js";
 import { getSessionIndex, type SessionMeta } from "./session-index.js";
 
@@ -77,7 +77,7 @@ class TranscriptState {
   private latest: SessionData | null = null;
 
   constructor(
-    private readonly dir: string,
+    dir: string,
     readonly sessionId: string,
   ) {
     this.filePath = path.join(dir, `${sessionId}.json`);
@@ -160,7 +160,7 @@ class MailboxLog {
   private fileExists = false;
 
   constructor(
-    private readonly dir: string,
+    dir: string,
     readonly sessionId: string,
   ) {
     this.filePath = path.join(dir, `${sessionId}.mailbox.jsonl`);
@@ -170,13 +170,13 @@ class MailboxLog {
     const run = this.chain.then(op);
     this.chain = run.then(
       () => undefined,
-      () => undefined
+      () => undefined,
     );
     return run;
   }
 
-  private async ensureLoaded(): Promise<void> {
-    if (this.messages !== null) return;
+  private async ensureLoaded(): Promise<PendingMessage[]> {
+    if (this.messages !== null) return this.messages;
     this.fileExists = await fs.pathExists(this.filePath);
     if (this.fileExists) {
       const text = await fs.readFile(this.filePath, "utf-8");
@@ -193,13 +193,14 @@ class MailboxLog {
     } else {
       this.messages = [];
     }
+    return this.messages;
   }
 
   append(message: PendingMessage): Promise<void> {
     return this.enqueue(async () => {
-      await this.ensureLoaded();
-      this.messages!.push(message);
-      await fs.appendFile(this.filePath, JSON.stringify(message) + "\n", "utf-8");
+      const messages = await this.ensureLoaded();
+      messages.push(message);
+      await fs.appendFile(this.filePath, `${JSON.stringify(message)}\n`, "utf-8");
       this.fileExists = true;
     });
   }
@@ -207,8 +208,7 @@ class MailboxLog {
   /** Atomically removes the whole queue (tied to delivery) and returns it. */
   drain(): Promise<PendingMessage[]> {
     return this.enqueue(async () => {
-      await this.ensureLoaded();
-      const delivered = this.messages!;
+      const delivered = await this.ensureLoaded();
       if (this.fileExists) {
         await fs.writeFile(this.filePath, "", "utf-8");
       }
@@ -220,8 +220,8 @@ class MailboxLog {
   /** Read the current queue without consuming it. */
   peek(): Promise<PendingMessage[] | null> {
     return this.enqueue(async () => {
-      await this.ensureLoaded();
-      return this.fileExists ? [...this.messages!] : null;
+      const messages = await this.ensureLoaded();
+      return this.fileExists ? [...messages] : null;
     });
   }
 
@@ -258,10 +258,7 @@ function getMailboxLog(sessionsDir: string, sessionId: string): MailboxLog {
   return log;
 }
 
-async function readTranscript(
-  sessionsDir: string,
-  sessionId: string
-): Promise<SessionData | null> {
+async function readTranscript(sessionsDir: string, sessionId: string): Promise<SessionData | null> {
   const filePath = path.join(sessionsDir, `${sessionId}.json`);
   if (await fs.pathExists(filePath)) {
     return fs.readJson(filePath);
@@ -331,13 +328,11 @@ export class SessionStore {
         cleanSession({
           ...session,
           mailbox: mailbox ?? session.mailbox ?? [],
-        })
+        }),
       );
     }
 
-    return result.sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async delete(sessionId: string): Promise<void> {

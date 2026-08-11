@@ -1,17 +1,17 @@
-'use client';
+"use client";
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import type { InboxItem } from '@/stores/inbox-store';
-import { usePluginStore } from '@/stores/plugin-store';
-import { resolveRenderer, fallbackRenderer } from '@/plugins/registry';
-import { InboxHeaderActionsContext } from './header-actions';
+import { type ReactNode, useCallback, useMemo, useState } from "react";
+import { fallbackRenderer, resolveRenderer } from "@/plugins/registry";
+import type { InboxItem } from "@/stores/inbox-store";
+import { usePluginStore } from "@/stores/plugin-store";
+import { InboxHeaderActionsContext } from "./header-actions";
 
 interface InboxItemViewProps {
   item: InboxItem;
 }
 
 export function InboxItemView({ item }: InboxItemViewProps) {
-  const content = item.content ?? '';
+  const content = item.content ?? "";
   const type = item.type.toLowerCase();
   const getRenderer = usePluginStore((s) => s.getRenderer);
   const [headerActions, setHeaderActions] = useState<ReactNode>(null);
@@ -21,12 +21,12 @@ export function InboxItemView({ item }: InboxItemViewProps) {
 
   const rendererItem = useMemo(
     () => ({ name: item.name, type: item.type, path: item.id }),
-    [item.name, item.type, item.id]
+    [item.name, item.type, item.id],
   );
 
   const entry = getRenderer(type);
   const Renderer = entry
-    ? resolveRenderer(entry.componentKey) ?? fallbackRenderer
+    ? (resolveRenderer(entry.componentKey) ?? fallbackRenderer)
     : fallbackRenderer;
 
   return (

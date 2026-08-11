@@ -1,60 +1,60 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  Folder,
-  FolderOpen,
-  FolderPlus,
+  Copy,
+  ExternalLink,
   File,
-  FileText,
+  FileArchive,
   FileCode,
   FileImage,
   FileSpreadsheet,
-  FileArchive,
-  RefreshCw,
-  Copy,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
   MessageSquare,
+  RefreshCw,
   Trash2,
-  ExternalLink,
-} from 'lucide-react';
-import {
-  fetchInboxTree,
-  moveInboxItem,
-  deleteInboxItem,
-  createInboxDir,
-  openInboxItem,
-  type InboxTreeEntry,
-} from '@/lib/api';
-import { useInboxWorkspaceStore } from '@/stores/inbox-workspace-store';
-import { useChatInputStore } from '@/stores/chat-input-store';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
+} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from '@/components/ui/context-menu';
+} from "@/components/ui/context-menu";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  createInboxDir,
+  deleteInboxItem,
+  fetchInboxTree,
+  type InboxTreeEntry,
+  moveInboxItem,
+  openInboxItem,
+} from "@/lib/api";
+import { useChatInputStore } from "@/stores/chat-input-store";
+import { useInboxWorkspaceStore } from "@/stores/inbox-workspace-store";
 
 function fileIcon(name: string) {
-  const ext = name.split('.').pop()?.toLowerCase() ?? '';
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return FileImage;
-  if (['csv', 'tsv', 'xlsx'].includes(ext)) return FileSpreadsheet;
-  if (['zip', 'tar', 'gz', 'rar', '7z'].includes(ext)) return FileArchive;
-  if (['ts', 'tsx', 'js', 'jsx', 'py', 'rs', 'go', 'java', 'c', 'cpp'].includes(ext))
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return FileImage;
+  if (["csv", "tsv", "xlsx"].includes(ext)) return FileSpreadsheet;
+  if (["zip", "tar", "gz", "rar", "7z"].includes(ext)) return FileArchive;
+  if (["ts", "tsx", "js", "jsx", "py", "rs", "go", "java", "c", "cpp"].includes(ext))
     return FileCode;
-  if (['md', 'markdown', 'txt', 'log'].includes(ext)) return FileText;
+  if (["md", "markdown", "txt", "log"].includes(ext)) return FileText;
   return File;
 }
 
 function dirnameOf(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i === -1 ? '' : p.slice(0, i);
+  const i = p.lastIndexOf("/");
+  return i === -1 ? "" : p.slice(0, i);
 }
 
 interface MenuHandlers {
@@ -64,6 +64,8 @@ interface MenuHandlers {
   onDelete: (entry: InboxTreeEntry) => void;
   onOpenExplorer: (entry: InboxTreeEntry) => void;
 }
+
+const LOADING_PLACEHOLDERS = Array.from({ length: 8 }, (_, index) => `placeholder-${index + 1}`);
 
 interface MoveHandlers {
   dragPath: string | null;
@@ -85,17 +87,11 @@ function RowMenu({
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-56">
-        <ContextMenuItem
-          className="gap-2"
-          onClick={() => menu.onCopy(entry.absPath)}
-        >
+        <ContextMenuItem className="gap-2" onClick={() => menu.onCopy(entry.absPath)}>
           <Copy className="h-4 w-4" />
           Copy path
         </ContextMenuItem>
-        <ContextMenuItem
-          className="gap-2"
-          onClick={() => menu.onAddToChat(entry.absPath)}
-        >
+        <ContextMenuItem className="gap-2" onClick={() => menu.onAddToChat(entry.absPath)}>
           <MessageSquare className="h-4 w-4" />
           Add path to chat
         </ContextMenuItem>
@@ -103,9 +99,7 @@ function RowMenu({
         <ContextMenuItem
           className="gap-2"
           onClick={() =>
-            menu.onCreateFolder(
-              entry.type === 'dir' ? entry.path : dirnameOf(entry.path)
-            )
+            menu.onCreateFolder(entry.type === "dir" ? entry.path : dirnameOf(entry.path))
           }
         >
           <FolderPlus className="h-4 w-4" />
@@ -119,10 +113,7 @@ function RowMenu({
           Delete
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem
-          className="gap-2"
-          onClick={() => menu.onOpenExplorer(entry)}
-        >
+        <ContextMenuItem className="gap-2" onClick={() => menu.onOpenExplorer(entry)}>
           <ExternalLink className="h-4 w-4" />
           Open in explorer
         </ContextMenuItem>
@@ -150,7 +141,9 @@ function FileRow({
   move: MoveHandlers;
   menu: MenuHandlers;
 }) {
-  if (entry.type === 'dir') {
+  const select = useInboxWorkspaceStore((s) => s.setSelectedPath);
+
+  if (entry.type === "dir") {
     return (
       <DirRow
         entry={entry}
@@ -166,24 +159,24 @@ function FileRow({
   }
   const Icon = fileIcon(entry.name);
   const isActive = entry.path === selectedPath;
-  const select = useInboxWorkspaceStore((s) => s.setSelectedPath);
 
   return (
     <RowMenu entry={entry} menu={menu}>
       <button
+        type="button"
         draggable
         onClick={() => select(entry.path)}
         onDragStart={(e) => {
-          e.dataTransfer.setData('text/plain', entry.path);
-          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData("text/plain", entry.path);
+          e.dataTransfer.effectAllowed = "move";
           move.onDragStart(entry.path);
         }}
         onDragEnd={move.onDragEnd}
         className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
           isActive
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground'
-        } ${move.dragPath === entry.path ? 'opacity-40' : ''}`}
+            ? "bg-accent text-accent-foreground"
+            : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground"
+        } ${move.dragPath === entry.path ? "opacity-40" : ""}`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         <Icon className="h-4 w-4 shrink-0" />
@@ -219,32 +212,33 @@ function DirRow({
     <div>
       <RowMenu entry={entry} menu={menu}>
         <button
+          type="button"
           draggable
           onClick={() => setOpen((o) => !o)}
           onDragStart={(e) => {
-            e.dataTransfer.setData('text/plain', entry.path);
-            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData("text/plain", entry.path);
+            e.dataTransfer.effectAllowed = "move";
             move.onDragStart(entry.path);
           }}
           onDragEnd={move.onDragEnd}
           onDragOver={(e) => {
             if (!move.dragPath || move.dragPath === entry.path) return;
             e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
+            e.dataTransfer.dropEffect = "move";
             onDropHover(entry.path);
           }}
           onDragLeave={onDropLeave}
           onDrop={(e) => {
             e.preventDefault();
             onDropLeave();
-            const from = e.dataTransfer.getData('text/plain');
+            const from = e.dataTransfer.getData("text/plain");
             if (from && from !== entry.path) move.onMove(from, entry.path);
           }}
           className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors ${
             isDropTarget
-              ? 'bg-blue-100 text-blue-900 ring-1 ring-blue-400 dark:bg-blue-950/50 dark:text-blue-200'
-              : 'hover:bg-accent/60 hover:text-accent-foreground'
-          } ${move.dragPath === entry.path ? 'opacity-40' : ''}`}
+              ? "bg-blue-100 text-blue-900 ring-1 ring-blue-400 dark:bg-blue-950/50 dark:text-blue-200"
+              : "hover:bg-accent/60 hover:text-accent-foreground"
+          } ${move.dragPath === entry.path ? "opacity-40" : ""}`}
           style={{ paddingLeft: `${depth * 16 + 4}px` }}
         >
           {open ? (
@@ -298,21 +292,21 @@ export function FileExplorer({
   const setSelectedPath = useInboxWorkspaceStore((s) => s.setSelectedPath);
   const prefillChat = useChatInputStore((s) => s.prefill);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       setTree(await fetchInboxTree());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load inbox');
+      setError(err instanceof Error ? err.message : "Failed to load inbox");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    load();
-  }, []);
+    void load();
+  }, [load]);
 
   const move = async (from: string, toDir: string) => {
     if (!from || from === toDir) return;
@@ -320,7 +314,7 @@ export function FileExplorer({
       await moveInboxItem(from, toDir);
       await load();
       if (selectedPath) {
-        const base = from.split('/').pop() ?? from;
+        const base = from.split("/").pop() ?? from;
         const prefix = toDir ? `${toDir}/${base}` : base;
         if (selectedPath === from) {
           setSelectedPath(prefix);
@@ -329,7 +323,7 @@ export function FileExplorer({
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to move item');
+      setError(err instanceof Error ? err.message : "Failed to move item");
     } finally {
       setDragPath(null);
       setHoveredDropPath(null);
@@ -348,22 +342,24 @@ export function FileExplorer({
       try {
         await navigator.clipboard.writeText(path);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to copy path');
+        setError(err instanceof Error ? err.message : "Failed to copy path");
       }
     },
-    onAddToChat: (path) => prefillChat(path),    onCreateFolder: async (parent) => {
-      const name = window.prompt('Folder name');
+    onAddToChat: (path) => prefillChat(path),
+    onCreateFolder: async (parent) => {
+      const name = window.prompt("Folder name");
       if (!name?.trim()) return;
       const target = parent ? `${parent}/${name.trim()}` : name.trim();
       try {
         await createInboxDir(target);
         await load();
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to create folder');
+        setError(err instanceof Error ? err.message : "Failed to create folder");
       }
     },
     onDelete: async (entry) => {
-      const label = entry.type === 'dir' ? `folder "${entry.name}" and its contents` : `"${entry.name}"`;
+      const label =
+        entry.type === "dir" ? `folder "${entry.name}" and its contents` : `"${entry.name}"`;
       if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
       try {
         await deleteInboxItem(entry.path);
@@ -372,14 +368,14 @@ export function FileExplorer({
           setSelectedPath(null);
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to delete item');
+        setError(err instanceof Error ? err.message : "Failed to delete item");
       }
     },
     onOpenExplorer: async (entry) => {
       try {
         await openInboxItem(entry.path);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to open in explorer');
+        setError(err instanceof Error ? err.message : "Failed to open in explorer");
       }
     },
   };
@@ -404,16 +400,14 @@ export function FileExplorer({
   const handleRootDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsRootDropTarget(false);
-    const from = e.dataTransfer.getData('text/plain');
-    if (from) move(from, '');
+    const from = e.dataTransfer.getData("text/plain");
+    if (from) move(from, "");
   };
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b bg-background px-3 py-2">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">
-          Inbox
-        </h2>
+        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">Inbox</h2>
         <div className="flex items-center gap-0.5">
           <Button
             variant="ghost"
@@ -444,11 +438,12 @@ export function FileExplorer({
         </div>
       )}
 
-      <div
+      <section
+        aria-label="Inbox files"
         onDragOver={(e) => {
           if (!dragPath) return;
           e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
+          e.dataTransfer.dropEffect = "move";
           setIsRootDropTarget(true);
         }}
         onDragLeave={(e) => {
@@ -457,13 +452,13 @@ export function FileExplorer({
         }}
         onDrop={handleRootDrop}
         className={`flex-1 overflow-y-auto p-1.5 ${
-          isRootDropTarget ? 'bg-blue-50 dark:bg-blue-950/30' : ''
+          isRootDropTarget ? "bg-blue-50 dark:bg-blue-950/30" : ""
         }`}
       >
         {loading && tree.length === 0 ? (
           <div className="space-y-1">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} className="h-7 w-full" />
+            {LOADING_PLACEHOLDERS.map((placeholder) => (
+              <Skeleton key={placeholder} className="h-7 w-full" />
             ))}
           </div>
         ) : tree.length === 0 ? (
@@ -485,7 +480,7 @@ export function FileExplorer({
             />
           ))
         )}
-      </div>
+      </section>
     </div>
   );
 }

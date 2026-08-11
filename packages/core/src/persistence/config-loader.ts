@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import matter from "gray-matter";
 import fg from "fast-glob";
+import matter from "gray-matter";
 import { z } from "zod";
 import type { AgentConfig, CapabilityMatrix } from "../agent/types.js";
 

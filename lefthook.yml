@@ -1,0 +1,19 @@
+min_version: 2.1.10
+
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      run: corepack npm run quality:staged
+      stage_fixed: true
+    docs:
+      run: corepack npm run docs:check
+    skills:
+      run: corepack npm run skills:validate
+    whitespace:
+      run: git diff --cached --check
+
+pre-push:
+  commands:
+    verify:
+      run: corepack npm run check

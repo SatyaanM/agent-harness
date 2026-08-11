@@ -3,13 +3,14 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineProject } from "vitest/config";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineProject({
   plugins: [react()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src"),
+      "@": path.resolve(currentDirectory, "src"),
+      "@agent-harness/core": path.resolve(currentDirectory, "../core/src/index.ts"),
     },
   },
   test: {

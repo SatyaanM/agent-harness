@@ -1,4 +1,4 @@
-import type { TTSProvider, TTSConfig, AudioChunk } from "./types.js";
+import type { AudioChunk, TTSConfig, TTSProvider } from "./types.js";
 
 const GEMINI_TTS_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent";
@@ -22,10 +22,7 @@ interface GeminiResponse {
 
 export function createGeminiTTSProvider(): TTSProvider {
   return {
-    async synthesize(
-      text: string,
-      config: TTSConfig
-    ): Promise<AsyncIterable<AudioChunk>> {
+    async synthesize(text: string, config: TTSConfig): Promise<AsyncIterable<AudioChunk>> {
       if (!config.apiKey) {
         throw new Error("Gemini API key is required");
       }
@@ -61,17 +58,13 @@ export function createGeminiTTSProvider(): TTSProvider {
       if (!response.ok) {
         const errorBody = await response.text();
         console.log("[gemini-tts] Error:", response.status, errorBody);
-        throw new Error(
-          `Gemini TTS request failed: ${response.status} - ${errorBody}`
-        );
+        throw new Error(`Gemini TTS request failed: ${response.status} - ${errorBody}`);
       }
 
       const result = (await response.json()) as GeminiResponse;
 
       if (result.error) {
-        throw new Error(
-          `Gemini TTS error: ${result.error.code} - ${result.error.message}`
-        );
+        throw new Error(`Gemini TTS error: ${result.error.code} - ${result.error.message}`);
       }
 
       const audioData = result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;

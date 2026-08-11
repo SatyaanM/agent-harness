@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  PluginManifestSchema,
-  type PluginManifest,
-} from "@agent-harness/core";
+import { type PluginManifest, PluginManifestSchema } from "@agent-harness/core";
 
 function findManifestFiles(dir: string): string[] {
   const results: string[] = [];
@@ -55,7 +52,7 @@ export class PluginRegistry {
 
   constructor(
     private pluginsDir: string,
-    harnessRoot: string
+    harnessRoot: string,
   ) {
     this.stateFile = path.join(harnessRoot, ".harness", "plugins-state.json");
     this.loadState();
@@ -92,11 +89,7 @@ export class PluginRegistry {
   private saveState(): void {
     try {
       fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
-      fs.writeFileSync(
-        this.stateFile,
-        JSON.stringify({ enabled: this.enabled }, null, 2),
-        "utf-8"
-      );
+      fs.writeFileSync(this.stateFile, JSON.stringify({ enabled: this.enabled }, null, 2), "utf-8");
     } catch (err) {
       console.error("[plugins] Failed to save state:", err);
     }

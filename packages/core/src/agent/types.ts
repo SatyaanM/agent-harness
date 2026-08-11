@@ -1,5 +1,3 @@
-import type { z } from "zod";
-
 export type TaskId = string;
 
 export interface AgentConfig {

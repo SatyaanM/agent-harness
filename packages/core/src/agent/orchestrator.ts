@@ -1,15 +1,14 @@
 import { v4 as uuidv4 } from "uuid";
-import type { AgentConfig, AgentResult, TaskId } from "./types.js";
-import { Agent } from "./agent.js";
-import { Worker } from "./worker.js";
-import type { ToolRegistry } from "../tool/types.js";
-import type { LLMClient } from "../llm/client.js";
-import type { CapabilityRegistry } from "../capability/registry.js";
-import { MessageBus } from "../collaboration/message-bus.js";
-import { SessionStore } from "../persistence/session.js";
-import type { SessionData } from "../persistence/session.js";
 import { z } from "zod";
-import type { Tool } from "../tool/types.js";
+import type { CapabilityRegistry } from "../capability/registry.js";
+import type { MessageBus } from "../collaboration/message-bus.js";
+import type { LLMClient } from "../llm/client.js";
+import type { SessionData } from "../persistence/session.js";
+import { SessionStore } from "../persistence/session.js";
+import type { Tool, ToolRegistry } from "../tool/types.js";
+import { Agent } from "./agent.js";
+import type { AgentConfig, AgentResult, TaskId } from "./types.js";
+import { Worker } from "./worker.js";
 
 export class Orchestrator {
   private readonly messageBus: MessageBus;

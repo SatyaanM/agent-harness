@@ -90,7 +90,10 @@ export class HookBus {
       } else {
         const prev = this.afterQueue.get(event) ?? Promise.resolve();
         const next = prev.then(() => this.runObserver(event, reg.handler, payload));
-        this.afterQueue.set(event, next.catch(() => undefined));
+        this.afterQueue.set(
+          event,
+          next.catch(() => undefined),
+        );
       }
     }
   }
@@ -109,7 +112,7 @@ export class HookBus {
   private async runObserver(
     event: string,
     handler: LifecycleObserver,
-    payload: LifecyclePayload
+    payload: LifecyclePayload,
   ): Promise<void> {
     try {
       await handler(payload);

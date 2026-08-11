@@ -1,9 +1,9 @@
-import { z } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import { getConfig } from "../config.js";
-import { assertWithinRoot } from "./utils.js";
 import type { Tool } from "./types.js";
+import { assertWithinRoot } from "./utils.js";
 
 const GrepParams = z.object({
   pattern: z.string().min(1),
@@ -17,11 +17,7 @@ interface Match {
   text: string;
 }
 
-async function searchFile(
-  filePath: string,
-  regex: RegExp,
-  root: string,
-): Promise<Match[]> {
+async function searchFile(filePath: string, regex: RegExp, root: string): Promise<Match[]> {
   const content = await fs.readFile(filePath, "utf-8").catch(() => null);
   if (content === null) return [];
 
@@ -63,7 +59,8 @@ function matchesInclude(filename: string, include: string[]): boolean {
 
 export const grepTool: Tool<typeof GrepParams> = {
   name: "grep",
-  description: "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers.",
+  description:
+    "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers.",
   parameters: GrepParams,
 
   async execute(args) {
@@ -99,8 +96,6 @@ export const grepTool: Tool<typeof GrepParams> = {
       return "No matches found.";
     }
 
-    return results
-      .map((m) => `${m.file}:${m.line}: ${m.text}`)
-      .join("\n");
+    return results.map((m) => `${m.file}:${m.line}: ${m.text}`).join("\n");
   },
 };

@@ -1,16 +1,16 @@
-'use client';
+"use client";
 
-import { useEffect, useRef } from 'react';
-import { useSessionStore } from '@/stores/session-store';
-import { useRuntimeStore } from '@/stores/runtime-store';
-import { useRosterStore } from '@/stores/agent-roster-store';
-import { connectSocket } from '@/lib/ws';
-import { fetchOpenSessions, fetchSession, updateOpenSessions } from '@/lib/api';
+import { useEffect, useRef } from "react";
+import { fetchOpenSessions, fetchSession, updateOpenSessions } from "@/lib/api";
+import { connectSocket } from "@/lib/ws";
+import { useRosterStore } from "@/stores/agent-roster-store";
+import { useRuntimeStore } from "@/stores/runtime-store";
+import { useSessionStore } from "@/stores/session-store";
 
 interface ToolEventPayload {
   sessionId: string;
   agentName: string;
-  tool: { type: 'called' | 'completed'; toolName: string; args?: unknown; result?: string };
+  tool: { type: "called" | "completed"; toolName: string; args?: unknown; result?: string };
 }
 
 interface SessionUpdatedPayload {
@@ -19,7 +19,7 @@ interface SessionUpdatedPayload {
   title?: string;
   createdAt?: string;
   messages: Array<{
-    role: 'system' | 'user' | 'assistant' | 'tool';
+    role: "system" | "user" | "assistant" | "tool";
     content: string;
     reasoning?: string;
     toolCalls?: Array<{ toolCallId: string; toolName: string; args: Record<string, unknown> }>;
@@ -40,7 +40,7 @@ interface WorkerCompletedPayload {
   sessionId: string;
   taskId: string;
   agentName: string;
-  status: 'done' | 'error' | 'cancelled';
+  status: "done" | "error" | "cancelled";
   summary: string;
 }
 
@@ -57,22 +57,17 @@ export default function RuntimeSync() {
       try {
         const open = await fetchOpenSessions();
         const restored = (
-          await Promise.all(
-            open.openSessionIds.map((id) => fetchSession(id).catch(() => null))
-          )
+          await Promise.all(open.openSessionIds.map((id) => fetchSession(id).catch(() => null)))
         ).filter((s): s is NonNullable<typeof s> => s !== null);
         if (cancelled) return;
 
         useSessionStore.getState().hydrate(restored);
         const openIds = new Set(open.openSessionIds);
-        const validActive =
-          open.activeSessionId !== null && openIds.has(open.activeSessionId);
-        const active = validActive
-          ? open.activeSessionId
-          : restored[0]?.sessionId ?? null;
+        const validActive = open.activeSessionId !== null && openIds.has(open.activeSessionId);
+        const active = validActive ? open.activeSessionId : (restored[0]?.sessionId ?? null);
         if (active) useSessionStore.getState().setActiveSession(active);
       } catch (err) {
-        console.error('[RuntimeSync] hydration failed:', err);
+        console.error("[RuntimeSync] hydration failed:", err);
       } finally {
         hydrated.current = true;
       }
@@ -88,7 +83,7 @@ export default function RuntimeSync() {
     updateOpenSessions({
       activeSessionId,
       openSessionIds: sessions.map((s) => s.sessionId),
-    }).catch((err) => console.error('[RuntimeSync] registry sync failed:', err));
+    }).catch((err) => console.error("[RuntimeSync] registry sync failed:", err));
   }, [sessions, activeSessionId]);
 
   useEffect(() => {
@@ -124,7 +119,7 @@ export default function RuntimeSync() {
         name: `worker-${data.taskId.slice(0, 6)}`,
         taskId: data.taskId,
         task: data.task,
-        status: 'running',
+        status: "running",
       });
     };
 
@@ -132,22 +127,22 @@ export default function RuntimeSync() {
       useRosterStore.getState().setWorkerStatus(data.sessionId, data.taskId, data.status);
     };
 
-    socket.on('session:updated', onSessionUpdated);
-    socket.on('agent:tool', onTool);
-    socket.on('agent:started', onAgentStarted);
-    socket.on('agent:completed', onAgentDone);
-    socket.on('agent:error', onAgentDone);
-    socket.on('worker:spawned', onWorkerSpawned);
-    socket.on('worker:completed', onWorkerCompleted);
+    socket.on("session:updated", onSessionUpdated);
+    socket.on("agent:tool", onTool);
+    socket.on("agent:started", onAgentStarted);
+    socket.on("agent:completed", onAgentDone);
+    socket.on("agent:error", onAgentDone);
+    socket.on("worker:spawned", onWorkerSpawned);
+    socket.on("worker:completed", onWorkerCompleted);
 
     return () => {
-      socket.off('session:updated', onSessionUpdated);
-      socket.off('agent:tool', onTool);
-      socket.off('agent:started', onAgentStarted);
-      socket.off('agent:completed', onAgentDone);
-      socket.off('agent:error', onAgentDone);
-      socket.off('worker:spawned', onWorkerSpawned);
-      socket.off('worker:completed', onWorkerCompleted);
+      socket.off("session:updated", onSessionUpdated);
+      socket.off("agent:tool", onTool);
+      socket.off("agent:started", onAgentStarted);
+      socket.off("agent:completed", onAgentDone);
+      socket.off("agent:error", onAgentDone);
+      socket.off("worker:spawned", onWorkerSpawned);
+      socket.off("worker:completed", onWorkerCompleted);
     };
   }, []);
 

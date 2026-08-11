@@ -1,9 +1,9 @@
-import { z } from "zod";
-import fg from "fast-glob";
 import path from "node:path";
+import fg from "fast-glob";
+import { z } from "zod";
 import { getConfig } from "../config.js";
-import { assertWithinRoot } from "./utils.js";
 import type { Tool } from "./types.js";
+import { assertWithinRoot } from "./utils.js";
 
 const GlobParams = z.object({
   pattern: z.string().min(1),
@@ -12,7 +12,8 @@ const GlobParams = z.object({
 
 export const globTool: Tool<typeof GlobParams> = {
   name: "glob",
-  description: "Find files by glob pattern. Returns matching file paths relative to the project root.",
+  description:
+    "Find files by glob pattern. Returns matching file paths relative to the project root.",
   parameters: GlobParams,
 
   async execute(args) {

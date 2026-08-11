@@ -1,6 +1,6 @@
-import { z } from "zod";
 import path from "node:path";
 import fs from "fs-extra";
+import { z } from "zod";
 import type { Tool } from "./types.js";
 
 function assertWithinRoot(resolvedPath: string, root: string): void {
@@ -37,13 +37,14 @@ const parameters = z.object({
 export function createEditFileTool(root: string): Tool<typeof parameters> {
   return {
     name: "editFile",
-    description: "Perform a targeted text replacement in a file. Replaces the first occurrence of oldText with newText.",
+    description:
+      "Perform a targeted text replacement in a file. Replaces the first occurrence of oldText with newText.",
     parameters,
     async execute({ path: filePath, oldText, newText }) {
       const resolved = path.resolve(root, filePath);
       assertWithinRoot(resolved, root);
 
-      if (!await fs.pathExists(resolved)) {
+      if (!(await fs.pathExists(resolved))) {
         return `Error: File not found: ${filePath}`;
       }
 

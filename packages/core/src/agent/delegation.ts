@@ -1,13 +1,13 @@
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
+import type { CapabilityRegistry } from "../capability/registry.js";
+import { messageBus } from "../collaboration/message-bus.js";
+import type { LLMClient } from "../llm/client.js";
+import type { PendingMessage } from "../persistence/session.js";
+import { SessionStore } from "../persistence/session.js";
+import type { Tool, ToolRegistry } from "../tool/types.js";
 import type { AgentConfig, TaskId } from "./types.js";
 import { Worker } from "./worker.js";
-import type { Tool, ToolRegistry } from "../tool/types.js";
-import type { LLMClient } from "../llm/client.js";
-import type { CapabilityRegistry } from "../capability/registry.js";
-import { SessionStore } from "../persistence/session.js";
-import type { PendingMessage } from "../persistence/session.js";
-import { messageBus } from "../collaboration/message-bus.js";
 
 export interface DelegationDeps {
   sessionsDir: string;
@@ -20,14 +20,14 @@ export interface DelegationDeps {
     taskId: TaskId,
     workerSessionId: string,
     task: string,
-    abort: AbortController
+    abort: AbortController,
   ) => void;
   onWorkerCompleted?: (delegatingSessionId: string, pending: PendingMessage) => void;
   onWorkerTool?: (
     workerSessionId: string,
     event:
       | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
-      | { type: "tool:completed"; toolName: string; result?: string }
+      | { type: "tool:completed"; toolName: string; result?: string },
   ) => void;
 }
 
@@ -38,7 +38,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
       .string()
       .optional()
       .describe(
-        "The model to use for the worker agent. Omit this to inherit the delegating agent's own model, which is guaranteed to be supported."
+        "The model to use for the worker agent. Omit this to inherit the delegating agent's own model, which is guaranteed to be supported.",
       ),
   });
 

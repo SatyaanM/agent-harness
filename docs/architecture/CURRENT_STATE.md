@@ -7,7 +7,7 @@ read_when:
 
 # Current architecture
 
-This document describes source inspected on 2026-08-10. It treats code and passing tests as implementation evidence. `README.md`, `docs/ARCHITECTURE_DECISIONS.md`, and feature specs still contain intent that is not wired into the current application; those claims are called out rather than silently promoted to current behavior.
+This document describes source inspected through 2026-08-11. It treats code and passing tests as implementation evidence. `README.md`, `docs/ARCHITECTURE_DECISIONS.md`, and feature specs still contain intent that is not wired into the current application; those claims are called out rather than silently promoted to current behavior.
 
 ## Executed application path
 
@@ -114,7 +114,7 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 
 ## Verification reality
 
-The normal Vitest run currently discovers four test files and eight tests:
+The root Vitest project matrix currently discovers four test files and eight tests:
 
 - core configuration parsing/defaults: three tests;
 - server health route: one test;
@@ -122,6 +122,8 @@ The normal Vitest run currently discovers four test files and eight tests:
 - dashboard error boundary: two tests.
 
 [`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) is a manual console script, not part of the configured Vitest suite. There are no automated tests for `SessionStore`, mailbox ordering/drain, `SessionRuntime`, delegation/wake behavior, cancellation, session routes, plugin discovery, provider routing, or dashboard resynchronization. The current build and typecheck are green, but the highest-value runtime invariants are largely protected by prose rather than executable evidence.
+
+`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The 2026-08-11 baseline is 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. No threshold is enforced yet: coverage reporting is present to make the gap measurable, not to imply that the current sparse suite is sufficient.
 
 ## Immediate architecture risks
 

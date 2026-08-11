@@ -1,11 +1,11 @@
 import { v4 as uuidv4 } from "uuid";
-import type { AgentConfig, AgentResult } from "./types.js";
-import { Agent } from "./agent.js";
-import type { ToolRegistry } from "../tool/types.js";
-import type { LLMClient } from "../llm/client.js";
 import type { CapabilityRegistry } from "../capability/registry.js";
-import { SessionStore } from "../persistence/session.js";
+import type { LLMClient } from "../llm/client.js";
 import type { SessionData } from "../persistence/session.js";
+import { SessionStore } from "../persistence/session.js";
+import type { ToolRegistry } from "../tool/types.js";
+import { Agent } from "./agent.js";
+import type { AgentConfig, AgentResult } from "./types.js";
 
 export type SessionRuntimeEvent =
   | { sessionId: string; type: "agent:started"; agentName: string }
@@ -182,9 +182,9 @@ export class SessionRuntime {
     // audit of what the agent did. Slice off the history that was passed in
     // (baseHistory + deliveredSystem + the prompt agent.run re-added), keeping
     // only the messages this run actually produced.
-    const appended = result.messages.slice(
-      baseHistory.length + deliveredSystem.length + (message ? 1 : 0)
-    ).map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
+    const appended = result.messages
+      .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
+      .map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
     session.messages.push(...appended);
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = now;

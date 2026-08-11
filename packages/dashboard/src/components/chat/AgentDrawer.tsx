@@ -1,21 +1,21 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { useShallow } from 'zustand/react/shallow';
-import { GripVertical, Maximize2, Minimize2, Square, X } from 'lucide-react';
-import { useRuntimeStore } from '@/stores/runtime-store';
-import { useRosterStore } from '@/stores/agent-roster-store';
-import { cancelWorker, fetchSession } from '@/lib/api';
+import { GripVertical, Maximize2, Minimize2, Square, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
+import { cancelWorker, fetchSession } from "@/lib/api";
+import { useRosterStore } from "@/stores/agent-roster-store";
+import { useRuntimeStore } from "@/stores/runtime-store";
 
 const DEFAULT_WIDTH = 360;
 const MIN_WIDTH = 280;
-const STORAGE_KEY = 'agent-drawer-width';
+const STORAGE_KEY = "agent-drawer-width";
 
 interface DrawerAgent {
   id: string;
   name: string;
-  role: 'primary' | 'worker';
+  role: "primary" | "worker";
   status: string;
   taskId?: string;
   task?: string;
@@ -29,22 +29,45 @@ interface AgentDrawerProps {
   onClose: () => void;
 }
 
+interface TranscriptToolCall {
+  id?: string;
+  toolName: string;
+  args?: unknown;
+}
+
+interface TranscriptMessageData {
+  id?: string;
+  role: string;
+  content?: string;
+  reasoning?: string;
+  createdAt?: string;
+  toolCalls?: TranscriptToolCall[];
+}
+
+interface WorkerTranscript {
+  messages?: TranscriptMessageData[];
+}
+
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 function StatusDot({ status }: { status: string }) {
   const color =
-    status === 'running'
-      ? 'bg-green-500 animate-pulse'
-      : status === 'error'
-        ? 'bg-red-500'
-        : status === 'cancelled'
-          ? 'bg-amber-500'
-          : status === 'done'
-            ? 'bg-emerald-500'
-            : 'bg-zinc-400';
-  return <span className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${color}`} />;
+    status === "running"
+      ? "bg-green-500 animate-pulse"
+      : status === "error"
+        ? "bg-red-500"
+        : status === "cancelled"
+          ? "bg-amber-500"
+          : status === "done"
+            ? "bg-emerald-500"
+            : "bg-zinc-400";
+  return (
+    <span
+      className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${color}`}
+    />
+  );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -73,10 +96,11 @@ function Disclosure({
   return (
     <div className="my-1 overflow-hidden rounded border border-border bg-muted/30">
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex w-full min-w-0 items-center gap-1.5 px-2 py-1 text-left font-mono text-[11px] text-foreground transition-colors hover:bg-muted/50"
       >
-        <span className="text-muted-foreground">{open ? '▾' : '▸'}</span>
+        <span className="text-muted-foreground">{open ? "▾" : "▸"}</span>
         <span className="shrink-0">{label}</span>
         <span className="min-w-0 truncate text-muted-foreground">{preview}</span>
       </button>
@@ -91,30 +115,38 @@ function Disclosure({
   );
 }
 
-function TranscriptMessage({ m, index }: { m: any; index: number }) {
+function TranscriptMessage({ m }: { m: TranscriptMessageData }) {
   const roleLabel =
-    m.role === 'tool'
-      ? '✓ result'
-      : m.role === 'assistant'
-        ? 'assistant'
-        : m.role === 'user'
-          ? 'user'
+    m.role === "tool"
+      ? "✓ result"
+      : m.role === "assistant"
+        ? "assistant"
+        : m.role === "user"
+          ? "user"
           : m.role;
   return (
-    <div key={index} className="space-y-1">
+    <div className="space-y-1">
       <div className="font-medium text-muted-foreground">{roleLabel}</div>
       {m.reasoning ? (
         <Disclosure label="reasoning" preview={truncate(m.reasoning, 60)}>
           {m.reasoning}
         </Disclosure>
       ) : null}
-      {m.toolCalls?.map((tc: any, j: number) => (
-        <Disclosure key={j} label={`⚙ ${tc.toolName}`} preview={truncate(JSON.stringify(tc.args ?? {}), 80)}>
+      {m.toolCalls?.map((tc, index) => (
+        <Disclosure
+          // biome-ignore lint/suspicious/noArrayIndexKey: Persisted transcript tool-call order is immutable and legacy calls may not have IDs.
+          key={index}
+          label={`⚙ ${tc.toolName}`}
+          preview={truncate(JSON.stringify(tc.args ?? {}), 80)}
+        >
           {JSON.stringify(tc.args ?? {}, null, 2)}
         </Disclosure>
       ))}
       {m.content ? (
-        <Disclosure label={m.role === 'tool' ? 'result' : 'content'} preview={truncate(m.content, 80)}>
+        <Disclosure
+          label={m.role === "tool" ? "result" : "content"}
+          preview={truncate(m.content, 80)}
+        >
           {m.content}
         </Disclosure>
       ) : null}
@@ -130,7 +162,7 @@ export default function AgentDrawer({
   onClose,
 }: AgentDrawerProps) {
   const targetRef = useRef<number>(DEFAULT_WIDTH);
-  if (targetRef.current === DEFAULT_WIDTH && typeof window !== 'undefined') {
+  if (targetRef.current === DEFAULT_WIDTH && typeof window !== "undefined") {
     const stored = Number(sessionStorage.getItem(STORAGE_KEY));
     targetRef.current = Number.isFinite(stored) && stored >= MIN_WIDTH ? stored : DEFAULT_WIDTH;
   }
@@ -144,14 +176,14 @@ export default function AgentDrawer({
   const myActivity = activity.filter((a) => a.agentName === agent.id).slice(-50);
   const workers = useRosterStore(useShallow((s) => s.bySession[sessionId] ?? []));
 
-  const [transcript, setTranscript] = useState<any>(null);
+  const [transcript, setTranscript] = useState<WorkerTranscript | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
 
   // Open: slide out from under the chat (width 0 → target).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The opening animation runs once; resize and drag handlers own later width changes.
   useEffect(() => {
     const id = requestAnimationFrame(() => setWidth(contentWidth));
     return () => cancelAnimationFrame(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Close: retract back under the chat (width → 0).
@@ -161,7 +193,7 @@ export default function AgentDrawer({
 
   // Worker transcript: poll while running so progressive saves show up live.
   useEffect(() => {
-    if (agent.role !== 'worker' || !agent.id) {
+    if (agent.role !== "worker" || !agent.id) {
       setTranscript(null);
       return;
     }
@@ -170,7 +202,7 @@ export default function AgentDrawer({
       fetchSession(agent.id)
         .then((data) => {
           if (cancelled) return;
-          setTranscript(data);
+          setTranscript(data as WorkerTranscript);
           setTranscriptLoading(false);
         })
         .catch(() => {});
@@ -215,13 +247,13 @@ export default function AgentDrawer({
       const onUp = () => {
         setDragging(false);
         sessionStorage.setItem(STORAGE_KEY, String(targetRef.current));
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
       };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
     },
-    [chatLeft, maxAvailable]
+    [chatLeft, maxAvailable],
   );
 
   return createPortal(
@@ -230,9 +262,9 @@ export default function AgentDrawer({
       style={{
         right: `calc(100vw - ${chatLeft}px)`,
         width: Math.min(width, maxAvailable),
-        overflow: 'hidden',
-        transition: dragging ? 'none' : 'width 250ms ease',
-        pointerEvents: visible ? 'auto' : 'none',
+        overflow: "hidden",
+        transition: dragging ? "none" : "width 250ms ease",
+        pointerEvents: visible ? "auto" : "none",
       }}
     >
       <div
@@ -251,7 +283,7 @@ export default function AgentDrawer({
           <div className="relative">
             <div
               className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold text-white ${
-                agent.role === 'primary' ? 'bg-blue-600' : 'bg-zinc-600'
+                agent.role === "primary" ? "bg-blue-600" : "bg-zinc-600"
               }`}
             >
               {agent.name.charAt(0).toUpperCase()}
@@ -261,10 +293,11 @@ export default function AgentDrawer({
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold text-foreground">{agent.name}</div>
             <div className="text-xs capitalize text-muted-foreground">
-              {agent.role === 'worker' ? 'worker' : 'agent'} · {agent.status}
+              {agent.role === "worker" ? "worker" : "agent"} · {agent.status}
             </div>
           </div>
           <button
+            type="button"
             onClick={snapDefault}
             title="Default width"
             className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -272,23 +305,26 @@ export default function AgentDrawer({
             <Minimize2 className="h-4 w-4" />
           </button>
           <button
+            type="button"
             onClick={snapMax}
             title="Max width"
             className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <Maximize2 className="h-4 w-4" />
           </button>
-          {agent.role === 'worker' && agent.status === 'running' && (
+          {agent.role === "worker" && agent.status === "running" && (
             <button
+              type="button"
               onClick={handleCancel}
               disabled={cancelling}
               title="Stop worker"
               className="rounded p-1.5 text-red-500 transition-colors hover:bg-red-500/10"
             >
-              <Square className={cancelling ? 'animate-pulse h-4 w-4' : 'h-4 w-4'} />
+              <Square className={cancelling ? "animate-pulse h-4 w-4" : "h-4 w-4"} />
             </button>
           )}
           <button
+            type="button"
             onClick={onClose}
             title="Close"
             className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -298,13 +334,13 @@ export default function AgentDrawer({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {agent.role === 'worker' && agent.task && (
+          {agent.role === "worker" && agent.task && (
             <Section title="Task">
               <p className="whitespace-pre-wrap text-xs text-muted-foreground">{agent.task}</p>
             </Section>
           )}
 
-          {agent.role === 'primary' && (
+          {agent.role === "primary" && (
             <Section title="Delegated work">
               {workers.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No workers delegated yet.</p>
@@ -312,17 +348,17 @@ export default function AgentDrawer({
                 <ul className="space-y-1">
                   {workers.map((w) => (
                     <li key={w.id} className="flex items-center gap-2 text-xs">
-                    <span
-                      className={`h-2 w-2 shrink-0 rounded-full ${
-                        w.status === 'running'
-                          ? 'animate-pulse bg-green-500'
-                          : w.status === 'error'
-                            ? 'bg-red-500'
-                            : w.status === 'cancelled'
-                              ? 'bg-amber-500'
-                              : 'bg-emerald-500'
-                      }`}
-                    />
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${
+                          w.status === "running"
+                            ? "animate-pulse bg-green-500"
+                            : w.status === "error"
+                              ? "bg-red-500"
+                              : w.status === "cancelled"
+                                ? "bg-amber-500"
+                                : "bg-emerald-500"
+                        }`}
+                      />
                       <span className="truncate">{w.name}</span>
                       <span className="ml-auto text-muted-foreground">{w.status}</span>
                     </li>
@@ -332,14 +368,15 @@ export default function AgentDrawer({
             </Section>
           )}
 
-          {agent.role === 'worker' && (
+          {agent.role === "worker" && (
             <Section title="Transcript">
               {transcriptLoading ? (
                 <p className="text-xs text-muted-foreground">Loading…</p>
               ) : transcript?.messages?.length ? (
                 <div className="space-y-2">
-                  {transcript.messages.map((m: any, i: number) => (
-                    <TranscriptMessage key={i} m={m} index={i} />
+                  {transcript.messages.map((m, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: Persisted transcript order is immutable and legacy messages may not have IDs.
+                    <TranscriptMessage key={index} m={m} />
                   ))}
                 </div>
               ) : (
@@ -355,12 +392,14 @@ export default function AgentDrawer({
               <ul className="space-y-1">
                 {myActivity.map((a) => (
                   <li key={a.id} className="flex items-start gap-1.5 text-xs">
-                    <span className={a.type === 'called' ? 'text-blue-500' : 'text-emerald-500'}>
-                      {a.type === 'called' ? '→' : '✓'}
+                    <span className={a.type === "called" ? "text-blue-500" : "text-emerald-500"}>
+                      {a.type === "called" ? "→" : "✓"}
                     </span>
                     <span className="font-mono text-foreground">{a.toolName}</span>
-                    {a.type === 'completed' && a.result ? (
-                      <span className="truncate text-muted-foreground">{truncate(a.result, 80)}</span>
+                    {a.type === "completed" && a.result ? (
+                      <span className="truncate text-muted-foreground">
+                        {truncate(a.result, 80)}
+                      </span>
                     ) : null}
                   </li>
                 ))}
@@ -370,6 +409,6 @@ export default function AgentDrawer({
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   );
 }

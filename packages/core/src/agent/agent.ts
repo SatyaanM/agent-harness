@@ -1,13 +1,15 @@
+import type { CapabilityRegistry } from "../capability/registry.js";
+import type { LLMClient, LLMToolDefinition } from "../llm/client.js";
+import type { ToolRegistry } from "../tool/types.js";
 import type { AgentConfig, AgentResult, Message } from "./types.js";
 import { AgentCancelledError } from "./types.js";
-import type { ToolRegistry } from "../tool/types.js";
-import type { LLMClient, LLMToolDefinition } from "../llm/client.js";
-import type { CapabilityRegistry } from "../capability/registry.js";
 
-export type AgentEventCallback = (event:
-  | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
-  | { type: "tool:completed"; toolName: string; result?: string }
-  | { type: "step"; messages: Message[] }) => void;
+export type AgentEventCallback = (
+  event:
+    | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
+    | { type: "tool:completed"; toolName: string; result?: string }
+    | { type: "step"; messages: Message[] },
+) => void;
 
 export class Agent {
   private messages: Message[] = [];
@@ -16,7 +18,7 @@ export class Agent {
     private readonly config: AgentConfig,
     private readonly toolRegistry: ToolRegistry,
     private readonly llmClient: LLMClient,
-    private readonly capabilityRegistry: CapabilityRegistry,
+    _capabilityRegistry: CapabilityRegistry,
     private readonly onEvent?: AgentEventCallback,
   ) {}
 

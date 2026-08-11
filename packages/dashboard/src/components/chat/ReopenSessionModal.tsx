@@ -1,18 +1,18 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { fetchSessionMeta, fetchSession, openSession } from '@/lib/api';
-import type { SessionMeta } from '@/lib/api';
-import { useSessionStore } from '@/stores/session-store';
-import { useReopenSessionStore } from '@/stores/reopen-session-store';
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import type { SessionMeta } from "@/lib/api";
+import { fetchSession, fetchSessionMeta, openSession } from "@/lib/api";
+import { useReopenSessionStore } from "@/stores/reopen-session-store";
+import { useSessionStore } from "@/stores/session-store";
 
 function displayLabel(meta: SessionMeta): string {
   if (meta.title?.trim()) return meta.title;
@@ -25,7 +25,7 @@ export default function ReopenSessionModal() {
   const open = useReopenSessionStore((s) => s.open);
   const setOpen = useReopenSessionStore((s) => s.setOpen);
   const [metas, setMetas] = useState<SessionMeta[] | null>(null);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
   const [error, setError] = useState(false);
 
   useEffect(() => {
@@ -33,17 +33,13 @@ export default function ReopenSessionModal() {
     let cancelled = false;
     setMetas(null);
     setError(false);
-    setQuery('');
+    setQuery("");
     fetchSessionMeta()
       .then((all) => {
         if (cancelled) return;
-        const openIds = new Set(
-          useSessionStore.getState().sessions.map((s) => s.sessionId)
-        );
+        const openIds = new Set(useSessionStore.getState().sessions.map((s) => s.sessionId));
         setMetas(
-          all.filter(
-            (m) => !openIds.has(m.sessionId) && !m.sessionId.startsWith('worker-')
-          )
+          all.filter((m) => !openIds.has(m.sessionId) && !m.sessionId.startsWith("worker-")),
         );
       })
       .catch(() => {
@@ -59,9 +55,7 @@ export default function ReopenSessionModal() {
     const q = query.trim().toLowerCase();
     if (!q) return metas;
     return metas.filter((m) =>
-      [m.title, m.prompt, m.agentName, m.sessionId].some((v) =>
-        v?.toLowerCase().includes(q)
-      )
+      [m.title, m.prompt, m.agentName, m.sessionId].some((v) => v?.toLowerCase().includes(q)),
     );
   }, [metas, query]);
 
@@ -88,8 +82,8 @@ export default function ReopenSessionModal() {
         <DialogHeader>
           <DialogTitle>Reopen session</DialogTitle>
           <DialogDescription>
-            Pick a session to reopen as a tab. Sessions are never deleted when
-            closed — they are recoverable here.
+            Pick a session to reopen as a tab. Sessions are never deleted when closed — they are
+            recoverable here.
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -104,11 +98,12 @@ export default function ReopenSessionModal() {
           )}
           {!error && metas !== null && filtered.length === 0 && (
             <div className="py-8 text-center text-sm text-zinc-400">
-              {query ? 'No matching sessions' : 'No closed sessions'}
+              {query ? "No matching sessions" : "No closed sessions"}
             </div>
           )}
           {filtered.map((meta) => (
             <button
+              type="button"
               key={meta.sessionId}
               onClick={() => handleSelect(meta)}
               className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
@@ -116,8 +111,7 @@ export default function ReopenSessionModal() {
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{displayLabel(meta)}</div>
                 <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                  {meta.agentName ?? 'orchestrator'} ·{' '}
-                  {new Date(meta.updatedAt).toLocaleString()}
+                  {meta.agentName ?? "orchestrator"} · {new Date(meta.updatedAt).toLocaleString()}
                 </div>
               </div>
             </button>

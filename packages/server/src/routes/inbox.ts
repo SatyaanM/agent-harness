@@ -1,7 +1,7 @@
+import path from "node:path";
+import { getConfig, InboxManager } from "@agent-harness/core";
 import { Router } from "express";
 import fs from "fs-extra";
-import path from "path";
-import { getConfig, InboxManager } from "@agent-harness/core";
 
 const router = Router();
 
@@ -41,7 +41,7 @@ router.get("/", async (_req, res) => {
           lastModified: stat.mtime.toISOString(),
           metadata: meta ?? null,
         };
-      })
+      }),
   );
   res.json(enriched);
 });
@@ -57,7 +57,7 @@ router.get("/tree", async (_req, res) => {
 router.get("/file", async (req, res) => {
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const rel = String(req.query["path"] ?? "");
+  const rel = String(req.query.path ?? "");
 
   const rootResolved = path.resolve(config.INBOX_ROOT);
   const filePath = path.resolve(rootResolved, rel);
@@ -87,7 +87,7 @@ router.get("/file", async (req, res) => {
 router.put("/file", async (req, res) => {
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const rel = String(req.query["path"] ?? "");
+  const rel = String(req.query.path ?? "");
   const { content } = req.body as { content?: string };
 
   if (typeof content !== "string") {
@@ -141,7 +141,7 @@ router.post("/move", async (req, res) => {
       return;
     }
     const toStat = await fs.stat(toPath).catch(() => null);
-    if (!toStat || !toStat.isDirectory()) {
+    if (!toStat?.isDirectory()) {
       res.status(400).json({ error: "Destination is not a directory" });
       return;
     }
@@ -192,7 +192,7 @@ router.post("/dir", async (req, res) => {
 router.delete("/file", async (req, res) => {
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const rel = String(req.query["path"] ?? "");
+  const rel = String(req.query.path ?? "");
   const rootResolved = path.resolve(config.INBOX_ROOT);
   const filePath = path.resolve(rootResolved, rel);
   if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
@@ -223,9 +223,7 @@ router.post("/open", async (req, res) => {
   }
   const stat = await fs.stat(target);
   if (process.platform === "win32") {
-    const args = stat.isDirectory()
-      ? [target]
-      : ["/select,", target];
+    const args = stat.isDirectory() ? [target] : ["/select,", target];
     const { spawn } = await import("node:child_process");
     const child = spawn("explorer.exe", args, { detached: true });
     child.unref();
@@ -239,7 +237,7 @@ router.post("/open", async (req, res) => {
 async function walkTree(
   dir: string,
   relDir: string,
-  items: Array<{ id: string }>
+  items: Array<{ id: string }>,
 ): Promise<TreeEntry[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const result: TreeEntry[] = [];
@@ -282,18 +280,23 @@ async function walkTree(
 router.get("/:id", async (req, res) => {
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const filePath = path.join(config.INBOX_ROOT, req.params["id"]!);
+  const itemId = req.params.id;
+  if (!itemId) {
+    res.status(400).json({ error: "Inbox item id is required" });
+    return;
+  }
+  const filePath = path.join(config.INBOX_ROOT, itemId);
   if (!(await fs.pathExists(filePath))) {
     res.status(404).json({ error: "Inbox item not found" });
     return;
   }
   const stat = await fs.stat(filePath);
   const content = await readItemContent(filePath);
-  const metadata = await inboxManager.getItemMetadata(req.params["id"]!);
+  const metadata = await inboxManager.getItemMetadata(itemId);
   res.json({
-    id: req.params["id"],
-    name: req.params["id"],
-    type: path.extname(req.params["id"]!).slice(1) || "text",
+    id: itemId,
+    name: itemId,
+    type: path.extname(itemId).slice(1) || "text",
     size: stat.size,
     lastModified: stat.mtime.toISOString(),
     content,
@@ -304,27 +307,42 @@ router.get("/:id", async (req, res) => {
 router.put("/:id", async (req, res) => {
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const filePath = path.join(config.INBOX_ROOT, req.params["id"]!);
+  const itemId = req.params.id;
+  if (!itemId) {
+    res.status(400).json({ error: "Inbox item id is required" });
+    return;
+  }
+  const filePath = path.join(config.INBOX_ROOT, itemId);
   const { content } = req.body;
   await fs.writeFile(filePath, content, "utf-8");
-  const updated = await inboxManager.bumpVersion(req.params["id"]!);
+  const updated = await inboxManager.bumpVersion(itemId);
   res.json({ success: true, metadata: updated });
 });
 
 router.delete("/:id", async (req, res) => {
   const inboxManager = getInboxManager();
-  await inboxManager.deleteItem(req.params["id"]!);
+  const itemId = req.params.id;
+  if (!itemId) {
+    res.status(400).json({ error: "Inbox item id is required" });
+    return;
+  }
+  await inboxManager.deleteItem(itemId);
   res.json({ success: true });
 });
 
 router.post("/:id/track", async (req, res) => {
   const inboxManager = getInboxManager();
+  const itemId = req.params.id;
+  if (!itemId) {
+    res.status(400).json({ error: "Inbox item id is required" });
+    return;
+  }
   const { title, type, authorAgent } = req.body;
   if (!title || !type || !authorAgent) {
     res.status(400).json({ error: "Missing required fields: title, type, authorAgent" });
     return;
   }
-  const metadata = await inboxManager.trackItem(req.params["id"]!, { title, type, authorAgent });
+  const metadata = await inboxManager.trackItem(itemId, { title, type, authorAgent });
   res.json(metadata);
 });
 

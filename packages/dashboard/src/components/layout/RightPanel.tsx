@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import SessionTabs from '@/components/chat/SessionTabs';
-import ChatStream from '@/components/chat/ChatStream';
-import ChatInput from '@/components/chat/ChatInput';
-import AgentColumn from '@/components/chat/AgentColumn';
-import { usePanelStore } from '@/stores/panel-store';
+import AgentColumn from "@/components/chat/AgentColumn";
+import ChatInput from "@/components/chat/ChatInput";
+import ChatStream from "@/components/chat/ChatStream";
+import SessionTabs from "@/components/chat/SessionTabs";
+import { usePanelStore } from "@/stores/panel-store";
 
 export default function RightPanel() {
   const collapsed = usePanelStore((s) => s.collapsed);

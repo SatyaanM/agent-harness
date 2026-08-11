@@ -10,9 +10,7 @@ export interface ProbeOptions {
 
 const PROBE_MAX_RETRIES = 2;
 
-export async function probeCapabilities(
-  options: ProbeOptions,
-): Promise<CapabilityMatrix> {
+export async function probeCapabilities(options: ProbeOptions): Promise<CapabilityMatrix> {
   const { baseUrl, apiKey, model, timeoutMs = 10_000, maxRetries = PROBE_MAX_RETRIES } = options;
 
   let lastError: Error | null = null;
@@ -23,7 +21,7 @@ export async function probeCapabilities(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < maxRetries) {
-        const delay = 1000 * Math.pow(2, attempt);
+        const delay = 1000 * 2 ** attempt;
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -62,22 +60,6 @@ async function probeOnce(
   caps.streaming = streaming;
 
   return caps;
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-): Promise<T | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    const result = await promise;
-    return result;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function testChat(

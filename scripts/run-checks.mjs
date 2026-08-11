@@ -3,17 +3,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
-const nextEnvPath = path.join(
-  process.cwd(),
-  "packages",
-  "dashboard",
-  "next-env.d.ts",
-);
-const originalNextEnv = existsSync(nextEnvPath)
-  ? readFileSync(nextEnvPath)
-  : undefined;
+const nextEnvPath = path.join(process.cwd(), "packages", "dashboard", "next-env.d.ts");
+const originalNextEnv = existsSync(nextEnvPath) ? readFileSync(nextEnvPath) : undefined;
 
 const checks = [
+  [corepack, ["npm", "run", "quality"]],
   [corepack, ["npm", "run", "skills:validate"]],
   [corepack, ["npm", "run", "docs:check"]],
   [corepack, ["npm", "run", "typecheck"]],
@@ -33,12 +27,8 @@ function restoreNextEnv() {
 
 function run(command, args) {
   const useCommandShell = process.platform === "win32" && command === corepack;
-  const executable = useCommandShell
-    ? process.env.ComSpec || "cmd.exe"
-    : command;
-  const executableArgs = useCommandShell
-    ? ["/d", "/s", "/c", [command, ...args].join(" ")]
-    : args;
+  const executable = useCommandShell ? process.env.ComSpec || "cmd.exe" : command;
+  const executableArgs = useCommandShell ? ["/d", "/s", "/c", [command, ...args].join(" ")] : args;
 
   return spawnSync(executable, executableArgs, {
     cwd: process.cwd(),

@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import dynamic from 'next/dynamic';
+import dynamic from "next/dynamic";
 
-const PdfRendererInner = dynamic(() => import('./PdfRendererInner'), {
+const PdfRendererInner = dynamic(() => import("./PdfRendererInner"), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center h-full text-zinc-400 text-sm">
