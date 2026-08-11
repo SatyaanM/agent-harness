@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if [ "${OS:-}" = "Windows_NT" ]; then
+  corepack.cmd npm run typecheck
+  corepack.cmd npm test
+else
+  corepack npm run typecheck
+  corepack npm test
+fi

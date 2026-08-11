@@ -297,6 +297,22 @@ Next.js frontend with persistent split layout:
 
 ## Development
 
+### Verification and optional Git hooks
+
+Run the complete repository check without provider credentials:
+
+```bash
+corepack npm run check
+```
+
+The check validates skills and documentation, typechecks, tests, builds, and checks the diff for whitespace errors. Repository-owned pre-commit and pre-push hooks are opt-in:
+
+```bash
+corepack npm run hooks:install
+```
+
+Installation sets the repository-local `core.hooksPath` to `hooks`. It refuses to replace a different existing hook path unless you review it and explicitly pass `--force`.
+
 ### Adding a New Tool
 
 1. Create tool file in `packages/core/src/tool/`

@@ -8,9 +8,11 @@
   ],
   "scripts": {
     "build": "turbo run build",
+    "check": "node scripts/run-checks.mjs",
     "dev": "turbo run dev",
     "docs:list": "node scripts/docs-list.mjs",
     "docs:check": "node scripts/docs-list.mjs --check",
+    "hooks:install": "node scripts/install-hooks.mjs",
     "skills:validate": "node scripts/validate-skills.mjs",
     "start": "turbo run start",
     "test": "turbo run test",
