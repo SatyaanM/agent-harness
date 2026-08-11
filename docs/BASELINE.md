@@ -194,13 +194,13 @@ At T00 completion, the open caveats were the PowerShell `npm.ps1` execution-poli
 
 ### Codex tooling is separate from harness providers
 
-The project-scoped `.codex/config.toml` and `.codex/agents/worker.toml` configure the Codex development client only. They are not read by the Agent Harness runtime and do not add GPT-5.6, OpenAI API, or Codex provider support to the product.
+At T00, the project-scoped `.codex/config.toml` and `.codex/agents/worker.toml` configured the Codex development client only. They were not read by the Agent Harness runtime and did not add GPT-5.6, OpenAI API, or Codex provider support to the product.
 
 Per project direction, first-class and independently configurable Codex/OpenAI, Gemini, and OpenCode provider support is future product work. It was not started in T00 or this follow-up.
 
-Official OpenAI Codex documentation confirms that project agents belong under `.codex/agents/`, that agent files can pin `model` and `model_reasoning_effort`, and that `gpt-5.6-luna` is a supported model identifier for narrow workers. The repository's Sol/Luna configuration is therefore valid as Codex-only configuration: <https://learn.chatgpt.com/docs/agent-configuration/subagents>.
+Official OpenAI Codex documentation confirmed that project agents belong under `.codex/agents/`, that agent files can pin `model` and `model_reasoning_effort`, and that `gpt-5.6-luna` was a supported model identifier for narrow workers. The Sol/Luna configuration observed during T00 was therefore valid as Codex-only configuration: <https://learn.chatgpt.com/docs/agent-configuration/subagents>.
 
-A fresh worker launch attempt still failed before the worker started because this running Codex host exposed only `gpt-5.6-sol` and `gpt-5.6-terra` to its spawn tool and rejected `gpt-5.6-luna`. The local `codex.exe` version check was also denied by the host even with sandbox escalation. No repository or harness change can correct that active host catalog. Restarting or updating the Codex app/runtime and retrying the worker launch remains an external prerequisite before relying on Luna delegation.
+A fresh worker launch attempt during T00 still failed before the worker started because that Codex host exposed only `gpt-5.6-sol` and `gpt-5.6-terra` to its spawn tool and rejected `gpt-5.6-luna`. The local `codex.exe` version check was also denied by the host even with sandbox escalation. T05 later removed project model pins and replaced the temporary worker definition with inheriting, read-only specialists, so this historical host caveat no longer governs the current repository configuration.
 
 ### Declared npm version
 
