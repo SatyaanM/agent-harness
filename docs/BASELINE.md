@@ -1,3 +1,10 @@
+---
+summary: Reproducible repository, environment, remote, dependency, and verification baseline captured before bootstrap work.
+read_when:
+  - Comparing the current environment or verification results with the pre-bootstrap baseline.
+  - Investigating repository setup, npm, Turbo, or Codex host caveats recorded during T00.
+---
+
 # Repository baseline (T00)
 
 This file records the evidence gathered for pre-development bootstrap task T00. The baseline was observed on 2026-08-10 in `E:\Projects\agent-harness`. No product/runtime behavior, dependency versions, branches, commits, or tracked source files were intentionally changed.

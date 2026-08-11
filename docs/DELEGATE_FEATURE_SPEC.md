@@ -1,3 +1,10 @@
+---
+summary: Behavioral specification and phased implementation record for agent selection, delegation, delivery, and worker visibility.
+read_when:
+  - Changing delegation, worker sessions, completion delivery, cancellation, or agent-scope UI.
+  - Verifying which delegate-feature phases are implemented or deferred.
+---
+
 # Delegate Feature Spec
 
 Status: Draft

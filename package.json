@@ -9,6 +9,8 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "docs:list": "node scripts/docs-list.mjs",
+    "docs:check": "node scripts/docs-list.mjs --check",
     "start": "turbo run start",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck"

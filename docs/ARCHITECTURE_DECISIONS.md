@@ -1,3 +1,10 @@
+---
+summary: Established architecture invariants, extension points, and design decisions for Agent Harness.
+read_when:
+  - Changing runtime behavior, package boundaries, persistence, plugins, sessions, or lifecycle hooks.
+  - Evaluating whether a proposed design conflicts with an adopted decision.
+---
+
 # Architecture Decisions
 
 This document captures the design decisions behind agent-harness. It is written for AI agents and human contributors who need to understand *why* the system is built this way, not just *what* exists.
