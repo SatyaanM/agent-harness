@@ -2,7 +2,9 @@
 
 A TypeScript multi-agent orchestration harness with a web dashboard for managing AI agent collaborations.
 
-An **orchestrator agent** delegates tasks to **worker agents**, coordinates them via **councils** (ephemeral group chats), and deposits the results into a **knowledge inbox** for you to review. Everything runs through a persistent split-panel dashboard.
+An **orchestrator agent** can delegate tasks to background **worker agents** and deposit artifacts into a **knowledge inbox** for review. Everything runs through a persistent split-panel dashboard.
+
+> Implementation status: see [`docs/architecture/CURRENT_STATE.md`](docs/architecture/CURRENT_STATE.md). Architecture and feature documents also contain explicit target direction; they are not proof that a capability is wired into the running application.
 
 ## Features
 
@@ -11,11 +13,11 @@ An **orchestrator agent** delegates tasks to **worker agents**, coordinates them
 - **Knowledge inbox** — Agents deposit files (reports, diagrams, data) for user review
 - **File explorer** — Browse, drag-and-drop, rename, and delete inbox files
 - **In-place editing** — Edit and save markdown and Excalidraw files directly in the dashboard
-- **Any LLM provider** — OpenAI-compatible or Anthropic-compatible endpoints (not locked to one vendor)
-- **4-tier capability discovery** — Dynamic model capability detection (manual → cache → models.dev → probe)
+- **Configurable LLM endpoint** — One OpenAI-compatible or Anthropic-compatible endpoint at a time
+- **Capability discovery library** — Manual, cache, models.dev, and probe tiers exist in core but are not yet enforced by the live agent path
 - **File-based agent config** — Define agents as `.md` files with YAML frontmatter
-- **Plugin system** — Renderers and UI extensions are packaged as plugins
-- **Real-time collaboration** — Councils for multi-agent deliberation
+- **Manifest-backed built-ins** — Enabled inbox renderers and command metadata are discovered by the server
+- **Real-time activity** — Agent, worker, tool, and session updates over WebSocket
 
 ## Quick Start
 
@@ -81,7 +83,7 @@ Navigate to **http://localhost:3000**. Click **+** in the right panel to create 
 
 ## Using Any LLM Provider
 
-The app is **not** locked to a single vendor. It talks to whatever endpoint you configure using standard OpenAI-compatible (`/chat/completions`) and Anthropic-compatible (`/messages`) APIs.
+The app configures one provider endpoint and key source at a time. It can talk to OpenAI-compatible (`/chat/completions`) or Anthropic-compatible (`/messages`) endpoints, subject to the model-routing limitation below.
 
 | Setting | Env var | Default | Purpose |
 |---|---|---|---|
@@ -113,7 +115,7 @@ PROVIDER_ENDPOINT=http://localhost:11434/v1
 
 **Model routing note:** a small set of models (`minimax-m3`, `minimax-m2.x`, `qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-plus`) are sent to the **Anthropic** message format; everything else uses the **OpenAI** chat-completions format. Pick a model that matches your provider's protocol, and set it in agent configs or `DEFAULT_MODEL`.
 
-**Capability discovery:** the system checks the model's capabilities in four tiers — manual override in the agent config, a local cache (`.harness/capabilities.json`), the models.dev API, then a direct probe. It never hardcodes capabilities and adapts automatically as models change.
+**Capability discovery status:** core contains manual, cache, models.dev, and probe tiers, but `Agent.run()` does not currently call the registry. Treat configured tools and provider compatibility as operator responsibility until that integration is designed and tested.
 
 ## Production
 
@@ -253,11 +255,6 @@ agent:tool           # Agent called/completed a tool (live activity)
 worker:spawned       # A worker session was created
 worker:completed     # A worker posted a completion to its delegator
 session:updated      # A session's state changed (authoritative sync)
-council:created      # Council formed
-council:message      # Council message
-council:dissolved    # Council completed
-inbox:created        # Inbox item created
-inbox:updated        # Inbox item modified
 ```
 
 ## Project Structure
@@ -324,7 +321,8 @@ Installation sets the repository-local `core.hooksPath` to `hooks`. It refuses t
 
 1. Create renderer component in `packages/dashboard/src/components/inbox/renderers/`
 2. Export from `renderers/index.ts`
-3. Add to `InboxItemView.tsx` type dispatch
+3. Register its component key in `packages/dashboard/src/plugins/registry.ts`
+4. Add an `inboxRenderers` entry to a built-in plugin `manifest.json`; `InboxItemView.tsx` resolves through the plugin store and component registry
 
 ### Adding a New API Endpoint
 

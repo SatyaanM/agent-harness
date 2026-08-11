@@ -53,6 +53,17 @@ function findMarkdownFiles(root) {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
+function collectDefaultMarkdownFiles(repositoryRoot) {
+  const files = [
+    ...findMarkdownFiles(path.join(repositoryRoot, "docs")),
+    ...findMarkdownFiles(path.join(repositoryRoot, "specs")),
+    path.join(repositoryRoot, "PLANS.md"),
+    path.join(repositoryRoot, "THIRD_PARTY_NOTICES.md"),
+  ];
+
+  return files.sort((left, right) => left.localeCompare(right));
+}
+
 function parseStringScalar(value, field, file) {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`${file}: ${field} must be a non-empty string`);
@@ -126,15 +137,19 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
   const repositoryRoot = path.resolve(scriptDirectory, "..");
-  const docsRoot = path.resolve(args.root ?? path.join(repositoryRoot, "docs"));
+  const docsRoot = args.root ? path.resolve(args.root) : undefined;
 
-  if (!fs.existsSync(docsRoot) || !fs.statSync(docsRoot).isDirectory()) {
+  if (docsRoot && (!fs.existsSync(docsRoot) || !fs.statSync(docsRoot).isDirectory())) {
     throw new Error(`Documentation root is not a directory: ${docsRoot}`);
   }
 
+  const markdownFiles = docsRoot
+    ? findMarkdownFiles(docsRoot)
+    : collectDefaultMarkdownFiles(repositoryRoot);
+
   const failures = [];
   const entries = [];
-  for (const file of findMarkdownFiles(docsRoot)) {
+  for (const file of markdownFiles) {
     const displayPath = path.relative(repositoryRoot, file).replaceAll(path.sep, "/");
     try {
       entries.push({ displayPath, ...parseMetadata(fs.readFileSync(file, "utf8"), displayPath) });

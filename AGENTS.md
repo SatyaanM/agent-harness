@@ -2,7 +2,7 @@
 
 ## Start here
 
-Read `README.md`, then the durable document that matches the change. Use `docs/ARCHITECTURE_DECISIONS.md` for established runtime and UI invariants, `docs/DELEGATE_FEATURE_SPEC.md` for delegation behavior, and `specs/` for active plans. Inspect source before treating design intent as implemented behavior.
+Read `README.md`, then `docs/architecture/CURRENT_STATE.md` for verified implementation status and the durable document that matches the change. Use `docs/ARCHITECTURE_DECISIONS.md` for governing invariants and historical intent, `docs/DELEGATE_FEATURE_SPEC.md` for delegation behavior, and `specs/` for active plans. Source and `CURRENT_STATE.md` take precedence when older design prose presents intent as behavior.
 
 ## Repository layout
 

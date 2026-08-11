@@ -1,5 +1,5 @@
 ---
-summary: Established architecture invariants, extension points, and design decisions for Agent Harness.
+summary: Architecture invariants, extension guardrails, and clearly labeled historical target proposals for Agent Harness.
 read_when:
   - Changing runtime behavior, package boundaries, persistence, plugins, sessions, or lifecycle hooks.
   - Evaluating whether a proposed design conflicts with an adopted decision.
@@ -9,7 +9,7 @@ read_when:
 
 This document captures the design decisions behind agent-harness. It is written for AI agents and human contributors who need to understand *why* the system is built this way, not just *what* exists.
 
-Implementation details change. This document does not describe file paths or API signatures — those can be read from source. This document describes **invariants, patterns, and intent**.
+Implementation details change. This document describes **invariants, patterns, and intent**, not implementation status. Read [`architecture/CURRENT_STATE.md`](architecture/CURRENT_STATE.md) first for verified behavior. Where this document conflicts with current source, `CURRENT_STATE.md`, or an accepted ADR, the source/current-state/ADR evidence governs.
 
 ---
 
@@ -186,79 +186,18 @@ The system's value grows with its capabilities. If improving the system requires
 
 ---
 
-## 5. Adopted Capabilities
+## 5. Deferred capability proposals
 
-These capabilities are borrowed from Pi's architecture and adapted for agent-harness's web-native design. They are not optional enhancements — they are core to how the system should work.
+Earlier design work proposed runtime skills, prompt templates, session branching, compaction, product context-file loading, plugin hot reload, and multi-provider registration. None is an adopted or implemented product capability today.
 
-### 5. Skills
+These ideas require separate specifications and decisions after the identity/recovery phase. In particular:
 
-**What Pi does:** On-demand capability packages following the [Agent Skills standard](https://agentskills.io). Markdown files that teach the agent how to do specific tasks. Invoked via `/skill:name` or auto-loaded by the agent.
+- `.agents/skills/` contains development workflows only;
+- a root product `skills/` directory or loader is prohibited by [ADR 0001](decisions/0001-development-agent-layer.md) until a runtime spec, ontology, security model, persistence design, and ADR authorize it;
+- the current server has no prompt-template, branching, compaction, context-file, or plugin-watcher implementation;
+- provider routing currently uses one configured endpoint and a model-name protocol allowlist, not a provider registry.
 
-**How we adapt it:** Skills are markdown files in a `skills/` directory (global and project-local). The server loads them and exposes them via the API. The orchestrator and workers can load skills on demand when delegating tasks. Skills are also discoverable from the dashboard.
-
-**Integration with plugins:** Skills can be bundled with plugins. A plugin manifest can declare `skills: ["./skills/review.md"]` to provide domain-specific expertise alongside its UI components.
-
-**Why it matters:** Our agent configs are static instructions. Skills let agents dynamically load expertise — "how to do a security audit", "how to write tests", "how to deploy to AWS". The orchestrator can instruct workers to load specific skills before executing tasks.
-
-### 5.1 Prompt Templates
-
-**What Pi does:** Reusable prompts as markdown files with `{{variables}}`. Type `/name` to expand in the chat input.
-
-**How we adapt it:** Prompt templates are markdown files in a `prompts/` directory. The dashboard's chat input recognizes `/name` and expands the template. Templates can have variables that the user fills in before sending.
-
-**Integration with plugins:** Plugins can provide prompt templates. A deployment plugin might include `/deploy`, `/rollback`, `/status` templates.
-
-**Why it matters:** Users define common workflows once, reuse them forever. The orchestrator can also use templates when delegating — "use the /review template to review this code".
-
-### 5.2 Session Branching
-
-**What Pi does:** Sessions are JSONL files with a tree structure. Each entry has an `id` and `parentId`. You can `/fork` from any point, `/tree` to navigate history, and `/clone` sessions.
-
-**How we adapt it:** Sessions support branching. When a worker completes a task, the orchestrator can fork from the result to try a different approach without losing the original path. The dashboard shows the session tree visually.
-
-**Integration with plugins:** The session tree can be rendered as a plugin-provided component. Chat cards can show branch points.
-
-**Why it matters:** Multi-agent work is inherently branching. Worker A might produce a result that leads down two different paths. Session branching preserves all history without creating separate session files.
-
-### 5.3 Compaction
-
-**What Pi does:** Automatically summarizes older messages when context gets long. Keeps recent messages intact, summarizes older ones. Manual `/compact` command available.
-
-**How we adapt it:** The server compacts sessions when context approaches limits. Compaction is lossy — the full history remains in the session file, but the LLM only sees the summary + recent messages. Users can `/compact` manually or let it happen automatically.
-
-**Integration with plugins:** Plugins can provide custom compaction strategies. A plugin might specialize in summarizing code changes differently than general conversation.
-
-**Why it matters:** Long orchestrator sessions with multiple worker delegations will blow context windows. Compaction keeps conversations going without losing critical context.
-
-### 5.4 Context Files
-
-**What Pi does:** Loads `AGENTS.md` files from the project root and parent directories. These provide project-specific instructions to the agent automatically.
-
-**How we adapt it:** The server loads context files from the project root and parent directories. These are concatenated and injected into the system prompt for all agents. Users can also create project-local context via the dashboard.
-
-**Integration with plugins:** Plugins can contribute additional context files. A plugin for a specific framework might include framework-specific context.
-
-**Why it matters:** Agents need to understand the project they're working in. Context files let the *project itself* provide instructions — "this project uses TypeScript strict mode", "tests run with vitest", "deploy via GitHub Actions".
-
-### 5.5 Hot Reload
-
-**What Pi does:** Extensions can be hot-reloaded with `/reload` — no restart needed. Picks up new files, changed code, updated manifests.
-
-**How we adapt it:** The server watches the plugins directory. When a plugin is added, removed, or modified, the server rebuilds the plugin registry. The dashboard receives a WebSocket notification and re-fetches the registry. No server restart required.
-
-**Integration with plugins:** This is fundamental to the self-improving system. Users create plugins from the dashboard, and they become available immediately.
-
-**Why it matters:** If improving the system requires a restart, the feedback loop is too slow. Hot reload makes the self-improving system feel instant.
-
-### 5.6 Multi-Provider Support
-
-**What Pi does:** Supports 25+ LLM providers through a unified API. Custom providers can be added via config. Different models can be used for different tasks.
-
-**How we adapt it:** The server supports multiple LLM providers configured via settings. Each agent can specify its own model. The orchestrator can pick different models for different worker roles — cheap/fast for exploration, capable/slow for execution.
-
-**Integration with plugins:** Plugins can register new providers. A plugin for a custom LLM endpoint would register the provider and its available models.
-
-**Why it matters:** No single LLM is best at everything. The orchestrator should be able to pick the right model for each task — fast cheap models for scouting, capable models for code generation, reasoning models for complex planning.
+See [`architecture/TARGET_DIRECTION.md`](architecture/TARGET_DIRECTION.md) and [`roadmap/NEXT_RUNTIME_PHASE.md`](roadmap/NEXT_RUNTIME_PHASE.md) for the bounded order of future design work.
 
 ---
 
@@ -268,15 +207,15 @@ These are things that must never be done, even if they seem convenient.
 
 ### Never hardcode renderer dispatch
 
-The inbox renderer dispatch must go through the plugin registry. Do not add `if (type === 'x') return <XRenderer />` chains in `InboxItemView.tsx`. Always use `getRendererForExtension()`.
+The inbox renderer dispatch must go through the plugin store and component registry. Do not add `if (type === 'x') return <XRenderer />` chains in `InboxItemView.tsx`. Register a component key in `packages/dashboard/src/plugins/registry.ts` and declare extensions in a manifest.
 
 ### Never import plugin components directly
 
-Plugin components are loaded via dynamic import based on the registry. Do not add static `import` statements for plugin components in dashboard pages. Use the plugin store's lookup functions.
+Built-in renderer components are currently registered statically in one component registry; arbitrary dynamic plugin code loading is not implemented. Do not import renderer components directly into dashboard pages or imply that manifest discovery grants code-execution permission.
 
 ### Never add routes by editing layout.tsx
 
-New navigation items come from plugin manifests. Do not hardcode nav links in `layout.tsx`. Add them via the plugin's `navItems` declaration.
+Page and navigation plugins are not implemented by the current manifest schema. Adding that surface requires a dedicated schema, trust, loading, and routing design; do not add an unsupported `navItems` field and present it as functional.
 
 ### Never bypass the server API
 
