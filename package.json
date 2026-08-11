@@ -11,6 +11,7 @@
     "dev": "turbo run dev",
     "docs:list": "node scripts/docs-list.mjs",
     "docs:check": "node scripts/docs-list.mjs --check",
+    "skills:validate": "node scripts/validate-skills.mjs",
     "start": "turbo run start",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck"
