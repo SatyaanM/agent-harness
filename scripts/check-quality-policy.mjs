@@ -147,8 +147,81 @@ function checkSourceFile(rootDir, filePath) {
       });
     }
 
+    if (
+      relative.startsWith("packages/server/src/routes/") &&
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "req" &&
+      ["body", "params", "query"].includes(node.name.text) &&
+      !isWithinCallNamed(node, "validateRequest")
+    ) {
+      diagnostics.push({
+        file: relative,
+        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        rule: "boundaries/validate-request",
+        message: `req.${node.name.text} must flow directly into validateRequest before use.`,
+      });
+    }
+
+    if (
+      (relative.startsWith("packages/core/src/persistence/") ||
+        relative.startsWith("packages/server/src/")) &&
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === "JSON" &&
+      node.expression.name.text === "parse"
+    ) {
+      diagnostics.push({
+        file: relative,
+        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        rule: "boundaries/validated-json",
+        message: "Serialized boundary data must use parseJsonBoundary with an explicit schema.",
+      });
+    }
+
+    if (
+      relative.startsWith("packages/core/src/contracts/") &&
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      const specifier = node.moduleSpecifier.text;
+      const contractsRoot = path.join(rootDir, "packages", "core", "src", "contracts");
+      const resolved = specifier.startsWith(".")
+        ? path.resolve(path.dirname(filePath), specifier)
+        : undefined;
+      if (
+        specifier.startsWith("node:") ||
+        (resolved !== undefined && !resolved.startsWith(`${contractsRoot}${path.sep}`))
+      ) {
+        diagnostics.push({
+          file: relative,
+          line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+          rule: "boundaries/browser-safe-contracts",
+          message: "Core contracts must not import Node built-ins or core runtime modules.",
+        });
+      }
+    }
+
     ts.forEachChild(node, visit);
   }
+}
+
+/** @param {ts.Node} node @param {string} name */
+function isWithinCallNamed(node, name) {
+  let current = node.parent;
+  while (current && !ts.isStatement(current)) {
+    if (
+      ts.isCallExpression(current) &&
+      ts.isIdentifier(current.expression) &&
+      current.expression.text === name
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 /** @param {string} rootDir @param {(file: string) => boolean} predicate */

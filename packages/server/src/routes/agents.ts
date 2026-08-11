@@ -1,11 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentConfig } from "@agent-harness/core";
-import { getConfig, loadAgentConfig, loadAllAgentConfigs } from "@agent-harness/core";
+import {
+  AgentConfigSchema,
+  getConfig,
+  loadAgentConfig,
+  loadAllAgentConfigs,
+} from "@agent-harness/core";
 import { Router } from "express";
 import matter from "gray-matter";
+import { z } from "zod";
+import { IdentifierSchema, validateRequest } from "../http/validation.js";
 
 export const agentsRouter = Router();
+
+const AgentParamsSchema = z.object({ name: IdentifierSchema }).strict();
+const AgentCreateSchema = AgentConfigSchema.partial()
+  .extend({ name: IdentifierSchema, model: z.string().min(1).max(256) })
+  .strict();
+const AgentUpdateSchema = AgentConfigSchema.omit({ name: true }).partial().strict();
 
 agentsRouter.get("/", async (_req, res) => {
   const config = getConfig();
@@ -14,8 +26,10 @@ agentsRouter.get("/", async (_req, res) => {
 });
 
 agentsRouter.get("/:name", async (req, res) => {
+  const params = validateRequest(AgentParamsSchema, req.params, res);
+  if (!params) return;
   const config = getConfig();
-  const filePath = path.join(config.AGENTS_DIR, `${req.params.name}.md`);
+  const filePath = path.join(config.AGENTS_DIR, `${params.name}.md`);
   if (!fs.existsSync(filePath)) {
     res.status(404).json({ error: "Agent not found" });
     return;
@@ -26,11 +40,8 @@ agentsRouter.get("/:name", async (req, res) => {
 
 agentsRouter.post("/", async (req, res) => {
   const config = getConfig();
-  const body = req.body as Partial<AgentConfig>;
-  if (!body.name || !body.model) {
-    res.status(400).json({ error: "name and model are required" });
-    return;
-  }
+  const body = validateRequest(AgentCreateSchema, req.body, res);
+  if (!body) return;
 
   const filePath = path.join(config.AGENTS_DIR, `${body.name}.md`);
   if (fs.existsSync(filePath)) {
@@ -47,15 +58,18 @@ agentsRouter.post("/", async (req, res) => {
 });
 
 agentsRouter.put("/:name", async (req, res) => {
+  const params = validateRequest(AgentParamsSchema, req.params, res);
+  if (!params) return;
+  const body = validateRequest(AgentUpdateSchema, req.body, res);
+  if (!body) return;
   const config = getConfig();
-  const filePath = path.join(config.AGENTS_DIR, `${req.params.name}.md`);
+  const filePath = path.join(config.AGENTS_DIR, `${params.name}.md`);
   if (!fs.existsSync(filePath)) {
     res.status(404).json({ error: "Agent not found" });
     return;
   }
 
-  const body = req.body as Partial<AgentConfig>;
-  const content = buildAgentMarkdown({ ...body, name: req.params.name });
+  const content = buildAgentMarkdown({ ...body, name: params.name });
   fs.writeFileSync(filePath, content, "utf-8");
 
   const agentConfig = loadAgentConfig(filePath);
@@ -63,8 +77,10 @@ agentsRouter.put("/:name", async (req, res) => {
 });
 
 agentsRouter.delete("/:name", async (req, res) => {
+  const params = validateRequest(AgentParamsSchema, req.params, res);
+  if (!params) return;
   const config = getConfig();
-  const filePath = path.join(config.AGENTS_DIR, `${req.params.name}.md`);
+  const filePath = path.join(config.AGENTS_DIR, `${params.name}.md`);
   if (!fs.existsSync(filePath)) {
     res.status(404).json({ error: "Agent not found" });
     return;
@@ -73,7 +89,7 @@ agentsRouter.delete("/:name", async (req, res) => {
   res.status(204).end();
 });
 
-function buildAgentMarkdown(config: Partial<AgentConfig>): string {
+function buildAgentMarkdown(config: Partial<z.infer<typeof AgentConfigSchema>>): string {
   const frontmatter: Record<string, unknown> = {
     name: config.name ?? "unnamed",
     model: config.model ?? "qwen3.7-plus",

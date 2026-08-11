@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getConfig } from "@agent-harness/core";
+import { getConfig, parseBoundary, parseJsonBoundary } from "@agent-harness/core";
+import { z } from "zod";
+import { IdentifierSchema } from "./http/validation.js";
 
 /**
  * Open-sessions registry (ADR §12.1).
@@ -10,10 +12,13 @@ import { getConfig } from "@agent-harness/core";
  * it and serves it back on boot so the tab bar survives restarts.
  */
 
-export interface OpenSessionsState {
-  activeSessionId: string | null;
-  openSessionIds: string[];
-}
+export const OpenSessionsStateSchema = z
+  .object({
+    activeSessionId: IdentifierSchema.nullable(),
+    openSessionIds: z.array(IdentifierSchema).max(100),
+  })
+  .strict();
+export type OpenSessionsState = z.infer<typeof OpenSessionsStateSchema>;
 
 const EMPTY: OpenSessionsState = { activeSessionId: null, openSessionIds: [] };
 
@@ -23,23 +28,25 @@ function stateFile(): string {
 
 export function loadOpenSessions(): OpenSessionsState {
   try {
-    const raw = JSON.parse(fs.readFileSync(stateFile(), "utf-8")) as Partial<OpenSessionsState>;
-    return {
-      activeSessionId: typeof raw.activeSessionId === "string" ? raw.activeSessionId : null,
-      openSessionIds: Array.isArray(raw.openSessionIds)
-        ? raw.openSessionIds.filter((id): id is string => typeof id === "string")
-        : [],
-    };
-  } catch {
-    return { ...EMPTY };
+    return parseJsonBoundary(
+      OpenSessionsStateSchema,
+      fs.readFileSync(stateFile(), "utf-8"),
+      "open sessions state",
+    );
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { ...EMPTY };
+    }
+    throw error;
   }
 }
 
 /** Atomic write (temp + rename) so a crash can never leave a truncated file. */
 export function saveOpenSessions(state: OpenSessionsState): void {
+  const parsed = parseBoundary(OpenSessionsStateSchema, state, "open sessions save");
   const file = stateFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf-8");
+  fs.writeFileSync(tmp, JSON.stringify(parsed, null, 2), "utf-8");
   fs.renameSync(tmp, file);
 }

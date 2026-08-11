@@ -28,17 +28,16 @@ function configToMarkdown(config: AgentConfig): string {
   } else {
     lines.push("tools: []");
   }
-  if (config.capabilities && config.capabilities.length > 0) {
+  if (config.capabilities) {
     lines.push("capabilities:");
-    for (const c of config.capabilities) {
-      lines.push(`  - ${c}`);
-    }
+    lines.push(`  chat: ${config.capabilities.chat}`);
+    lines.push(`  tools: ${config.capabilities.tools}`);
+    lines.push(`  vision: ${config.capabilities.vision}`);
+    lines.push(`  streaming: ${config.capabilities.streaming}`);
+    lines.push(`  maxTokens: ${config.capabilities.maxTokens}`);
   }
-  if (config.modelIdMapping && Object.keys(config.modelIdMapping).length > 0) {
-    lines.push("modelIdMapping:");
-    for (const [k, v] of Object.entries(config.modelIdMapping)) {
-      lines.push(`  ${k}: ${v}`);
-    }
+  if (config.modelIdMapping) {
+    lines.push(`modelIdMapping: ${config.modelIdMapping}`);
   }
   lines.push("---");
   lines.push("");
@@ -70,10 +69,21 @@ function parseMarkdownConfig(content: string): Partial<AgentConfig> {
     config.tools = toolsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, "")) ?? [];
   }
 
-  const capsMatch = yamlStr.match(/^capabilities:\s*\n((?:\s+-\s+.+\n?)*)/m);
+  const capsMatch = yamlStr.match(/^capabilities:\s*\n((?:\s{2}.+\n?)*)/m);
   if (capsMatch) {
-    config.capabilities = capsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, "")) ?? [];
+    const capabilityValue = (key: string) =>
+      capsMatch[1].match(new RegExp(`^\\s{2}${key}:\\s*(.+)$`, "m"))?.[1].trim();
+    config.capabilities = {
+      chat: capabilityValue("chat") !== "false",
+      tools: capabilityValue("tools") !== "false",
+      vision: capabilityValue("vision") === "true",
+      streaming: capabilityValue("streaming") !== "false",
+      maxTokens: Number(capabilityValue("maxTokens") ?? "4096"),
+    };
   }
+
+  const modelIdMappingMatch = yamlStr.match(/^modelIdMapping:\s*(.+)$/m);
+  if (modelIdMappingMatch) config.modelIdMapping = modelIdMappingMatch[1].trim();
 
   return config;
 }

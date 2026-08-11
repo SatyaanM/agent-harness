@@ -1,5 +1,6 @@
 "use client";
 
+import type { Message, SessionData } from "@agent-harness/core/contracts";
 import { GripVertical, Maximize2, Minimize2, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -27,25 +28,6 @@ interface AgentDrawerProps {
   chatLeft: number;
   visible: boolean;
   onClose: () => void;
-}
-
-interface TranscriptToolCall {
-  id?: string;
-  toolName: string;
-  args?: unknown;
-}
-
-interface TranscriptMessageData {
-  id?: string;
-  role: string;
-  content?: string;
-  reasoning?: string;
-  createdAt?: string;
-  toolCalls?: TranscriptToolCall[];
-}
-
-interface WorkerTranscript {
-  messages?: TranscriptMessageData[];
 }
 
 function truncate(text: string, max: number): string {
@@ -115,7 +97,7 @@ function Disclosure({
   );
 }
 
-function TranscriptMessage({ m }: { m: TranscriptMessageData }) {
+function TranscriptMessage({ m }: { m: Message }) {
   const roleLabel =
     m.role === "tool"
       ? "✓ result"
@@ -176,7 +158,7 @@ export default function AgentDrawer({
   const myActivity = activity.filter((a) => a.agentName === agent.id).slice(-50);
   const workers = useRosterStore(useShallow((s) => s.bySession[sessionId] ?? []));
 
-  const [transcript, setTranscript] = useState<WorkerTranscript | null>(null);
+  const [transcript, setTranscript] = useState<SessionData | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
 
   // Open: slide out from under the chat (width 0 → target).
@@ -202,7 +184,7 @@ export default function AgentDrawer({
       fetchSession(agent.id)
         .then((data) => {
           if (cancelled) return;
-          setTranscript(data as WorkerTranscript);
+          setTranscript(data);
           setTranscriptLoading(false);
         })
         .catch(() => {});

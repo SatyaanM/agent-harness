@@ -1,21 +1,24 @@
 import { Router } from "express";
+import { z } from "zod";
+import { IdentifierSchema, validateRequest } from "../http/validation.js";
 import { sessionManager } from "../session-manager.js";
 
 export const chatRouter = Router();
 
+const ChatRequestSchema = z
+  .object({
+    sessionId: IdentifierSchema,
+    message: z.string().min(1).max(1_000_000),
+    agentName: IdentifierSchema.optional(),
+  })
+  .strict();
+
 chatRouter.post("/", async (req, res) => {
-  const { sessionId, message, agentName } = req.body as {
-    sessionId?: string;
-    message?: string;
-    agentName?: string;
-  };
+  const request = validateRequest(ChatRequestSchema, req.body, res);
+  if (!request) return;
+  const { sessionId, message, agentName } = request;
 
   console.log("[chat] Request:", { sessionId, messageLength: message?.length, agentName });
-
-  if (!sessionId || !message) {
-    res.status(400).json({ error: "sessionId and message are required" });
-    return;
-  }
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");

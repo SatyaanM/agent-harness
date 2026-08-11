@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRecord } from "../validation.js";
 import type { Tool } from "./types.js";
 
 const WebFetchParams = z.object({
@@ -61,11 +62,11 @@ export const webFetchTool: Tool<typeof WebFetchParams> = {
 
       return text;
     } catch (err: unknown) {
-      const e = err as { name?: string; message: string };
-      if (e.name === "AbortError") {
+      if (isRecord(err) && err.name === "AbortError") {
         return "[error] Request timed out after 15 seconds.";
       }
-      return `[error] ${e.message}`;
+      const message = err instanceof Error ? err.message : String(err);
+      return `[error] ${message}`;
     } finally {
       clearTimeout(timeout);
     }

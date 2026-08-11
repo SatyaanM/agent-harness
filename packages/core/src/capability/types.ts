@@ -1,13 +1,15 @@
-import type { CapabilityMatrix } from "../agent/types.js";
+import { z } from "zod";
+import { CapabilityMatrixSchema } from "../agent/types.js";
 
-export interface RegistryEntry {
-  provider: string;
-  model: string;
-  sdk: string;
-  caps: CapabilityMatrix;
-  source: "manual" | "cache" | "models.dev" | "probe";
-  probedAt: string;
-}
+export const RegistryEntrySchema = z.object({
+  provider: z.string().min(1).max(256),
+  model: z.string().min(1).max(256),
+  sdk: z.string().min(1).max(256),
+  caps: CapabilityMatrixSchema,
+  source: z.enum(["manual", "cache", "models.dev", "probe"]),
+  probedAt: z.string().min(1),
+});
+export type RegistryEntry = z.infer<typeof RegistryEntrySchema>;
 
 export type CapabilityEntry = RegistryEntry;
 
@@ -21,14 +23,13 @@ export interface AgentConfigRef {
   modelIdMapping?: string;
 }
 
-export interface ModelsDevResponse {
-  [key: string]: {
-    tool_call?: boolean;
-    modalities?: {
-      input?: string[];
-    };
-    limit?: {
-      output?: number;
-    };
-  };
-}
+export const ModelsDevResponseSchema = z.record(
+  z
+    .object({
+      tool_call: z.boolean().optional(),
+      modalities: z.object({ input: z.array(z.string()).optional() }).optional(),
+      limit: z.object({ output: z.number().nonnegative().optional() }).optional(),
+    })
+    .passthrough(),
+);
+export type ModelsDevResponse = z.infer<typeof ModelsDevResponseSchema>;

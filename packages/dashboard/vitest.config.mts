@@ -8,10 +8,17 @@ const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 export default defineProject({
   plugins: [react()],
   resolve: {
-    alias: {
-      "@": path.resolve(currentDirectory, "src"),
-      "@agent-harness/core": path.resolve(currentDirectory, "../core/src/index.ts"),
-    },
+    alias: [
+      {
+        find: "@agent-harness/core/contracts",
+        replacement: path.resolve(currentDirectory, "../core/src/contracts/index.ts"),
+      },
+      {
+        find: "@agent-harness/core",
+        replacement: path.resolve(currentDirectory, "../core/src/index.ts"),
+      },
+      { find: "@", replacement: path.resolve(currentDirectory, "src") },
+    ],
   },
   test: {
     environment: "jsdom",

@@ -13,7 +13,15 @@ export type {
   TaskId,
   ToolCall,
 } from "./agent/types.js";
-export { AgentCancelledError } from "./agent/types.js";
+export {
+  AgentCancelledError,
+  AgentConfigSchema,
+  AgentResultSchema,
+  CapabilityMatrixSchema,
+  MessageSchema,
+  TaskIdSchema,
+  ToolCallSchema,
+} from "./agent/types.js";
 export type { WorkerResult } from "./agent/worker.js";
 export { Worker } from "./agent/worker.js";
 export type { RegistryOptions } from "./capability/registry.js";
@@ -31,7 +39,7 @@ export { MessageBus, messageBus } from "./collaboration/message-bus.js";
 export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supervision.js";
 export { callSupervisor } from "./collaboration/supervision.js";
 export type { Config } from "./config.js";
-export { getConfig, resetConfig } from "./config.js";
+export { ConfigSchema, getConfig, resetConfig } from "./config.js";
 export type {
   LLMChatParams,
   LLMClient,
@@ -42,7 +50,7 @@ export { createVercelAILLMClient } from "./llm/vercel-ai.js";
 export { CapabilityCache } from "./persistence/capability-cache.js";
 export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
 export type { PendingMessage, SessionData } from "./persistence/session.js";
-export { SessionStore } from "./persistence/session.js";
+export { PendingMessageSchema, SessionDataSchema, SessionStore } from "./persistence/session.js";
 export type { SessionMeta } from "./persistence/session-index.js";
 export type {
   InboxRendererManifest,
@@ -80,3 +88,9 @@ export type {
   TTSProvider,
 } from "./tts/types.js";
 export { GEMINI_VOICES, TAG_INDICATORS } from "./tts/types.js";
+export {
+  BoundaryValidationError,
+  isRecord,
+  parseBoundary,
+  parseJsonBoundary,
+} from "./validation.js";

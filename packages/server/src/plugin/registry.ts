@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type PluginManifest, PluginManifestSchema } from "@agent-harness/core";
+import { type PluginManifest, PluginManifestSchema, parseJsonBoundary } from "@agent-harness/core";
+import { z } from "zod";
+
+const PluginStateSchema = z.object({ enabled: z.record(z.boolean()) }).strict();
 
 function findManifestFiles(dir: string): string[] {
   const results: string[] = [];
@@ -31,8 +34,11 @@ export function discoverPlugins(pluginsDir: string): PluginManifest[] {
 
   for (const file of manifests) {
     try {
-      const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
-      const parsed = PluginManifestSchema.parse(raw);
+      const parsed = parseJsonBoundary(
+        PluginManifestSchema,
+        fs.readFileSync(file, "utf-8"),
+        `plugin manifest ${file}`,
+      );
       plugins.push(parsed);
     } catch (err) {
       console.error(`[plugins] Failed to load manifest ${file}:`, err);
@@ -76,13 +82,12 @@ export class PluginRegistry {
   }
 
   private loadState(): void {
-    try {
-      if (fs.existsSync(this.stateFile)) {
-        const raw = JSON.parse(fs.readFileSync(this.stateFile, "utf-8"));
-        this.enabled = (raw as { enabled?: Record<string, boolean> }).enabled ?? {};
-      }
-    } catch (err) {
-      console.error("[plugins] Failed to load state:", err);
+    if (fs.existsSync(this.stateFile)) {
+      this.enabled = parseJsonBoundary(
+        PluginStateSchema,
+        fs.readFileSync(this.stateFile, "utf-8"),
+        "plugin enabled state",
+      ).enabled;
     }
   }
 

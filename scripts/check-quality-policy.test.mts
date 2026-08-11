@@ -9,6 +9,7 @@ const tempRoots: string[] = [];
 async function makeRepository(options?: {
   baseCompilerOptions?: Record<string, unknown>;
   source?: string;
+  sourcePath?: string;
 }): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "agent-harness-quality-policy-"));
   tempRoots.push(root);
@@ -21,10 +22,9 @@ async function makeRepository(options?: {
     path.join(root, "packages", "example", "tsconfig.json"),
     JSON.stringify({ extends: "../../tsconfig.base.json", include: ["src/**/*"] }),
   );
-  await writeFile(
-    path.join(root, "packages", "example", "src", "example.ts"),
-    options?.source ?? "export const answer: number = 42;\n",
-  );
+  const sourcePath = path.join(root, options?.sourcePath ?? "packages/example/src/example.ts");
+  await mkdir(path.dirname(sourcePath), { recursive: true });
+  await writeFile(sourcePath, options?.source ?? "export const answer: number = 42;\n");
   return root;
 }
 
@@ -71,5 +71,48 @@ describe("checkQualityPolicy", () => {
     const root = await makeRepository({ source });
 
     expect(checkQualityPolicy(root)).toContainEqual(expect.objectContaining({ rule }));
+  });
+
+  it("rejects direct Express request data access outside the validation helper", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/server/src/routes/example.ts",
+      source: "export function route(req: { body: unknown }) { return req.body; }",
+    });
+
+    expect(checkQualityPolicy(root)).toContainEqual(
+      expect.objectContaining({ rule: "boundaries/validate-request" }),
+    );
+  });
+
+  it("allows Express request data to flow directly into the validation helper", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/server/src/routes/example.ts",
+      source:
+        "export function route(req: { body: unknown }, schema: unknown, res: unknown) { return validateRequest(schema, req.body, res); }",
+    });
+
+    expect(checkQualityPolicy(root)).toEqual([]);
+  });
+
+  it("rejects raw JSON parsing in persistence code", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/core/src/persistence/example.ts",
+      source: "export function load(raw: string) { return JSON.parse(raw); }",
+    });
+
+    expect(checkQualityPolicy(root)).toContainEqual(
+      expect.objectContaining({ rule: "boundaries/validated-json" }),
+    );
+  });
+
+  it("rejects Node imports from the browser-safe core contracts surface", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/core/src/contracts/example.ts",
+      source: 'import fs from "node:fs";\nexport const exists = fs.existsSync;\n',
+    });
+
+    expect(checkQualityPolicy(root)).toContainEqual(
+      expect.objectContaining({ rule: "boundaries/browser-safe-contracts" }),
+    );
   });
 });

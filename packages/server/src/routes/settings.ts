@@ -1,8 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Config } from "@agent-harness/core";
-import { getConfig, resetConfig } from "@agent-harness/core";
+import {
+  ConfigSchema,
+  getConfig,
+  parseBoundary,
+  parseJsonBoundary,
+  resetConfig,
+} from "@agent-harness/core";
 import { Router } from "express";
+import { validateRequest } from "../http/validation.js";
 
 const SETTING_KEYS: (keyof Config)[] = [
   "ROOT",
@@ -14,6 +21,19 @@ const SETTING_KEYS: (keyof Config)[] = [
   "DEFAULT_MODEL",
   "MAX_CONCURRENT_AGENTS",
 ];
+const PersistedSettingsSchema = ConfigSchema.pick({
+  ROOT: true,
+  INBOX_ROOT: true,
+  SESSIONS_DIR: true,
+  AGENTS_DIR: true,
+  PROVIDER_ENDPOINT: true,
+  API_KEY_ENV: true,
+  DEFAULT_MODEL: true,
+  MAX_CONCURRENT_AGENTS: true,
+})
+  .partial()
+  .strict();
+const SettingsUpdateSchema = PersistedSettingsSchema;
 
 function getSettingsFile(): string {
   const config = getConfig();
@@ -44,7 +64,8 @@ settingsRouter.get("/models", async (_req, res) => {
 });
 
 settingsRouter.put("/", (req, res) => {
-  const body = req.body as Partial<Config>;
+  const body = validateRequest(SettingsUpdateSchema, req.body, res);
+  if (!body) return;
   const config = getConfig();
 
   const updated: Record<string, unknown> = { ...config };
@@ -54,14 +75,11 @@ settingsRouter.put("/", (req, res) => {
     }
   }
 
-  if (typeof updated.MAX_CONCURRENT_AGENTS === "string") {
-    updated.MAX_CONCURRENT_AGENTS = Number(updated.MAX_CONCURRENT_AGENTS);
-  }
-
   try {
-    savePersistedSettings(updated as Config);
+    const parsed = parseBoundary(ConfigSchema, updated, "settings update");
+    savePersistedSettings(parsed);
     resetConfig();
-    res.json(updated);
+    res.json(parsed);
   } catch (err) {
     res.status(500).json({ error: "Failed to save settings", details: String(err) });
   }
@@ -72,7 +90,7 @@ function loadPersistedSettings(): Partial<Config> {
     const file = getSettingsFile();
     if (fs.existsSync(file)) {
       const raw = fs.readFileSync(file, "utf-8");
-      return JSON.parse(raw) as Partial<Config>;
+      return parseJsonBoundary(PersistedSettingsSchema, raw, "persisted settings");
     }
   } catch {}
   return {};

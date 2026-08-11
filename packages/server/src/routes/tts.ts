@@ -1,23 +1,41 @@
 import type { TTSConfig } from "@agent-harness/core";
-import { createGeminiTTSProvider, GEMINI_VOICES } from "@agent-harness/core";
+import { createGeminiTTSProvider, GEMINI_VOICES, parseBoundary } from "@agent-harness/core";
 import { Router } from "express";
+import { z } from "zod";
+import { validateRequest } from "../http/validation.js";
 
 export const ttsRouter = Router();
 
-ttsRouter.post("/", async (req, res) => {
-  const { text, voice, persona, emotiveTags, tagStyle, customTagInstructions } = req.body as {
-    text?: string;
-    voice?: string;
-    persona?: string;
-    emotiveTags?: boolean;
-    tagStyle?: "conservative" | "balanced" | "expressive";
-    customTagInstructions?: string;
-  };
+const TTSRequestSchema = z
+  .object({
+    text: z.string().min(1).max(100_000),
+    voice: z.string().min(1).max(128).optional(),
+    persona: z.string().max(10_000).optional(),
+    emotiveTags: z.boolean().optional(),
+    tagStyle: z.enum(["conservative", "balanced", "expressive"]).optional(),
+    customTagInstructions: z.string().max(10_000).optional(),
+  })
+  .strict();
+const ParaphraseResponseSchema = z.object({
+  choices: z
+    .array(
+      z.object({
+        message: z
+          .object({
+            content: z.string().nullable().optional(),
+            reasoning: z.string().nullable().optional(),
+            reasoning_content: z.string().nullable().optional(),
+          })
+          .optional(),
+      }),
+    )
+    .optional(),
+});
 
-  if (!text) {
-    res.status(400).json({ error: "text is required" });
-    return;
-  }
+ttsRouter.post("/", async (req, res) => {
+  const request = validateRequest(TTSRequestSchema, req.body, res);
+  if (!request) return;
+  const { text, voice, persona, emotiveTags, tagStyle, customTagInstructions } = request;
 
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const openCodeApiKey = process.env.OPENCODE_API_KEY;
@@ -55,15 +73,11 @@ ttsRouter.post("/", async (req, res) => {
     let paraphrasedText = text; // fallback to original
 
     if (paraphraseResponse.ok) {
-      const result = (await paraphraseResponse.json()) as {
-        choices?: Array<{
-          message?: {
-            content?: string | null;
-            reasoning?: string | null;
-            reasoning_content?: string | null;
-          };
-        }>;
-      };
+      const result = parseBoundary(
+        ParaphraseResponseSchema,
+        await paraphraseResponse.json(),
+        "TTS paraphrase response",
+      );
       const message = result.choices?.[0]?.message;
       const content = message?.content || message?.reasoning || message?.reasoning_content || "";
       if (content) {

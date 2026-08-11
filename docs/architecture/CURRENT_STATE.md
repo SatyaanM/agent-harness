@@ -114,18 +114,19 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 
 ## Verification reality
 
-The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests the executable strict-TypeScript and forbidden-escape-hatch policy with negative fixtures. Before the quality-hardening implementation began, the product packages discovered four test files and eight tests:
+The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests the executable strict-TypeScript and trust-boundary policy with negative fixtures. As of the first boundary-hardening increment, the matrix discovers nine test files and 30 tests. New coverage includes:
 
-- core configuration parsing/defaults: three tests;
-- server health route: one test;
-- dashboard command-palette store: two tests;
-- dashboard error boundary: two tests.
+- malformed persisted configuration;
+- valid and invalid session transcript/mailbox records, including preservation of a corrupt mailbox line;
+- provider-supplied tool argument validation before execution;
+- stable server request-validation errors and path-like identifier rejection;
+- dashboard HTTP, chat-stream, and WebSocket payload validation.
 
-[`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) is a manual console script, not part of the configured Vitest suite. There are no automated tests for `SessionStore`, mailbox ordering/drain, `SessionRuntime`, delegation/wake behavior, cancellation, session routes, plugin discovery, provider routing, or dashboard resynchronization. The current build and typecheck are green, but the highest-value runtime invariants are largely protected by prose rather than executable evidence.
+[`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) remains a manual console script, not part of the configured Vitest suite. There are still no automated tests for `SessionRuntime`, delegation/wake behavior, cancellation, plugin discovery, provider routing, or end-to-end dashboard resynchronization. The most important remaining runtime invariants are tracked by the quality-hardening plan.
 
-`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The 2026-08-11 baseline is 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. No threshold is enforced yet: coverage reporting is present to make the gap measurable, not to imply that the current sparse suite is sufficient.
+`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. Boundary hardening raised the measured baseline to 10.75% statements, 4.62% branches, 7.23% functions, and 11.68% lines. Conservative global thresholds of 10/4/7/11 now prevent regression while critical-module tests and tighter thresholds are added; these low global floors are not presented as broad runtime protection.
 
-`corepack npm run quality:policy` now resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript ignore directives, explicit `any`, and double assertions. It does not yet prove complete boundary validation; that migration and its additional static rules are tracked by [`specs/quality-hardening`](../../specs/quality-hardening/README.md).
+`corepack npm run quality:policy` resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript ignore directives, explicit `any`, double assertions, direct Express request-data use outside `validateRequest`, raw JSON parsing in server or core persistence code, and Node/runtime imports from the browser-safe core contracts surface. Core session/config/cache data, server request bodies/params/query, plugin state, provider-specific TTS/capability responses, dashboard HTTP/chat-stream/WebSocket responses, and local TTS settings now have explicit schemas. Dashboard code consumes those schemas through `@agent-harness/core/contracts`, which cannot import the Node-backed core runtime. Remaining boundary work is tracked by [`specs/quality-hardening`](../../specs/quality-hardening/README.md).
 
 ## Immediate architecture risks
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 import { getConfig } from "../config.js";
+import { isRecord } from "../validation.js";
 import type { Tool } from "./types.js";
 import { assertWithinRoot } from "./utils.js";
 
@@ -43,14 +44,17 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
       if (stderr.trim()) parts.push(`[stderr]\n${stderr.trimEnd()}`);
       return parts.length > 0 ? parts.join("\n\n") : "(no output)";
     } catch (err: unknown) {
-      const e = err as { stdout?: string; stderr?: string; message: string; killed?: boolean };
-      if (e.killed) {
+      const details = isRecord(err) ? err : {};
+      const stdout = typeof details.stdout === "string" ? details.stdout : undefined;
+      const stderr = typeof details.stderr === "string" ? details.stderr : undefined;
+      const message = err instanceof Error ? err.message : String(err);
+      if (details.killed === true) {
         return `[error] Command timed out after ${TIMEOUT_MS}ms.`;
       }
       const parts: string[] = [];
-      if (e.stdout?.trim()) parts.push(e.stdout.trimEnd());
-      if (e.stderr?.trim()) parts.push(`[stderr]\n${e.stderr.trimEnd()}`);
-      if (parts.length === 0) parts.push(`[error] ${e.message}`);
+      if (stdout?.trim()) parts.push(stdout.trimEnd());
+      if (stderr?.trim()) parts.push(`[stderr]\n${stderr.trimEnd()}`);
+      if (parts.length === 0) parts.push(`[error] ${message}`);
       return parts.join("\n\n");
     }
   },

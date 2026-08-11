@@ -18,7 +18,7 @@ read_when:
   - Acceptance: resolved TypeScript strictness and forbidden source patterns are checked; negative fixtures fail for the intended reason
   - Verify: focused tooling tests; `corepack npm run quality:policy`; root check
   - Docs/handoff: mark implemented policy checks distinctly from planned checks
-- [ ] **T02 - Validate transport and serialized boundaries**
+- [x] **T02 - Validate transport and serialized boundaries**
   - Depends on: T01
   - Scope: core schemas and JSON helpers; server request parsing; dashboard API/event parsing; provider result guards
   - Acceptance: boundary values enter as `unknown`; invalid API, disk, provider, and browser payloads cannot enter trusted state

@@ -1,24 +1,30 @@
+import { z } from "zod";
+import { parseBoundary } from "../validation.js";
 import type { AudioChunk, TTSConfig, TTSProvider } from "./types.js";
 
 const GEMINI_TTS_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent";
 
-interface GeminiResponse {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        inlineData?: {
-          mimeType: string;
-          data: string;
-        };
-      }>;
-    };
-  }>;
-  error?: {
-    code: number;
-    message: string;
-  };
-}
+const GeminiResponseSchema = z.object({
+  candidates: z
+    .array(
+      z.object({
+        content: z
+          .object({
+            parts: z
+              .array(
+                z.object({
+                  inlineData: z.object({ mimeType: z.string(), data: z.string() }).optional(),
+                }),
+              )
+              .optional(),
+          })
+          .optional(),
+      }),
+    )
+    .optional(),
+  error: z.object({ code: z.number(), message: z.string() }).optional(),
+});
 
 export function createGeminiTTSProvider(): TTSProvider {
   return {
@@ -61,7 +67,11 @@ export function createGeminiTTSProvider(): TTSProvider {
         throw new Error(`Gemini TTS request failed: ${response.status} - ${errorBody}`);
       }
 
-      const result = (await response.json()) as GeminiResponse;
+      const result = parseBoundary(
+        GeminiResponseSchema,
+        await response.json(),
+        "Gemini TTS response",
+      );
 
       if (result.error) {
         throw new Error(`Gemini TTS error: ${result.error.code} - ${result.error.message}`);

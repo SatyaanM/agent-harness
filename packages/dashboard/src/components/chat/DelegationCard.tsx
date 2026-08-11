@@ -1,6 +1,6 @@
 "use client";
 
-import type { TaskId } from "@agent-harness/core";
+import type { TaskId } from "@agent-harness/core/contracts";
 
 export interface DelegationEvent {
   type: "delegation";

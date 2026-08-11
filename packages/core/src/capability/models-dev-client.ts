@@ -1,5 +1,6 @@
 import type { CapabilityMatrix } from "../agent/types.js";
-import type { ModelsDevResponse } from "./types.js";
+import { parseBoundary } from "../validation.js";
+import { type ModelsDevResponse, ModelsDevResponseSchema } from "./types.js";
 
 const API_URL = "https://models.dev/api.json";
 const MAX_RETRIES = 3;
@@ -32,7 +33,7 @@ async function fetchApi(): Promise<ModelsDevResponse | null> {
       fetchFailed = true;
       return null;
     }
-    cachedApi = (await res.json()) as ModelsDevResponse;
+    cachedApi = parseBoundary(ModelsDevResponseSchema, await res.json(), "models.dev response");
     return cachedApi;
   } catch {
     if (fetchFailed) return null;
@@ -43,7 +44,11 @@ async function fetchApi(): Promise<ModelsDevResponse | null> {
         try {
           const res = await fetch(API_URL);
           if (res.ok) {
-            cachedApi = (await res.json()) as ModelsDevResponse;
+            cachedApi = parseBoundary(
+              ModelsDevResponseSchema,
+              await res.json(),
+              "models.dev response",
+            );
             return cachedApi;
           }
           if (!isTransientError(res.status)) break;

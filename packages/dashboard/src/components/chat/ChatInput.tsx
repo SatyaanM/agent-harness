@@ -3,7 +3,7 @@
 import { type KeyboardEvent, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { sendMessage } from "@/lib/api";
+import { parseChatStreamEvent, sendMessage } from "@/lib/api";
 import { useChatInputStore } from "@/stores/chat-input-store";
 import { useSessionStore } from "@/stores/session-store";
 import { useTTSStore } from "@/stores/tts-store";
@@ -73,19 +73,15 @@ export default function ChatInput() {
           const data = line.slice(6);
           if (data === "[DONE]") break;
 
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === "text-delta") {
-              accumulated += parsed.text;
-              updateMessage(activeSessionId, assistantMessageId, accumulated);
-            } else if (parsed.type === "done") {
-              break;
-            } else if (parsed.type === "error") {
-              updateMessage(activeSessionId, assistantMessageId, `Error: ${parsed.error}`);
-              break;
-            }
-          } catch {
-            // Skip malformed JSON
+          const parsed = parseChatStreamEvent(data);
+          if (parsed.type === "text-delta") {
+            accumulated += parsed.text;
+            updateMessage(activeSessionId, assistantMessageId, accumulated);
+          } else if (parsed.type === "done") {
+            break;
+          } else if (parsed.type === "error") {
+            updateMessage(activeSessionId, assistantMessageId, `Error: ${parsed.error}`);
+            break;
           }
         }
       }

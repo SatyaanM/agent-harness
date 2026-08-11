@@ -1,6 +1,10 @@
+import { parseBoundary } from "@agent-harness/core/contracts";
+import { z } from "zod";
+
 export type PlaybackState = "idle" | "playing" | "paused";
 
 const TTS_BASE_URL = "http://localhost:3001";
+const TTSErrorSchema = z.object({ error: z.string().optional() }).passthrough();
 
 export interface TTSPlayer {
   play(text: string, options?: TTSPlayOptions): Promise<void>;
@@ -141,7 +145,7 @@ export function createTTSPlayer(): TTSPlayer {
         });
 
         if (!response.ok) {
-          const error = await response.json();
+          const error = parseBoundary(TTSErrorSchema, await response.json(), "TTS error response");
           throw new Error(error.error || "TTS request failed");
         }
 

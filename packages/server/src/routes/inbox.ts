@@ -2,8 +2,30 @@ import path from "node:path";
 import { getConfig, InboxManager } from "@agent-harness/core";
 import { Router } from "express";
 import fs from "fs-extra";
+import { z } from "zod";
+import { IdentifierSchema, RelativePathSchema, validateRequest } from "../http/validation.js";
 
 const router = Router();
+
+const NonEmptyRelativePathSchema = RelativePathSchema.refine(
+  (value) => value.length > 0,
+  "must not be empty",
+);
+const FileQuerySchema = z.object({ path: NonEmptyRelativePathSchema }).passthrough();
+const FileContentSchema = z.object({ content: z.string().max(10_000_000) }).strict();
+const MoveSchema = z
+  .object({ from: NonEmptyRelativePathSchema, to: RelativePathSchema.default("") })
+  .strict();
+const DirectorySchema = z.object({ path: NonEmptyRelativePathSchema }).strict();
+const OpenSchema = z.object({ path: RelativePathSchema.optional() }).strict();
+const ItemParamsSchema = z.object({ id: IdentifierSchema }).strict();
+const TrackItemSchema = z
+  .object({
+    title: z.string().min(1).max(512),
+    type: z.string().min(1).max(128),
+    authorAgent: IdentifierSchema,
+  })
+  .strict();
 
 function getInboxManager() {
   const config = getConfig();
@@ -55,9 +77,11 @@ router.get("/tree", async (_req, res) => {
 });
 
 router.get("/file", async (req, res) => {
+  const query = validateRequest(FileQuerySchema, req.query, res);
+  if (!query) return;
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const rel = String(req.query.path ?? "");
+  const rel = query.path;
 
   const rootResolved = path.resolve(config.INBOX_ROOT);
   const filePath = path.resolve(rootResolved, rel);
@@ -85,15 +109,14 @@ router.get("/file", async (req, res) => {
 });
 
 router.put("/file", async (req, res) => {
+  const query = validateRequest(FileQuerySchema, req.query, res);
+  if (!query) return;
+  const body = validateRequest(FileContentSchema, req.body, res);
+  if (!body) return;
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const rel = String(req.query.path ?? "");
-  const { content } = req.body as { content?: string };
-
-  if (typeof content !== "string") {
-    res.status(400).json({ error: "content is required" });
-    return;
-  }
+  const rel = query.path;
+  const { content } = body;
 
   const rootResolved = path.resolve(config.INBOX_ROOT);
   const filePath = path.resolve(rootResolved, rel);
@@ -112,15 +135,11 @@ router.put("/file", async (req, res) => {
 });
 
 router.post("/move", async (req, res) => {
+  const body = validateRequest(MoveSchema, req.body, res);
+  if (!body) return;
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const { from, to } = req.body as { from?: string; to?: string };
-
-  if (typeof from !== "string" || !from) {
-    res.status(400).json({ error: "from is required" });
-    return;
-  }
-  const toDir = typeof to === "string" ? to : "";
+  const { from, to: toDir } = body;
 
   const rootResolved = path.resolve(config.INBOX_ROOT);
   const fromPath = path.resolve(rootResolved, from);
@@ -173,12 +192,10 @@ router.post("/move", async (req, res) => {
 });
 
 router.post("/dir", async (req, res) => {
+  const body = validateRequest(DirectorySchema, req.body, res);
+  if (!body) return;
   const config = getConfig();
-  const { path: rel } = req.body as { path?: string };
-  if (typeof rel !== "string" || !rel) {
-    res.status(400).json({ error: "path is required" });
-    return;
-  }
+  const { path: rel } = body;
   const rootResolved = path.resolve(config.INBOX_ROOT);
   const dirPath = path.resolve(rootResolved, rel);
   if (dirPath !== rootResolved && !dirPath.startsWith(rootResolved + path.sep)) {
@@ -190,9 +207,11 @@ router.post("/dir", async (req, res) => {
 });
 
 router.delete("/file", async (req, res) => {
+  const query = validateRequest(FileQuerySchema, req.query, res);
+  if (!query) return;
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const rel = String(req.query.path ?? "");
+  const rel = query.path;
   const rootResolved = path.resolve(config.INBOX_ROOT);
   const filePath = path.resolve(rootResolved, rel);
   if (filePath !== rootResolved && !filePath.startsWith(rootResolved + path.sep)) {
@@ -209,8 +228,10 @@ router.delete("/file", async (req, res) => {
 });
 
 router.post("/open", async (req, res) => {
+  const body = validateRequest(OpenSchema, req.body, res);
+  if (!body) return;
   const config = getConfig();
-  const { path: rel } = req.body as { path?: string };
+  const { path: rel } = body;
   const rootResolved = path.resolve(config.INBOX_ROOT);
   const target = rel ? path.resolve(rootResolved, rel) : rootResolved;
   if (target !== rootResolved && !target.startsWith(rootResolved + path.sep)) {
@@ -278,13 +299,11 @@ async function walkTree(
 }
 
 router.get("/:id", async (req, res) => {
+  const params = validateRequest(ItemParamsSchema, req.params, res);
+  if (!params) return;
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const itemId = req.params.id;
-  if (!itemId) {
-    res.status(400).json({ error: "Inbox item id is required" });
-    return;
-  }
+  const itemId = params.id;
   const filePath = path.join(config.INBOX_ROOT, itemId);
   if (!(await fs.pathExists(filePath))) {
     res.status(404).json({ error: "Inbox item not found" });
@@ -305,43 +324,37 @@ router.get("/:id", async (req, res) => {
 });
 
 router.put("/:id", async (req, res) => {
+  const params = validateRequest(ItemParamsSchema, req.params, res);
+  if (!params) return;
+  const body = validateRequest(FileContentSchema, req.body, res);
+  if (!body) return;
   const config = getConfig();
   const inboxManager = getInboxManager();
-  const itemId = req.params.id;
-  if (!itemId) {
-    res.status(400).json({ error: "Inbox item id is required" });
-    return;
-  }
+  const itemId = params.id;
   const filePath = path.join(config.INBOX_ROOT, itemId);
-  const { content } = req.body;
+  const { content } = body;
   await fs.writeFile(filePath, content, "utf-8");
   const updated = await inboxManager.bumpVersion(itemId);
   res.json({ success: true, metadata: updated });
 });
 
 router.delete("/:id", async (req, res) => {
+  const params = validateRequest(ItemParamsSchema, req.params, res);
+  if (!params) return;
   const inboxManager = getInboxManager();
-  const itemId = req.params.id;
-  if (!itemId) {
-    res.status(400).json({ error: "Inbox item id is required" });
-    return;
-  }
+  const itemId = params.id;
   await inboxManager.deleteItem(itemId);
   res.json({ success: true });
 });
 
 router.post("/:id/track", async (req, res) => {
+  const params = validateRequest(ItemParamsSchema, req.params, res);
+  if (!params) return;
+  const body = validateRequest(TrackItemSchema, req.body, res);
+  if (!body) return;
   const inboxManager = getInboxManager();
-  const itemId = req.params.id;
-  if (!itemId) {
-    res.status(400).json({ error: "Inbox item id is required" });
-    return;
-  }
-  const { title, type, authorAgent } = req.body;
-  if (!title || !type || !authorAgent) {
-    res.status(400).json({ error: "Missing required fields: title, type, authorAgent" });
-    return;
-  }
+  const itemId = params.id;
+  const { title, type, authorAgent } = body;
   const metadata = await inboxManager.trackItem(itemId, { title, type, authorAgent });
   res.json(metadata);
 });

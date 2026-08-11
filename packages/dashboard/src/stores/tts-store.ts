@@ -1,3 +1,5 @@
+import { parseJsonBoundary } from "@agent-harness/core/contracts";
+import { z } from "zod";
 import { create } from "zustand";
 import type { PlaybackState } from "@/lib/tts-player";
 import { createTTSPlayer } from "@/lib/tts-player";
@@ -32,6 +34,17 @@ interface TTSStore {
 }
 
 const player = createTTSPlayer();
+const TTSSettingsSchema = z
+  .object({
+    enabled: z.boolean(),
+    voice: z.string().min(1).max(128),
+    persona: z.string().max(10_000),
+    emotiveTags: z.boolean(),
+    tagStyle: z.enum(["conservative", "balanced", "expressive"]),
+    customTagInstructions: z.string().max(10_000),
+  })
+  .partial()
+  .strict();
 
 // Available voices from Gemini
 const DEFAULT_VOICES: TTSVoice[] = [
@@ -72,11 +85,11 @@ player.onStateChange((state) => {
   useTTSStore.setState({ playbackState: state });
 });
 
-function loadSettingsFromStorage() {
+function loadSettingsFromStorage(): z.infer<typeof TTSSettingsSchema> {
   if (typeof window === "undefined") return {};
   try {
     const stored = localStorage.getItem("tts-settings");
-    return stored ? JSON.parse(stored) : {};
+    return stored ? parseJsonBoundary(TTSSettingsSchema, stored, "TTS local settings") : {};
   } catch {
     return {};
   }
@@ -106,7 +119,7 @@ export const useTTSStore = create<TTSStore>((set, get) => {
     voice: saved.voice ?? "Gacrux",
     persona: saved.persona ?? "",
     emotiveTags: saved.emotiveTags ?? true,
-    tagStyle: (saved.tagStyle as "conservative" | "balanced" | "expressive") ?? "balanced",
+    tagStyle: saved.tagStyle ?? "balanced",
     customTagInstructions: saved.customTagInstructions ?? "",
     playbackState: "idle",
     availableVoices: DEFAULT_VOICES,
@@ -176,7 +189,7 @@ export const useTTSStore = create<TTSStore>((set, get) => {
         voice: saved.voice ?? "Gacrux",
         persona: saved.persona ?? "",
         emotiveTags: saved.emotiveTags ?? true,
-        tagStyle: (saved.tagStyle as "conservative" | "balanced" | "expressive") ?? "balanced",
+        tagStyle: saved.tagStyle ?? "balanced",
         customTagInstructions: saved.customTagInstructions ?? "",
       });
     },

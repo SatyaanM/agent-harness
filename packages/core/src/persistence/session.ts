@@ -1,32 +1,16 @@
 import path from "node:path";
 import fs from "fs-extra";
-import type { Message, TaskId } from "../agent/types.js";
+import {
+  type PendingMessage,
+  PendingMessageSchema,
+  type SessionData,
+  SessionDataSchema,
+} from "../contracts/session.js";
+import { parseBoundary, parseJsonBoundary } from "../validation.js";
 import { getSessionIndex, type SessionMeta } from "./session-index.js";
 
-export interface PendingMessage {
-  taskId: TaskId;
-  from: string;
-  agentName: string;
-  status: "done" | "error" | "cancelled";
-  summary: string;
-  receivedAt: string;
-}
-
-export interface SessionData {
-  sessionId: string;
-  taskId: TaskId;
-  prompt: string;
-  messages: Message[];
-  agentName?: string;
-  title?: string;
-  mailbox?: PendingMessage[];
-  result?: {
-    status: string;
-    summary: string;
-  };
-  createdAt: string;
-  completedAt?: string;
-}
+export type { PendingMessage, SessionData } from "../contracts/session.js";
+export { PendingMessageSchema, SessionDataSchema } from "../contracts/session.js";
 
 /** A detached copy of a session so callers can safely mutate their own state. */
 function cleanSession(session: SessionData): SessionData {
@@ -84,7 +68,7 @@ class TranscriptState {
   }
 
   save(snapshot: SessionData): Promise<string> {
-    const transcript = { ...snapshot };
+    const transcript = { ...parseBoundary(SessionDataSchema, snapshot, "session save") };
     delete transcript.mailbox;
     this.latest = transcript;
     return new Promise<string>((resolve, reject) => {
@@ -180,16 +164,19 @@ class MailboxLog {
     this.fileExists = await fs.pathExists(this.filePath);
     if (this.fileExists) {
       const text = await fs.readFile(this.filePath, "utf-8");
-      this.messages = [];
-      for (const line of text.split("\n")) {
+      const messages: PendingMessage[] = [];
+      for (const [index, line] of text.split("\n").entries()) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-        try {
-          this.messages.push(JSON.parse(trimmed) as PendingMessage);
-        } catch {
-          // Tolerate a corrupt line rather than failing the whole log.
-        }
+        messages.push(
+          parseJsonBoundary(
+            PendingMessageSchema,
+            trimmed,
+            `session mailbox ${this.sessionId} line ${index + 1}`,
+          ),
+        );
       }
+      this.messages = messages;
     } else {
       this.messages = [];
     }
@@ -198,9 +185,14 @@ class MailboxLog {
 
   append(message: PendingMessage): Promise<void> {
     return this.enqueue(async () => {
+      const parsed = parseBoundary(
+        PendingMessageSchema,
+        message,
+        `session mailbox ${this.sessionId} append`,
+      );
       const messages = await this.ensureLoaded();
-      messages.push(message);
-      await fs.appendFile(this.filePath, `${JSON.stringify(message)}\n`, "utf-8");
+      messages.push(parsed);
+      await fs.appendFile(this.filePath, `${JSON.stringify(parsed)}\n`, "utf-8");
       this.fileExists = true;
     });
   }
@@ -261,7 +253,11 @@ function getMailboxLog(sessionsDir: string, sessionId: string): MailboxLog {
 async function readTranscript(sessionsDir: string, sessionId: string): Promise<SessionData | null> {
   const filePath = path.join(sessionsDir, `${sessionId}.json`);
   if (await fs.pathExists(filePath)) {
-    return fs.readJson(filePath);
+    return parseJsonBoundary(
+      SessionDataSchema,
+      await fs.readFile(filePath, "utf-8"),
+      `session transcript ${sessionId}`,
+    );
   }
   return null;
 }
@@ -275,8 +271,9 @@ export class SessionStore {
   }
 
   async save(session: SessionData): Promise<string> {
-    const result = getTranscriptState(this.sessionsDir, session.sessionId).save(session);
-    await getSessionIndex(this.sessionsDir).upsert(session);
+    const parsed = parseBoundary(SessionDataSchema, session, "session store save");
+    const result = getTranscriptState(this.sessionsDir, parsed.sessionId).save(parsed);
+    await getSessionIndex(this.sessionsDir).upsert(parsed);
     return result;
   }
 
@@ -317,7 +314,11 @@ export class SessionStore {
       if (file === ".index.json") continue;
       const sessionId = file.slice(0, -".json".length);
       if (sessions.has(sessionId)) continue;
-      const session = await fs.readJson(path.join(this.sessionsDir, file));
+      const session = parseJsonBoundary(
+        SessionDataSchema,
+        await fs.readFile(path.join(this.sessionsDir, file), "utf-8"),
+        `session transcript ${sessionId}`,
+      );
       sessions.set(sessionId, session);
     }
 

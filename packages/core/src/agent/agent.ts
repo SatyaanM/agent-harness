@@ -1,6 +1,7 @@
 import type { CapabilityRegistry } from "../capability/registry.js";
 import type { LLMClient, LLMToolDefinition } from "../llm/client.js";
 import type { ToolRegistry } from "../tool/types.js";
+import { parseBoundary } from "../validation.js";
 import type { AgentConfig, AgentResult, Message } from "./types.js";
 import { AgentCancelledError } from "./types.js";
 
@@ -84,7 +85,12 @@ export class Agent {
           });
 
           try {
-            const result = await tool.execute(toolCall.args);
+            const args = parseBoundary(
+              tool.parameters,
+              toolCall.args,
+              `tool ${toolCall.toolName} arguments`,
+            );
+            const result = await tool.execute(args);
             this.onEvent?.({
               type: "tool:completed",
               toolName: toolCall.toolName,

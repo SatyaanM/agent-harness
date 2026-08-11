@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { RegistryEntry } from "../capability/types.js";
+import { z } from "zod";
+import { type RegistryEntry, RegistryEntrySchema } from "../capability/types.js";
+import { parseBoundary, parseJsonBoundary } from "../validation.js";
+
+const CapabilityCacheSchema = z.array(RegistryEntrySchema);
 
 const CACHE_DIR = ".harness";
 const CACHE_FILE = "capabilities.json";
@@ -18,8 +22,7 @@ export class CapabilityCache {
     if (this.loaded) return this.entries;
     try {
       const raw = await fs.readFile(this.cachePath, "utf-8");
-      const parsed = JSON.parse(raw);
-      this.entries = Array.isArray(parsed) ? parsed : [];
+      this.entries = parseJsonBoundary(CapabilityCacheSchema, raw, "capability cache");
     } catch {
       this.entries = [];
     }
@@ -28,11 +31,11 @@ export class CapabilityCache {
   }
 
   async saveCache(entries: RegistryEntry[]): Promise<void> {
-    this.entries = entries;
+    this.entries = parseBoundary(CapabilityCacheSchema, entries, "capability cache save");
     this.loaded = true;
     const dir = path.dirname(this.cachePath);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(this.cachePath, JSON.stringify(entries, null, 2), "utf-8");
+    await fs.writeFile(this.cachePath, JSON.stringify(this.entries, null, 2), "utf-8");
   }
 
   async getEntry(provider: string, model: string, sdk: string): Promise<RegistryEntry | undefined> {

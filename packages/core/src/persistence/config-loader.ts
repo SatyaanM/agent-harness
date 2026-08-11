@@ -3,7 +3,7 @@ import path from "node:path";
 import fg from "fast-glob";
 import matter from "gray-matter";
 import { z } from "zod";
-import type { AgentConfig, CapabilityMatrix } from "../agent/types.js";
+import type { AgentConfig } from "../agent/types.js";
 
 const CapabilityMatrixSchema = z.object({
   chat: z.boolean().optional().default(true),
@@ -36,7 +36,7 @@ export function loadAgentConfig(filePath: string): AgentConfig {
     maxSteps: parsed.maxSteps,
     instructions: content.trim(),
     description: parsed.description,
-    capabilities: parsed.capabilities as CapabilityMatrix | undefined,
+    capabilities: parsed.capabilities,
     modelIdMapping: parsed.modelIdMapping,
   };
 }

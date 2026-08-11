@@ -2,47 +2,18 @@
 
 import { useEffect, useRef } from "react";
 import { fetchOpenSessions, fetchSession, updateOpenSessions } from "@/lib/api";
-import { connectSocket } from "@/lib/ws";
+import {
+  AgentLifecycleEventSchema,
+  connectSocket,
+  SessionUpdatedEventSchema,
+  ToolEventSchema,
+  validatedEventHandler,
+  WorkerCompletedEventSchema,
+  WorkerSpawnedEventSchema,
+} from "@/lib/ws";
 import { useRosterStore } from "@/stores/agent-roster-store";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useSessionStore } from "@/stores/session-store";
-
-interface ToolEventPayload {
-  sessionId: string;
-  agentName: string;
-  tool: { type: "called" | "completed"; toolName: string; args?: unknown; result?: string };
-}
-
-interface SessionUpdatedPayload {
-  sessionId: string;
-  agentName?: string;
-  title?: string;
-  createdAt?: string;
-  messages: Array<{
-    role: "system" | "user" | "assistant" | "tool";
-    content: string;
-    reasoning?: string;
-    toolCalls?: Array<{ toolCallId: string; toolName: string; args: Record<string, unknown> }>;
-    toolCallId?: string;
-    createdAt?: string;
-    meta?: unknown;
-  }>;
-}
-
-interface WorkerSpawnedPayload {
-  sessionId: string;
-  taskId: string;
-  workerSessionId: string;
-  task: string;
-}
-
-interface WorkerCompletedPayload {
-  sessionId: string;
-  taskId: string;
-  agentName: string;
-  status: "done" | "error" | "cancelled";
-  summary: string;
-}
 
 export default function RuntimeSync() {
   const sessions = useSessionStore((s) => s.sessions);
@@ -89,12 +60,13 @@ export default function RuntimeSync() {
   useEffect(() => {
     const socket = connectSocket();
 
-    const onSessionUpdated = (data: SessionUpdatedPayload) => {
-      useSessionStore.getState().syncFromServer(data);
-    };
+    const onSessionUpdated = validatedEventHandler(
+      SessionUpdatedEventSchema,
+      "session:updated event",
+      (data) => useSessionStore.getState().syncFromServer(data),
+    );
 
-    const onTool = (data: ToolEventPayload) => {
-      if (!data.tool) return;
+    const onTool = validatedEventHandler(ToolEventSchema, "agent:tool event", (data) => {
       useRuntimeStore.getState().record(data.sessionId, {
         id: `${data.agentName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         agentName: data.agentName,
@@ -104,28 +76,38 @@ export default function RuntimeSync() {
         result: data.tool.result,
         timestamp: Date.now(),
       });
-    };
+    });
 
-    const onAgentStarted = (data: { sessionId: string }) => {
-      useRuntimeStore.getState().setRunning(data.sessionId, true);
-    };
-    const onAgentDone = (data: { sessionId: string }) => {
-      useRuntimeStore.getState().setRunning(data.sessionId, false);
-    };
+    const onAgentStarted = validatedEventHandler(
+      AgentLifecycleEventSchema,
+      "agent:started event",
+      (data) => useRuntimeStore.getState().setRunning(data.sessionId, true),
+    );
+    const onAgentDone = validatedEventHandler(
+      AgentLifecycleEventSchema,
+      "agent completion event",
+      (data) => useRuntimeStore.getState().setRunning(data.sessionId, false),
+    );
 
-    const onWorkerSpawned = (data: WorkerSpawnedPayload) => {
-      useRosterStore.getState().addWorker(data.sessionId, {
-        id: data.workerSessionId,
-        name: `worker-${data.taskId.slice(0, 6)}`,
-        taskId: data.taskId,
-        task: data.task,
-        status: "running",
-      });
-    };
+    const onWorkerSpawned = validatedEventHandler(
+      WorkerSpawnedEventSchema,
+      "worker:spawned event",
+      (data) => {
+        useRosterStore.getState().addWorker(data.sessionId, {
+          id: data.workerSessionId,
+          name: `worker-${data.taskId.slice(0, 6)}`,
+          taskId: data.taskId,
+          task: data.task,
+          status: "running",
+        });
+      },
+    );
 
-    const onWorkerCompleted = (data: WorkerCompletedPayload) => {
-      useRosterStore.getState().setWorkerStatus(data.sessionId, data.taskId, data.status);
-    };
+    const onWorkerCompleted = validatedEventHandler(
+      WorkerCompletedEventSchema,
+      "worker:completed event",
+      (data) => useRosterStore.getState().setWorkerStatus(data.sessionId, data.taskId, data.status),
+    );
 
     socket.on("session:updated", onSessionUpdated);
     socket.on("agent:tool", onTool);

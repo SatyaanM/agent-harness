@@ -2,13 +2,30 @@ import { randomUUID } from "node:crypto";
 import type { SessionData } from "@agent-harness/core";
 import { getConfig, SessionStore } from "@agent-harness/core";
 import { Router } from "express";
+import { z } from "zod";
 import { hooks } from "../hooks.js";
+import { IdentifierSchema, validateRequest } from "../http/validation.js";
 import type { OpenSessionsState } from "../open-sessions.js";
 import { loadOpenSessions, saveOpenSessions } from "../open-sessions.js";
 import { sessionManager } from "../session-manager.js";
 import { emitAgentEvent } from "../ws/events.js";
 
 export const sessionsRouter = Router();
+
+const SessionParamsSchema = z.object({ id: IdentifierSchema }).strict();
+const OpenSessionsUpdateSchema = z
+  .object({
+    activeSessionId: IdentifierSchema.nullable().optional(),
+    openSessionIds: z.array(IdentifierSchema).max(100).optional(),
+  })
+  .strict();
+const SessionCreateSchema = z
+  .object({
+    prompt: z.string().max(1_000_000).default(""),
+    agentName: IdentifierSchema.default("orchestrator"),
+  })
+  .strict();
+const SessionRenameSchema = z.object({ title: z.string().max(512) }).strict();
 
 function getSessionStore() {
   const config = getConfig();
@@ -32,12 +49,11 @@ sessionsRouter.get("/meta", async (_req, res) => {
 });
 
 sessionsRouter.put("/open", (req, res) => {
-  const body = req.body as Partial<OpenSessionsState>;
+  const body = validateRequest(OpenSessionsUpdateSchema, req.body, res);
+  if (!body) return;
   const prev = loadOpenSessions();
-  const openSessionIds = Array.isArray(body.openSessionIds)
-    ? body.openSessionIds.filter((id): id is string => typeof id === "string")
-    : prev.openSessionIds;
-  const activeSessionId = typeof body.activeSessionId === "string" ? body.activeSessionId : null;
+  const openSessionIds = body.openSessionIds ?? prev.openSessionIds;
+  const activeSessionId = body.activeSessionId ?? null;
   const next: OpenSessionsState = { activeSessionId, openSessionIds };
   saveOpenSessions(next);
 
@@ -50,11 +66,13 @@ sessionsRouter.put("/open", (req, res) => {
 });
 
 sessionsRouter.post("/", async (req, res) => {
+  const request = validateRequest(SessionCreateSchema, req.body ?? {}, res);
+  if (!request) return;
   const session: SessionData = {
     sessionId: randomUUID(),
     taskId: randomUUID(),
-    prompt: req.body.prompt ?? "",
-    agentName: req.body.agentName ?? "orchestrator",
+    prompt: request.prompt,
+    agentName: request.agentName,
     messages: [],
     mailbox: [],
     createdAt: new Date().toISOString(),
@@ -65,11 +83,9 @@ sessionsRouter.post("/", async (req, res) => {
 });
 
 sessionsRouter.post("/:id/open", async (req, res) => {
-  const sessionId = req.params.id;
-  if (!sessionId) {
-    res.status(400).json({ error: "Session id is required" });
-    return;
-  }
+  const params = validateRequest(SessionParamsSchema, req.params, res);
+  if (!params) return;
+  const sessionId = params.id;
   const store = getSessionStore();
   const session = await store.load(sessionId);
   if (!session) {
@@ -92,11 +108,9 @@ sessionsRouter.post("/:id/open", async (req, res) => {
 });
 
 sessionsRouter.get("/:id", async (req, res) => {
-  const sessionId = req.params.id;
-  if (!sessionId) {
-    res.status(400).json({ error: "Session id is required" });
-    return;
-  }
+  const params = validateRequest(SessionParamsSchema, req.params, res);
+  if (!params) return;
+  const sessionId = params.id;
   const session = await getSessionStore().load(sessionId);
   if (!session) {
     res.status(404).json({ error: "Session not found" });
@@ -106,16 +120,12 @@ sessionsRouter.get("/:id", async (req, res) => {
 });
 
 sessionsRouter.patch("/:id", async (req, res) => {
-  const sessionId = req.params.id;
-  if (!sessionId) {
-    res.status(400).json({ error: "Session id is required" });
-    return;
-  }
-  const title = req.body?.title;
-  if (typeof title !== "string") {
-    res.status(400).json({ error: "title is required" });
-    return;
-  }
+  const params = validateRequest(SessionParamsSchema, req.params, res);
+  if (!params) return;
+  const body = validateRequest(SessionRenameSchema, req.body, res);
+  if (!body) return;
+  const sessionId = params.id;
+  const { title } = body;
   const store = getSessionStore();
   const session = await store.load(sessionId);
   if (!session) {
@@ -134,11 +144,9 @@ sessionsRouter.patch("/:id", async (req, res) => {
 });
 
 sessionsRouter.delete("/:id", async (req, res) => {
-  const sessionId = req.params.id;
-  if (!sessionId) {
-    res.status(400).json({ error: "Session id is required" });
-    return;
-  }
+  const params = validateRequest(SessionParamsSchema, req.params, res);
+  if (!params) return;
+  const sessionId = params.id;
   await getSessionStore().delete(sessionId);
   hooks.emit("session.deleted", { sessionId });
   res.status(204).end();

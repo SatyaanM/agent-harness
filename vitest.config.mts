@@ -14,6 +14,12 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "html", "lcov"],
       reportsDirectory: "./coverage",
+      thresholds: {
+        statements: 10,
+        branches: 4,
+        functions: 7,
+        lines: 11,
+      },
       include: ["packages/*/src/**/*.{ts,tsx}"],
       exclude: [
         "packages/*/src/**/*.d.ts",

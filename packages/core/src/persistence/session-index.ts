@@ -1,5 +1,7 @@
 import path from "node:path";
 import fs from "fs-extra";
+import { z } from "zod";
+import { parseJsonBoundary } from "../validation.js";
 import type { SessionData } from "./session.js";
 
 /**
@@ -28,10 +30,20 @@ export interface SessionMeta {
   messageCount: number;
 }
 
-interface SessionIndexFile {
-  version: 1;
-  sessions: Record<string, SessionMeta>;
-}
+const SessionMetaSchema = z.object({
+  sessionId: z.string().min(1),
+  title: z.string().optional(),
+  agentName: z.string().optional(),
+  prompt: z.string(),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+  messageCount: z.number().int().nonnegative(),
+});
+const SessionIndexFileSchema = z.object({
+  version: z.literal(1),
+  sessions: z.record(SessionMetaSchema),
+});
+type SessionIndexFile = z.infer<typeof SessionIndexFileSchema>;
 
 function isWorkerSession(sessionId: string): boolean {
   return sessionId.startsWith("worker-");
@@ -67,11 +79,12 @@ export class IndexHandle {
       let state: SessionIndexFile = { version: 1, sessions: {} };
       try {
         if (await fs.pathExists(this.filePath)) {
-          const raw = JSON.parse(await fs.readFile(this.filePath, "utf-8"));
-          if (raw && raw.version === 1 && raw.sessions && typeof raw.sessions === "object") {
-            state = raw;
-            this.loaded = true;
-          }
+          state = parseJsonBoundary(
+            SessionIndexFileSchema,
+            await fs.readFile(this.filePath, "utf-8"),
+            "session metadata index",
+          );
+          this.loaded = true;
         }
       } catch {
         // Corrupt or unreadable: start empty; it will be rebuilt on demand.
