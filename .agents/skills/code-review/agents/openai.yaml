@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Find material risks in proposed changes"
+  default_prompt: "Use $code-review to review this diff for correctness, regressions, security, and missing tests."

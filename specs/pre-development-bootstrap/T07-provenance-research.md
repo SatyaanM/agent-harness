@@ -14,6 +14,8 @@ Make cannibalization traceable rather than implicit.
 
 Complete T06. Browse/research sources only as needed and do not guess license data.
 
+T03 used the bundled `skill-creator` workflow and current official OpenAI Build Skills guidance (`https://learn.chatgpt.com/docs/build-skills`, accessed 2026-08-10) for structure and validation expectations. The eight repository workflows were written locally rather than copied from a third-party skill. Preserve that distinction in the OpenAI/Codex research note and notices review.
+
 ## Deliverables
 
 Create `THIRD_PARTY_NOTICES.md`, `docs/research/upstreams/README.md`, and compact notes for: agent-skills-standard, agents-md, steipete-agent-scripts, superpowers, spec-kit, anthropic-skills, openai-codex, ecc, awesome-agent-skills, awesome-copilot, awesome-claude-code, letta, hermes-agent, and mastra.

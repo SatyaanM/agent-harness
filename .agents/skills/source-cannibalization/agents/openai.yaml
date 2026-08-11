@@ -1,0 +1,4 @@
+interface:
+  display_name: "Source Cannibalization"
+  short_description: "Adapt external ideas with exact provenance"
+  default_prompt: "Use $source-cannibalization to research and minimally adapt this upstream concept."
