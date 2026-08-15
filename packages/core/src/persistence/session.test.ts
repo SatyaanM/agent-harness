@@ -48,6 +48,40 @@ describe("SessionStore boundary validation", () => {
     await expect(store.load("broken")).rejects.toBeInstanceOf(BoundaryValidationError);
   });
 
+  it("lists healthy sessions while preserving and diagnosing an invalid transcript", async () => {
+    const { dir, store } = await makeStore();
+    await store.save(session());
+    const invalidPath = path.join(dir, "broken.json");
+    await writeFile(invalidPath, '{"secret": TOP_SECRET}', "utf8");
+
+    const result = await store.listWithDiagnostics();
+
+    expect(result.sessions).toEqual([expect.objectContaining({ sessionId: "session-1" })]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ kind: "transcript", record: "broken.json" }),
+    ]);
+    expect(result.diagnostics[0]?.message).not.toContain("TOP_SECRET");
+    expect(result.diagnostics[0]?.message).not.toContain(dir);
+    await expect(readFile(invalidPath, "utf8")).resolves.toBe('{"secret": TOP_SECRET}');
+  });
+
+  it("keeps a valid transcript listable while diagnosing an invalid mailbox", async () => {
+    const { dir, store } = await makeStore();
+    await store.save(session());
+    const mailboxPath = path.join(dir, "session-1.mailbox.jsonl");
+    await writeFile(mailboxPath, '{"secret": TOP_SECRET}\n', "utf8");
+
+    const result = await store.listWithDiagnostics();
+
+    expect(result.sessions).toEqual([expect.objectContaining({ sessionId: "session-1" })]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ kind: "mailbox", record: "session-1.mailbox.jsonl" }),
+    ]);
+    expect(result.diagnostics[0]?.message).not.toContain("TOP_SECRET");
+    expect(result.diagnostics[0]?.message).not.toContain(dir);
+    await expect(readFile(mailboxPath, "utf8")).resolves.toBe('{"secret": TOP_SECRET}\n');
+  });
+
   it("rejects session identifiers that could escape the sessions directory", async () => {
     const { store } = await makeStore();
 

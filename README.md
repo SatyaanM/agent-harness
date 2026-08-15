@@ -130,11 +130,11 @@ corepack npm start
 
 ## Configuration Reference
 
-These are read from the environment or the dashboard **Settings** page (persisted to `.harness/settings.json`). Environment variables take precedence.
+These are read from the environment or the dashboard **Settings** page (persisted to `.harness/settings.json`). Environment variables take precedence. `ROOT` is environment/discovery-owned and is shown read-only because the settings file beneath it cannot safely redefine its own location or sandbox boundary.
 
 | Variable | Default | Description |
 |---|---|---|
-| `ROOT` | repo root | Project root — the sandbox boundary for file tools |
+| `ROOT` | repo root | Environment-owned project root — the read-only sandbox boundary for file tools |
 | `INBOX_ROOT` | `./inbox` | Where inbox files are stored |
 | `SESSIONS_DIR` | `./sessions` | Session transcript files |
 | `AGENTS_DIR` | `./agents` | Agent config `.md` files |
@@ -209,14 +209,15 @@ tasks to specialized worker agents.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Agent identifier |
+| `description` | string | no | Short agent description shown by the dashboard |
 | `model` | string | yes | Model name |
-| `tools` | string[] | yes | List of tool names |
+| `tools` | string[] | yes | List of tool names; an empty list is valid |
 | `maxSteps` | number | yes | Max tool-call iterations |
 | `maxToolCalls` | number | no | Run-wide tool-call cap; defaults to 64 |
 | `maxToolResultChars` | number | no | Per-result model-context and transient-event cap; defaults to 100,000 characters. Durable transcripts retain the complete tool result. |
 | `maxOutputTokens` | number | no | Per-provider-call output cap; defaults to 4,096 tokens |
 | `maxTotalTokens` | number | no | Run-wide token cap; uses provider usage or a conservative fallback estimate and defaults to 100,000 tokens |
-| `runTimeoutMs` | number | no | Run deadline; defaults to 300,000 ms |
+| `runTimeoutMs` | number | no | Run deadline; defaults to 300,000 ms and aborts provider/tool work through an `AbortSignal` |
 | `capabilities` | object | no | Manual capability overrides |
 | `modelIdMapping` | string | no | Explicit models.dev ID |
 
@@ -228,9 +229,12 @@ tasks to specialized worker agents.
 
 ```
 POST   /api/chat                    # Send message (SSE stream)
-GET    /api/sessions                # List sessions
+GET    /api/sessions                # List bounded session metadata
+GET    /api/sessions/meta           # Metadata-list alias
+GET    /api/sessions/diagnostics    # List safe invalid-record diagnostics
 POST   /api/sessions                # Create session
 GET    /api/sessions/:id            # Get session
+PATCH  /api/sessions/:id            # Rename or clear a session title
 DELETE /api/sessions/:id            # Delete session
 GET    /api/agents                  # List agent configs
 POST   /api/agents                  # Create agent config
@@ -321,7 +325,7 @@ The root scripts are the supported entry points for local development and coding
 | `corepack npm run check:fast` | Run local static checks, typecheck, and tests without a production build |
 | `corepack npm run check` | Run the complete credential-free repository verification suite |
 | `corepack npm run check:ci` | Run authoritative CI checks, coverage, builds, and the production audit |
-| `corepack npm run security:audit` | Reject high/critical production advisories without an unexpired exception |
+| `corepack npm run security:audit` | Reject high/critical production advisories without an unexpired package-and-advisory exception |
 | `corepack npm run perf:report` | Report the local validation throughput benchmark without a noisy timing gate |
 | `corepack npm run check:nightly` | Run CI checks plus the informational performance report |
 

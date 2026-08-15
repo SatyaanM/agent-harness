@@ -28,7 +28,7 @@ export const globTool: Tool<typeof GlobParams> = {
     "Find files by glob pattern. Returns matching file paths relative to the project root.",
   parameters: GlobParams,
 
-  async execute(args) {
+  async execute(args, context) {
     const root = getConfig().ROOT;
     const cwd = args.cwd ? path.resolve(root, args.cwd) : root;
     assertWithinRoot(cwd, root);
@@ -43,6 +43,7 @@ export const globTool: Tool<typeof GlobParams> = {
     const normalized: string[] = [];
     let truncated = false;
     for await (const match of matches) {
+      if (context?.signal.aborted) return "[error] Glob search cancelled.";
       if (typeof match !== "string") continue;
       await assertExistingPathWithinRoot(path.resolve(cwd, match), root);
       normalized.push(match.replace(/\\/g, "/"));

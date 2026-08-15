@@ -67,4 +67,18 @@ describe("inbox filesystem boundary", () => {
 
     expect(response.status).toBe(413);
   });
+
+  it("uses the inbox envelope limit instead of the smaller global JSON limit", async () => {
+    const inboxRoot = process.env.INBOX_ROOT;
+    if (!inboxRoot) throw new Error("Test environment is not initialized");
+    await writeFile(path.join(inboxRoot, "escaped.txt"), "initial", "utf8");
+    const content = "\u0000".repeat(500);
+
+    const response = await request(createApp({ jsonLimit: "1kb", inboxJsonLimit: "4kb" }))
+      .put("/api/inbox/file")
+      .query({ path: "escaped.txt" })
+      .send({ content });
+
+    expect(response.status).toBe(200);
+  });
 });

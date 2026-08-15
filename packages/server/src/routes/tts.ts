@@ -57,6 +57,7 @@ ttsRouter.post(
     try {
       // Step 1: Paraphrase with MiMo-V2.5
       const paraphrasePrompt = buildParaphrasePrompt(text, {
+        persona: persona ?? "",
         emotiveTags: emotiveTags ?? true,
         tagStyle: tagStyle ?? "balanced",
         customTagInstructions: customTagInstructions ?? "",
@@ -122,6 +123,10 @@ ttsRouter.post(
       res.end();
     } catch {
       console.error("[tts] Request failed");
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
       res.status(502).json({ error: "Voice generation failed" });
     }
   }),
@@ -130,6 +135,7 @@ ttsRouter.post(
 function buildParaphrasePrompt(
   text: string,
   options: {
+    persona: string;
     emotiveTags: boolean;
     tagStyle: string;
     customTagInstructions: string;
@@ -141,6 +147,10 @@ function buildParaphrasePrompt(
 as a natural spoken summary. Strip all code, file paths, UUIDs,
 hashes, and technical identifiers. Use conversational prose.
 Keep it under 5 sentences. Do not add greetings or closings.`);
+
+  if (options.persona.trim()) {
+    parts.push(`Narration persona: ${options.persona.trim()}`);
+  }
 
   if (options.emotiveTags) {
     parts.push(`Insert emotive audio tags anywhere they enhance delivery:

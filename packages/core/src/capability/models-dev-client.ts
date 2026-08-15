@@ -76,16 +76,23 @@ export async function fetchCapabilities(
 
   const candidates = [correlatedId, `${provider}/${model}`, model].map(normalizeId);
 
-  let entry: ModelsDevResponse[string] | undefined;
-  for (const key of Object.keys(api)) {
-    const normalized = normalizeId(key);
-    if (
-      candidates.includes(normalized) ||
-      candidates.includes(normalizeId(key.split("/").pop() ?? ""))
-    ) {
-      entry = api[key];
-      break;
+  let entry: ModelsDevResponse[string]["models"][string] | undefined;
+  for (const [providerKey, providerEntry] of Object.entries(api)) {
+    for (const [modelKey, modelEntry] of Object.entries(providerEntry.models)) {
+      const identifiers = [
+        modelKey,
+        `${providerKey}/${modelKey}`,
+        modelEntry.id,
+        modelEntry.id ? `${providerKey}/${modelEntry.id}` : undefined,
+      ]
+        .filter((identifier): identifier is string => identifier !== undefined)
+        .map(normalizeId);
+      if (identifiers.some((identifier) => candidates.includes(identifier))) {
+        entry = modelEntry;
+        break;
+      }
     }
+    if (entry) break;
   }
 
   if (!entry) return null;

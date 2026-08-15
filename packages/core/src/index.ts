@@ -40,11 +40,15 @@ export { MessageBus, messageBus } from "./collaboration/message-bus.js";
 export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supervision.js";
 export { callSupervisor } from "./collaboration/supervision.js";
 export type { Config } from "./config.js";
-export { ConfigSchema, getConfig, resetConfig } from "./config.js";
+export { ConfigSchema, getConfig, getConfigRoot, resetConfig } from "./config.js";
 export { parseJsonResponseBoundary, readResponseTextBounded } from "./contracts/http.js";
 export {
   MAX_INBOX_FILE_BYTES,
+  MAX_INBOX_FILE_REQUEST_BYTES,
   MAX_INBOX_FILE_RESPONSE_BYTES,
+  MAX_SESSION_MAILBOX_BYTES,
+  MAX_SESSION_METADATA_RESPONSE_BYTES,
+  MAX_SESSION_RESPONSE_BYTES,
   MAX_SESSION_TRANSCRIPT_BYTES,
 } from "./contracts/limits.js";
 export {
@@ -89,7 +93,7 @@ export { createListDirectoryTool } from "./tool/listDirectory.js";
 export { createReadFileTool } from "./tool/readFile.js";
 export { ToolRegistry } from "./tool/registry.js";
 export { runCommandTool } from "./tool/runCommand.js";
-export type { Tool, ToolRegistry as IToolRegistry } from "./tool/types.js";
+export type { Tool, ToolExecutionContext, ToolRegistry as IToolRegistry } from "./tool/types.js";
 export {
   assertCreatablePathWithinRoot,
   assertExistingPathWithinRoot,

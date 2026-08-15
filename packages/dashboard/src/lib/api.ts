@@ -3,6 +3,8 @@ import {
   PluginManifestSchema as CorePluginManifestSchema,
   type InboxRendererManifestSchema,
   MAX_INBOX_FILE_RESPONSE_BYTES,
+  MAX_SESSION_METADATA_RESPONSE_BYTES,
+  MAX_SESSION_RESPONSE_BYTES,
   MAX_SESSION_TRANSCRIPT_BYTES,
   type PluginCommandManifestSchema,
   parseJsonBoundary,
@@ -53,14 +55,14 @@ export function parseChatStreamEvent(data: string): ChatStreamEvent {
   return parseJsonBoundary(ChatStreamEventSchema, data, "chat stream event");
 }
 
-export async function fetchSessions(): Promise<z.infer<typeof SessionDataSchema>[]> {
+export async function fetchSessions(): Promise<SessionMeta[]> {
   const res = await fetch(`${BASE_URL}/api/sessions`);
   if (!res.ok) throw new Error("Failed to fetch sessions");
   return parseJsonResponse(
     res,
-    z.array(SessionDataSchema),
+    z.array(SessionMetaSchema),
     "sessions response",
-    MAX_SESSION_TRANSCRIPT_BYTES,
+    MAX_SESSION_METADATA_RESPONSE_BYTES,
   );
 }
 
@@ -69,7 +71,12 @@ export type SessionMeta = z.infer<typeof SessionMetaSchema>;
 export async function fetchSessionMeta(): Promise<SessionMeta[]> {
   const res = await fetch(`${BASE_URL}/api/sessions/meta`);
   if (!res.ok) throw new Error("Failed to fetch session metadata");
-  return parseJsonResponse(res, z.array(SessionMetaSchema), "session metadata response");
+  return parseJsonResponse(
+    res,
+    z.array(SessionMetaSchema),
+    "session metadata response",
+    MAX_SESSION_METADATA_RESPONSE_BYTES,
+  );
 }
 
 export type OpenSessionsState = z.infer<typeof OpenSessionsStateSchema>;
@@ -112,12 +119,7 @@ export async function renameSession(sessionId: string, title: string): Promise<v
 export async function fetchSession(sessionId: string): Promise<z.infer<typeof SessionDataSchema>> {
   const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`);
   if (!res.ok) throw new Error("Failed to fetch session");
-  return parseJsonResponse(
-    res,
-    SessionDataSchema,
-    "session response",
-    MAX_SESSION_TRANSCRIPT_BYTES,
-  );
+  return parseJsonResponse(res, SessionDataSchema, "session response", MAX_SESSION_RESPONSE_BYTES);
 }
 
 export async function cancelWorker(taskId: string): Promise<void> {
@@ -283,7 +285,9 @@ export async function fetchSettings(): Promise<HarnessSettings> {
   return parseJsonResponse(res, HarnessSettingsSchema, "settings response");
 }
 
-export async function updateSettings(settings: Partial<HarnessSettings>): Promise<HarnessSettings> {
+export async function updateSettings(
+  settings: Partial<Omit<HarnessSettings, "ROOT">>,
+): Promise<HarnessSettings> {
   const res = await fetch(`${BASE_URL}/api/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

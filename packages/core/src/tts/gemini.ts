@@ -35,9 +35,12 @@ export function createGeminiTTSProvider(): TTSProvider {
 
       const url = `${GEMINI_TTS_ENDPOINT}?key=${config.apiKey}`;
 
-      // Plain text only - paraphrase is done separately
+      const narrationText = config.persona.trim()
+        ? `Narration persona: ${config.persona.trim()}\n\n${text}`
+        : text;
+
       const requestBody = {
-        contents: [{ parts: [{ text }] }],
+        contents: [{ parts: [{ text: narrationText }] }],
         generation_config: {
           response_modalities: ["AUDIO"],
           speech_config: {

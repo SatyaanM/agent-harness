@@ -7,7 +7,7 @@ read_when:
 
 # Current architecture
 
-This document describes source inspected through 2026-08-12. It treats code and passing tests as implementation evidence. `README.md`, `docs/ARCHITECTURE_DECISIONS.md`, and feature specs still contain intent that is not wired into the current application; those claims are called out rather than silently promoted to current behavior.
+This document describes source inspected through 2026-08-15. It treats code and passing tests as implementation evidence. `README.md`, `docs/ARCHITECTURE_DECISIONS.md`, and feature specs still contain intent that is not wired into the current application; those claims are called out rather than silently promoted to current behavior.
 
 ## Executed application path
 
@@ -35,20 +35,20 @@ The server does **not** instantiate the exported `Orchestrator` class. The live 
 
 ### Core
 
-- [`Agent.run`](../../packages/core/src/agent/agent.ts) owns one in-memory model/tool loop. It builds tools from an `AgentConfig`, appends complete assistant and tool messages, projects bounded tool content into provider context and transient tool events, checks an abort signal between steps and tool calls, and returns after stop or `maxSteps`.
+- [`Agent.run`](../../packages/core/src/agent/agent.ts) owns one in-memory model/tool loop. It builds tools from an `AgentConfig`, appends structurally balanced assistant/tool messages even when a budget stops execution, projects bounded tool content into provider context and transient tool events, and propagates its deadline/cancellation signal into providers and tools before returning after stop or `maxSteps`.
 - [`SessionRuntime`](../../packages/core/src/agent/session-runtime.ts) owns serialized delivery for one top-level `sessionId`. `deliver()` chains runs on an in-memory promise queue; `runOnce()` loads history, persists a user message, drains worker completions, runs an agent, and persists the appended record.
 - [`createDelegateTool`](../../packages/core/src/agent/delegation.ts) creates a task ID, derives a synthetic worker config from the delegating agent, persists a `worker-<taskId>` session, launches a `Worker` without awaiting it, persists progress/final state, and appends a completion to the parent mailbox.
 - [`Worker.run`](../../packages/core/src/agent/worker.ts) wraps an `Agent` invocation, maps cancellation/errors to a `WorkerResult`, and also posts to the process-local `MessageBus`.
-- [`SessionStore`](../../packages/core/src/persistence/session.ts) is the file-I/O owner for transcripts and mailboxes. Transcripts use serialized latest-snapshot writes with temp-file rename; mailboxes use serialized append-only JSONL and whole-queue drain.
-- [`IndexHandle`](../../packages/core/src/persistence/session-index.ts) maintains a derived `.index.json` projection for top-level session listing. Worker sessions are excluded by the `worker-` name convention.
+- [`SessionStore`](../../packages/core/src/persistence/session.ts) is the file-I/O owner for transcripts and mailboxes. Transcripts use serialized latest-snapshot writes with temp-file rename; mailboxes use serialized append-only JSONL and whole-queue drain. Collection scans preserve invalid bytes, retain healthy records, and return content-free diagnostics.
+- [`IndexHandle`](../../packages/core/src/persistence/session-index.ts) maintains a derived `.index.json` projection used by the top-level session collection endpoints. Worker sessions are excluded by the `worker-` name convention.
 - [`ToolRegistry`](../../packages/core/src/tool/registry.ts), file/shell/web tools, [`InboxManager`](../../packages/core/src/presentation/inbox.ts), agent-config loading, settings, capability discovery, plugin schemas, collaboration primitives, and TTS are reusable library surfaces.
 
 ### Server
 
 - [`SessionManager`](../../packages/server/src/session-manager.ts) owns loaded `SessionRuntime` objects and running worker `AbortController` objects in process memory. It builds the concrete tool registry and relays runtime events to Socket.IO.
-- [`chatRouter`](../../packages/server/src/routes/chat.ts) validates a message, awaits a full `SessionRuntime.deliver()`, and only then slices the final summary into SSE-shaped chunks. This is response chunking, not live model token streaming.
-- [`sessionsRouter`](../../packages/server/src/routes/sessions.ts) owns session CRUD, metadata listing, rename, conditional mailbox wake on explicit open, and updates to the open-session registry.
-- [`open-sessions.ts`](../../packages/server/src/open-sessions.ts) persists the browser tab set and active tab atomically under `.harness/open-sessions.json`.
+- [`chatRouter`](../../packages/server/src/routes/chat.ts) validates a message, aborts the delivery when its client disconnects, awaits a full `SessionRuntime.deliver()`, and only then slices the complete final summary into SSE-shaped chunks. This is response chunking, not live model token streaming.
+- [`sessionsRouter`](../../packages/server/src/routes/sessions.ts) owns session CRUD, metadata-only collection listing, safe durable-record diagnostics, rename, conditional mailbox wake on explicit open, and updates to the open-session registry.
+- [`open-sessions.ts`](../../packages/server/src/open-sessions.ts) persists the browser tab set and active tab atomically under `.harness/open-sessions.json`; an explicit update quarantines malformed prior bytes before repair. Settings use the same quarantine-on-repair policy, while `ROOT` remains environment/discovery-owned.
 - [`PluginRegistry`](../../packages/server/src/plugin/registry.ts) recursively rescans manifest files when listed and persists enabled flags. [`pluginsRouter`](../../packages/server/src/routes/plugins.ts) exposes list/toggle operations.
 - [`HookBus`](../../packages/server/src/hooks.ts) defines before middleware and after observers. Current routes emit after-events for session lifecycle; no production registration of before middleware was found.
 - [`ws/events.ts`](../../packages/server/src/ws/events.ts) broadcasts agent start/completion/error/tool, worker spawn/completion, and full session updates.
@@ -79,10 +79,10 @@ The server does **not** instantiate the exported `Orchestrator` class. The live 
 | State | Current owner | Durability | Important limitation |
 |---|---|---|---|
 | Agent definition | Markdown in `agents/`, CRUD via server | File-backed | Name is the effective identity; no schema version or immutable ID. |
-| Top-level transcript | `SessionStore` | Atomic JSON snapshot | The same schema also represents worker executions. |
+| Top-level transcript | `SessionStore` | Atomic JSON snapshot | The same schema also represents worker executions; invalid records remain in place and are omitted with safe diagnostics during collection scans. |
 | Worker completion | `SessionStore` mailbox | Ordered JSONL until drain | Delivery identity is `taskId`; no explicit acknowledgement or replay ledger. |
 | Session list metadata | `IndexHandle` | Rebuildable JSON projection | Eventually consistent by design. |
-| Open/active tabs | Server `open-sessions.ts` | Atomic JSON snapshot | Browser is the writer; closing a tab does not call `SessionManager.unload()`. |
+| Open/active tabs | Server `open-sessions.ts` | Atomic JSON snapshot | Browser is the writer; closing a tab does not call `SessionManager.unload()`. Invalid bytes are quarantined only on an explicit repair update. |
 | Loaded runtime | `SessionManager.runtimes` | Process memory | Not recovered; plain boot hydration does not wake pending mailboxes. |
 | Running worker/cancel handle | `SessionManager.workerControllers` | Process memory | Lost on server restart; no resume/reconciliation path. |
 | Plugin enabled state | Server `PluginRegistry` | JSON snapshot | Registry has no filesystem watcher or plugin-change event. |
@@ -104,7 +104,7 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 | Plugin hot reload | Not implemented | No watcher, reload endpoint, or plugin-change WebSocket event exists. A later GET rescans manifests only. |
 | Multi-provider support | Partial | One endpoint/key setting is used. A hard-coded model-name set chooses Anthropic format; every other model uses OpenAI chat format. There is no provider registry or per-agent endpoint. |
 | Four-tier capability discovery | Library present, execution integration absent | `CapabilityRegistry.lookup()` exists, but the active `Agent` path does not call it. |
-| Max concurrent agents | Implemented | A process-wide FIFO `ExecutionLimiter` bounds parent and worker model executions, rejects work beyond a bounded wait queue, updates from `MAX_CONCURRENT_AGENTS`, and exposes active/queued counts through `/api/metrics`. |
+| Max concurrent agents | Implemented | A process-wide FIFO `ExecutionLimiter` bounds parent and worker model executions, removes canceled waiters without consuming capacity, rejects work beyond a bounded wait queue, updates from `MAX_CONCURRENT_AGENTS`, and exposes active/queued counts through `/api/metrics`. |
 | Recursive delegation | Deliberately disabled | Workers no longer inherit the parent-bound `delegate` tool. Proper recursive delegation remains a future session-scoped design rather than misattributing nested work. |
 | Live streaming | Partial | Socket events expose steps/tools; `/api/chat` waits for completion and then emits synthetic text chunks. |
 | Worker history after reconnect | Partial | Worker transcripts persist, but the browser roster is live-event-only and is not rebuilt on hydration. |
@@ -114,26 +114,26 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 
 ## Verification reality
 
-The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. As of the completed adversarial-review corrections, the matrix discovers 30 test files and 123 tests. Production and test sources are both typechecked under strict mode. Coverage includes:
+The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. As of the 2026-08-15 pull-request review remediation, the matrix discovers 37 test files and 155 tests. Production and test sources are both typechecked under strict mode. Coverage includes:
 
-- malformed persisted configuration;
-- valid and invalid session transcript/mailbox records, including preservation of a corrupt mailbox line;
+- malformed persisted configuration, read-only root ownership, and quarantine-on-repair behavior;
+- valid and invalid session transcript/mailbox records, including byte preservation, content-free diagnostics, and healthy-record listing;
 - provider-supplied tool argument validation before execution;
 - stable server request-validation errors and path-like identifier rejection;
 - dashboard HTTP, chat-stream, and WebSocket payload validation.
-- per-session delivery serialization, ordered atomic mailbox drain, wake-run delegation suppression, worker completion, and cancellation;
-- process-wide concurrency and queue limits, tool-call, provider-context tool-result, provider-output, reported-or-estimated total-token, and wall-time budgets while durable tool results remain verbatim;
-- bounded provider/browser response parsing, workspace file/search limits, symlink-aware path containment, subprocess environment minimization, public-only outbound fetch policy, redirect revalidation, loopback binding, CORS, and stable malformed/oversized/internal error envelopes;
-- dependency-audit exceptions and their expiry behavior.
+- per-session delivery serialization, ordered atomic mailbox drain, wake-run delegation suppression, worker completion, provider/tool/client-disconnect cancellation, and post-run completion timestamps;
+- process-wide concurrency and abortable queue limits, tool-call, provider-context tool-result, provider-output, reported-or-estimated total-token, and wall-time budgets while durable tool results remain verbatim;
+- bounded provider/browser response parsing, workspace file/search limits, time-bounded regex execution, symlink-aware path containment, subprocess environment minimization, public-only pinned outbound connections, redirect revalidation, loopback binding, CORS, and stable malformed/oversized/internal error envelopes;
+- dependency-audit package/advisory exceptions and their expiry behavior;
 - plugin discovery/state persistence, capability probing, inbox metadata mutations, bounded file I/O, provider response envelopes, and rejected async Express handler propagation.
 
 [`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) remains a manual console script, not part of the configured Vitest suite. There are still no automated tests for provider routing, the legacy exported `Orchestrator`, or end-to-end dashboard resynchronization. Those gaps remain visible rather than being hidden by the improved global percentage.
 
-`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. The 2026-08-12 adversarial-review correction measures 25.41% statements, 19.23% branches, 20.65% functions, and 27.11% lines. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules now have focused tests, while the low UI and adapter totals are not presented as broad product protection.
+`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. The 2026-08-15 remediation measures 34.13% statements, 26.84% branches, 28.10% functions, and 36.33% lines. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules now have focused tests, while the low UI and adapter totals are not presented as broad product protection.
 
 `corepack npm run quality:policy` resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript suppression directives, explicit `any`, type and non-null assertions other than `as const`, unwrapped async Express routes, direct Express request-data use outside `validateRequest`, raw boundary JSON parsing, unbounded HTTP JSON parsing, mutable GitHub Action tags, and Node/runtime imports from the browser-safe core contracts surface. Core session/config/cache data, server request bodies/params/query, plugin state, provider responses, dashboard HTTP/chat-stream/WebSocket responses, and local TTS settings now have explicit schemas. Dashboard code consumes those schemas through `@agent-harness/core/contracts`, which cannot import the Node-backed core runtime.
 
-Privileged operations are default-off or application-bounded: shell and network tools require explicit environment opt-in; enabled file/shell/network operations have symlink-aware authorization, byte/time/entry limits, credential-minimized subprocesses, and public-network redirect checks. The server is loopback-only by default, uses an origin allowlist and stable error envelopes, and enforces deterministic execution/resource budgets. `corepack npm run security:audit` currently reports zero production vulnerabilities and fails future high/critical findings unless an explicit exception has a reason and future expiry. The informational 50,000-iteration agent-config validation sample completed in 75.85 ms (about 659,173 operations/second) on the local 2026-08-11 run; it is not a portable timing gate. These controls do not claim process isolation; residual risks are documented in [`docs/SECURITY.md`](../SECURITY.md).
+Privileged operations are default-off or application-bounded: shell and network tools require explicit environment opt-in; enabled file/shell/network operations have symlink-aware authorization, byte/time/entry limits, credential-minimized subprocesses, time-bounded regex evaluation, and validated-address connection pinning with redirect revalidation. The server is loopback-only by default, uses an origin allowlist and stable error envelopes, and enforces deterministic execution/resource budgets. `corepack npm run security:audit` currently reports zero production vulnerabilities and fails future high/critical findings unless an explicit exception identifies the affected package and advisory with a reason and future expiry. The informational 50,000-iteration agent-config validation sample completed in 75.85 ms (about 659,173 operations/second) on the local 2026-08-11 run; it is not a portable timing gate. These controls do not claim process isolation; residual risks are documented in [`docs/SECURITY.md`](../SECURITY.md).
 
 ## Immediate architecture risks
 

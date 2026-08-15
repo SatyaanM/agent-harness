@@ -7,7 +7,7 @@ import { hooks } from "../hooks.js";
 import { asyncHandler } from "../http/async-handler.js";
 import { IdentifierSchema, validateRequest } from "../http/validation.js";
 import type { OpenSessionsState } from "../open-sessions.js";
-import { loadOpenSessions, saveOpenSessions } from "../open-sessions.js";
+import { loadOpenSessions, loadOpenSessionsForRepair, saveOpenSessions } from "../open-sessions.js";
 import { sessionManager } from "../session-manager.js";
 import { emitAgentEvent } from "../ws/events.js";
 
@@ -36,8 +36,9 @@ function getSessionStore() {
 sessionsRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
-    const sessions = await getSessionStore().list();
-    res.json(sessions);
+    const store = getSessionStore();
+    await store.ensureIndexBuilt();
+    res.json(await sortedSessionMeta(store));
   }),
 );
 
@@ -50,19 +51,25 @@ sessionsRouter.get(
   asyncHandler(async (_req, res) => {
     const store = getSessionStore();
     await store.ensureIndexBuilt();
-    const metas = await store.listMeta();
-    res.json(
-      metas.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
-    );
+    res.json(await sortedSessionMeta(store));
+  }),
+);
+
+sessionsRouter.get(
+  "/diagnostics",
+  asyncHandler(async (_req, res) => {
+    const result = await getSessionStore().listWithDiagnostics();
+    res.json(result.diagnostics);
   }),
 );
 
 sessionsRouter.put("/open", (req, res) => {
   const body = validateRequest(OpenSessionsUpdateSchema, req.body, res);
   if (!body) return;
-  const prev = loadOpenSessions();
+  const prev = loadOpenSessionsForRepair();
   const openSessionIds = body.openSessionIds ?? prev.openSessionIds;
-  const activeSessionId = body.activeSessionId ?? null;
+  const activeSessionId =
+    body.activeSessionId !== undefined ? body.activeSessionId : prev.activeSessionId;
   const next: OpenSessionsState = { activeSessionId, openSessionIds };
   saveOpenSessions(next);
 
@@ -73,6 +80,11 @@ sessionsRouter.put("/open", (req, res) => {
 
   res.json(next);
 });
+
+async function sortedSessionMeta(store: ReturnType<typeof getSessionStore>) {
+  const metas = await store.listMeta();
+  return metas.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
 
 sessionsRouter.post(
   "/",

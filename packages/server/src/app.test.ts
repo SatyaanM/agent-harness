@@ -1,4 +1,4 @@
-import { resetConfig } from "@agent-harness/core";
+import { resetConfig, SessionRuntime } from "@agent-harness/core";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
@@ -174,5 +174,83 @@ describe("upstream trust boundaries", () => {
     expect(res.status).toBe(502);
     expect(res.body).toEqual({ error: "Voice generation failed" });
     expect(res.text).not.toContain("provider-secret");
+  });
+
+  it("preserves long unbroken agent summaries in the chat stream", async () => {
+    const summary = "x".repeat(100);
+    vi.spyOn(SessionRuntime.prototype, "deliver").mockResolvedValue({
+      status: "success",
+      summary,
+      messages: [{ role: "assistant", content: summary }],
+    });
+
+    const response = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "chunking-session", message: "hello" });
+
+    expect(response.status).toBe(200);
+    const emittedCharacters = Array.from(response.text.matchAll(/"text":"(x*)"/gu)).reduce(
+      (total, match) => total + (match[1]?.length ?? 0),
+      0,
+    );
+    expect(emittedCharacters).toBe(100);
+  });
+
+  it("aborts an in-flight run when the chat client disconnects", async () => {
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(SessionRuntime.prototype, "deliver").mockImplementation(
+      async (_message, _agentName, signal) => {
+        observedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("client disconnected")), {
+            once: true,
+          });
+        });
+      },
+    );
+    const pending = request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "disconnect-session", message: "hello" });
+    const completion = pending.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await vi.waitFor(() => expect(observedSignal).toBeDefined());
+
+    pending.abort();
+
+    await vi.waitFor(() => expect(observedSignal?.aborted).toBe(true));
+    await expect(completion).resolves.toBe("rejected");
+  });
+
+  it("includes the configured persona in the TTS narration prompt", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.OPENCODE_API_KEY = "paraphrase-key";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ choices: [{ message: { content: "spoken summary" } }] }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "audio/pcm", data: "AAA=" } }],
+              },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await request(createApp()).post("/api/tts").send({
+      text: "hello",
+      persona: "Warm professor",
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toContain("Warm professor");
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toContain("Warm professor");
   });
 });

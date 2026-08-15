@@ -1,13 +1,14 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Config } from "@agent-harness/core";
 import {
+  BoundaryValidationError,
   ConfigSchema,
   getConfig,
+  getConfigRoot,
   parseBoundary,
-  parseJsonBoundary,
   parseJsonResponseBoundary,
-  readUtf8FileBoundedSync,
   resetConfig,
   stringifyJsonBounded,
 } from "@agent-harness/core";
@@ -16,8 +17,9 @@ import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
 
-const SETTING_KEYS: (keyof Config)[] = [
-  "ROOT",
+type PersistedSettingKey = Exclude<keyof Config, "ROOT">;
+
+const SETTING_KEYS: PersistedSettingKey[] = [
   "INBOX_ROOT",
   "SESSIONS_DIR",
   "AGENTS_DIR",
@@ -27,7 +29,6 @@ const SETTING_KEYS: (keyof Config)[] = [
   "MAX_CONCURRENT_AGENTS",
 ];
 const PersistedSettingsSchema = ConfigSchema.pick({
-  ROOT: true,
   INBOX_ROOT: true,
   SESSIONS_DIR: true,
   AGENTS_DIR: true,
@@ -55,16 +56,13 @@ const ModelsResponseSchema = z.object({
 });
 
 function getSettingsFile(): string {
-  const config = getConfig();
-  return path.join(config.ROOT, ".harness", "settings.json");
+  return path.join(getConfigRoot(), ".harness", "settings.json");
 }
 
 export const settingsRouter = Router();
 
 settingsRouter.get("/", (_req, res) => {
-  const config = getConfig();
-  const persisted = loadPersistedSettings();
-  res.json({ ...config, ...persisted });
+  res.json(getConfig());
 });
 
 settingsRouter.get(
@@ -97,7 +95,17 @@ settingsRouter.get(
 settingsRouter.put("/", (req, res) => {
   const body = validateRequest(SettingsUpdateSchema, req.body, res);
   if (!body) return;
-  const config = getConfig();
+  let config: Config;
+  try {
+    config = getConfig();
+  } catch (error) {
+    if (!(error instanceof BoundaryValidationError) || !fs.existsSync(getSettingsFile())) {
+      throw error;
+    }
+    quarantineInvalidSettings();
+    resetConfig();
+    config = getConfig();
+  }
 
   const updated: Record<string, unknown> = { ...config };
   for (const key of SETTING_KEYS) {
@@ -117,17 +125,6 @@ settingsRouter.put("/", (req, res) => {
   }
 });
 
-function loadPersistedSettings(): Partial<Config> {
-  try {
-    const file = getSettingsFile();
-    if (fs.existsSync(file)) {
-      const raw = readUtf8FileBoundedSync(file, MAX_SETTINGS_BYTES, "persisted settings");
-      return parseJsonBoundary(PersistedSettingsSchema, raw, "persisted settings");
-    }
-  } catch {}
-  return {};
-}
-
 function savePersistedSettings(settings: Config): void {
   const file = getSettingsFile();
   const dir = path.dirname(file);
@@ -136,7 +133,15 @@ function savePersistedSettings(settings: Config): void {
   try {
     fs.writeFileSync(
       temporaryFile,
-      stringifyJsonBounded(settings, MAX_SETTINGS_BYTES, "persisted settings"),
+      stringifyJsonBounded(
+        parseBoundary(
+          PersistedSettingsSchema,
+          Object.fromEntries(SETTING_KEYS.map((key) => [key, settings[key]])),
+          "persisted settings save",
+        ),
+        MAX_SETTINGS_BYTES,
+        "persisted settings",
+      ),
       "utf-8",
     );
     fs.renameSync(temporaryFile, file);
@@ -146,4 +151,9 @@ function savePersistedSettings(settings: Config): void {
     } catch {}
     throw error;
   }
+}
+
+function quarantineInvalidSettings(): void {
+  const file = getSettingsFile();
+  fs.renameSync(file, `${file}.invalid-${Date.now()}-${randomUUID()}`);
 }

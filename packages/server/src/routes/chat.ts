@@ -25,20 +25,38 @@ chatRouter.post(
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
+    const controller = new AbortController();
+    const abortOnDisconnect = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    res.once("close", abortOnDisconnect);
 
     try {
       const runtime = sessionManager.getOrCreate(sessionId);
-      const result = await runtime.deliver(message, agentName);
-      const chunks = result.summary.match(/.{1,40}(\s|$)/gs) ?? [result.summary];
+      const result = await runtime.deliver(message, agentName, controller.signal);
+      const chunks = chunkSummary(result.summary);
       for (const chunk of chunks) {
         res.write(`data: ${JSON.stringify({ type: "text-delta", text: chunk })}\n\n`);
       }
       res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
     } catch {
       console.error("[chat] Agent request failed");
-      res.write(`data: ${JSON.stringify({ type: "error", error: "Agent request failed" })}\n\n`);
+      if (!res.destroyed) {
+        res.write(`data: ${JSON.stringify({ type: "error", error: "Agent request failed" })}\n\n`);
+      }
+    } finally {
+      res.off("close", abortOnDisconnect);
     }
 
-    res.end();
+    if (!res.destroyed) res.end();
   }),
 );
+
+function chunkSummary(summary: string): string[] {
+  if (summary.length === 0) return [""];
+  const chunks: string[] = [];
+  for (let offset = 0; offset < summary.length; offset += 40) {
+    chunks.push(summary.slice(offset, offset + 40));
+  }
+  return chunks;
+}

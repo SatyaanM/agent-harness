@@ -17,7 +17,7 @@ const CapabilityMatrixSchema = z.object({
 });
 
 const AgentFrontmatterSchema = AgentConfigSchema.omit({ instructions: true }).extend({
-  tools: z.array(z.string().min(1)).min(1).max(128),
+  tools: z.array(z.string().min(1)).max(128),
   capabilities: CapabilityMatrixSchema.optional(),
 });
 

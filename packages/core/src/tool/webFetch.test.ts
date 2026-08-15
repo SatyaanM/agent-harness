@@ -1,7 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
-import { createWebFetchTool, validateOutboundUrl } from "./webFetch.js";
+import { createServer } from "node:http";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createWebFetchTool, requestPinnedUrl, validateOutboundUrl } from "./webFetch.js";
 
 const publicResolver = vi.fn(async (_hostname: string) => ["93.184.216.34"]);
+const servers: Array<ReturnType<typeof createServer>> = [];
+
+afterEach(async () => {
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
+    ),
+  );
+});
 
 describe("webFetch outbound policy", () => {
   it("accepts an HTTP URL only when all resolved addresses are public", async () => {
@@ -57,5 +70,37 @@ describe("webFetch outbound policy", () => {
       "HTTP 403",
     );
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("passes the validated DNS addresses to the connection implementation", async () => {
+    const requestImpl = vi.fn(async () => new Response("ok"));
+    const tool = createWebFetchTool({ requestImpl, resolveAddresses: publicResolver });
+
+    await expect(tool.execute({ url: "https://example.com/path", format: "text" })).resolves.toBe(
+      "ok",
+    );
+    expect(requestImpl).toHaveBeenCalledWith(
+      new URL("https://example.com/path"),
+      ["93.184.216.34"],
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("connects to the pinned address while preserving the original Host header", async () => {
+    let observedHost: string | undefined;
+    const server = createServer((request, response) => {
+      observedHost = request.headers.host;
+      response.end("pinned");
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected an IP server address");
+    const url = new URL(`http://unresolvable.invalid:${address.port}/resource`);
+
+    const response = await requestPinnedUrl(url, ["127.0.0.1"], {});
+
+    await expect(response.text()).resolves.toBe("pinned");
+    expect(observedHost).toBe(`unresolvable.invalid:${address.port}`);
   });
 });

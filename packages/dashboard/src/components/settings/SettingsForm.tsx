@@ -30,11 +30,12 @@ const FIELD_LABELS: Record<keyof HarnessSettings, string> = {
   MAX_CONCURRENT_AGENTS: "Max Concurrent Agents",
 };
 
-const PATH_FIELDS: (keyof HarnessSettings)[] = ["ROOT", "INBOX_ROOT", "SESSIONS_DIR", "AGENTS_DIR"];
-const URL_FIELDS: (keyof HarnessSettings)[] = ["PROVIDER_ENDPOINT"];
-const NUMBER_FIELDS: (keyof HarnessSettings)[] = ["MAX_CONCURRENT_AGENTS"];
+type EditableSetting = Exclude<keyof HarnessSettings, "ROOT">;
+
+const PATH_FIELDS: EditableSetting[] = ["INBOX_ROOT", "SESSIONS_DIR", "AGENTS_DIR"];
+const URL_FIELDS: EditableSetting[] = ["PROVIDER_ENDPOINT"];
+const NUMBER_FIELDS: EditableSetting[] = ["MAX_CONCURRENT_AGENTS"];
 const SETTINGS_FIELDS = [
-  "ROOT",
   "INBOX_ROOT",
   "SESSIONS_DIR",
   "AGENTS_DIR",
@@ -42,11 +43,23 @@ const SETTINGS_FIELDS = [
   "API_KEY_ENV",
   "DEFAULT_MODEL",
   "MAX_CONCURRENT_AGENTS",
-] as const satisfies readonly (keyof HarnessSettings)[];
+] as const satisfies readonly EditableSetting[];
+
+function editableSettings(settings: HarnessSettings): Pick<HarnessSettings, EditableSetting> {
+  return {
+    INBOX_ROOT: settings.INBOX_ROOT,
+    SESSIONS_DIR: settings.SESSIONS_DIR,
+    AGENTS_DIR: settings.AGENTS_DIR,
+    PROVIDER_ENDPOINT: settings.PROVIDER_ENDPOINT,
+    API_KEY_ENV: settings.API_KEY_ENV,
+    DEFAULT_MODEL: settings.DEFAULT_MODEL,
+    MAX_CONCURRENT_AGENTS: settings.MAX_CONCURRENT_AGENTS,
+  };
+}
 
 export function SettingsForm() {
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
-  const [draft, setDraft] = useState<Partial<HarnessSettings>>({});
+  const [draft, setDraft] = useState<Partial<Pick<HarnessSettings, EditableSetting>>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -58,7 +71,7 @@ export function SettingsForm() {
     fetchSettings()
       .then((data) => {
         setSettings(data);
-        setDraft(data);
+        setDraft(editableSettings(data));
       })
       .catch(() => setError("Failed to load settings"));
 
@@ -74,7 +87,7 @@ export function SettingsForm() {
       });
   }, []);
 
-  function validate(field: keyof HarnessSettings, value: string): string {
+  function validate(field: EditableSetting, value: string): string {
     if (!value.trim()) return "Required";
     if (PATH_FIELDS.includes(field) && !value.startsWith("/") && !value.match(/^[A-Z]:\\/i)) {
       return "Must be an absolute path";
@@ -92,7 +105,7 @@ export function SettingsForm() {
     return "";
   }
 
-  function handleChange(field: keyof HarnessSettings, value: string) {
+  function handleChange(field: EditableSetting, value: string) {
     setDraft((prev) => ({ ...prev, [field]: value }));
     const err = validate(field, value);
     setValidationErrors((prev) => {
@@ -120,7 +133,7 @@ export function SettingsForm() {
     try {
       const updated = await updateSettings(draft);
       setSettings(updated);
-      setDraft(updated);
+      setDraft(editableSettings(updated));
       setSuccess(true);
     } catch {
       setError("Failed to save settings");
@@ -137,6 +150,18 @@ export function SettingsForm() {
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1.5">
+        <Label
+          htmlFor="settings-ROOT"
+          className="uppercase tracking-wider text-xs text-muted-foreground"
+        >
+          {FIELD_LABELS.ROOT}
+        </Label>
+        <Input id="settings-ROOT" type="text" value={settings.ROOT} disabled />
+        <span className="text-xs text-muted-foreground">
+          Set ROOT in the server environment to change the workspace boundary.
+        </span>
+      </div>
       {SETTINGS_FIELDS.map((field) => (
         <div key={field} className="flex flex-col gap-1.5">
           <Label

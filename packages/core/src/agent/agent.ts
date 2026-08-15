@@ -120,6 +120,15 @@ export class Agent {
         this.config.instructions,
       );
       if (totalTokensUsed > maxTotalTokens) {
+        if (response.toolCalls?.length) {
+          this.messages.push(
+            ...response.toolCalls.map((toolCall) => ({
+              role: "tool" as const,
+              content: `Error: Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}); tool was not executed.`,
+              toolCallId: toolCall.toolCallId,
+            })),
+          );
+        }
         return this.budgetExceeded(
           `Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}).`,
         );
@@ -171,7 +180,7 @@ export class Agent {
               toolCall.args,
               `tool ${toolCall.toolName} arguments`,
             );
-            const result = await tool.execute(args);
+            const result = await waitForAbort(tool.execute(args, { signal }), signal);
             if (signal.aborted) throw new AgentCancelledError();
             this.onEvent?.({
               type: "tool:completed",
@@ -184,6 +193,7 @@ export class Agent {
               toolCallId: toolCall.toolCallId,
             });
           } catch (error) {
+            if (signal.aborted) throw new AgentCancelledError();
             const errorMessage = error instanceof Error ? error.message : String(error);
             console.error(`[Agent] Tool "${toolCall.toolName}" failed:`, error);
             this.messages.push({
@@ -214,6 +224,24 @@ export class Agent {
       messages: [...this.messages],
     };
   }
+}
+
+function waitForAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new AgentCancelledError());
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new AgentCancelledError());
+    signal.addEventListener("abort", abort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
 }
 
 function boundToolResult(result: string, limit: number): string {

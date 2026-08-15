@@ -1,0 +1,83 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { resetConfig } from "@agent-harness/core";
+import request from "supertest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createApp } from "../app.js";
+
+const tempDirs: string[] = [];
+const originalRoot = process.env.ROOT;
+
+async function appFixture() {
+  const root = await mkdtemp(path.join(tmpdir(), "agent-harness-agent-routes-"));
+  tempDirs.push(root);
+  process.env.ROOT = root;
+  resetConfig();
+  return { app: createApp(), root };
+}
+
+afterEach(async () => {
+  if (originalRoot === undefined) delete process.env.ROOT;
+  else process.env.ROOT = originalRoot;
+  resetConfig();
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+describe("agent configuration routes", () => {
+  it("creates an agent with an empty tool list without leaving an invalid file", async () => {
+    const { app, root } = await appFixture();
+
+    const created = await request(app).post("/api/agents").send({
+      name: "researcher",
+      model: "test-model",
+      tools: [],
+      maxSteps: 10,
+      instructions: "Research carefully.",
+      description: "Research specialist",
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({
+      name: "researcher",
+      tools: [],
+      description: "Research specialist",
+    });
+    const listed = await request(app).get("/api/agents");
+    expect(listed.status).toBe(200);
+    expect(listed.body).toEqual([
+      expect.objectContaining({
+        name: "researcher",
+        tools: [],
+        description: "Research specialist",
+      }),
+    ]);
+    await expect(readFile(path.join(root, "agents", "researcher.md"), "utf8")).resolves.toContain(
+      "Research carefully.",
+    );
+  });
+
+  it("merges partial updates with the existing validated agent", async () => {
+    const { app } = await appFixture();
+    await request(app)
+      .post("/api/agents")
+      .send({
+        name: "researcher",
+        model: "original-model",
+        tools: ["grep"],
+        maxSteps: 7,
+        instructions: "Original instructions.",
+      });
+
+    const updated = await request(app).put("/api/agents/researcher").send({ maxSteps: 12 });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({
+      name: "researcher",
+      model: "original-model",
+      tools: ["grep"],
+      maxSteps: 12,
+      instructions: "Original instructions.",
+    });
+  });
+});

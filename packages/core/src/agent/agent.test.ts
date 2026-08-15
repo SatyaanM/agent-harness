@@ -265,6 +265,75 @@ describe("Agent tool boundary", () => {
     expect(result.summary).toContain("token budget");
   });
 
+  it("balances every provider tool call when the token budget stops the run", async () => {
+    const agent = new Agent(
+      { ...config, maxTotalTokens: 10 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          return {
+            finishReason: "tool-calls",
+            message: { role: "assistant", content: "" },
+            toolCalls: [
+              { toolCallId: "call-1", toolName: "count", args: { count: 1 } },
+              { toolCallId: "call-2", toolName: "count", args: { count: 2 } },
+            ],
+            usage: { totalTokens: 11 },
+          };
+        },
+      },
+      new CapabilityRegistry({ workspaceRoot: process.cwd() }),
+    );
+
+    const result = await agent.run("go");
+
+    expect(result.status).toBe("budgetExceeded");
+    expect(
+      result.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => message.toolCallId),
+    ).toEqual(["call-1", "call-2"]);
+    expect(result.messages.filter((message) => message.role === "tool")).toEqual([
+      expect.objectContaining({ content: expect.stringContaining("token budget") }),
+      expect.objectContaining({ content: expect.stringContaining("token budget") }),
+    ]);
+  });
+
+  it("passes the run signal into tool execution", async () => {
+    const execute = vi.fn(
+      async (_args: { count: number }, _context?: { signal: AbortSignal }) => "executed",
+    );
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute,
+    });
+    const agent = new Agent(
+      { ...config, maxSteps: 1 },
+      registry,
+      {
+        async chat() {
+          return {
+            finishReason: "tool-calls",
+            message: { role: "assistant", content: "" },
+            toolCalls: [{ toolCallId: "call-1", toolName: "count", args: { count: 1 } }],
+            usage: { totalTokens: 1 },
+          };
+        },
+      },
+      new CapabilityRegistry({ workspaceRoot: process.cwd() }),
+    );
+
+    await agent.run("go");
+
+    expect(execute).toHaveBeenCalledWith(
+      { count: 1 },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
   it("uses a conservative token estimate when a provider omits usage", async () => {
     const chat = vi.fn<LLMClient["chat"]>(async () => ({
       finishReason: "stop",
@@ -303,6 +372,44 @@ describe("Agent tool boundary", () => {
 
       const result = agent.run("go");
       const rejection = expect(result).rejects.toBeInstanceOf(AgentBudgetExceededError);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops waiting for a tool that ignores cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "count",
+        description: "Count",
+        parameters: z.object({ count: z.number() }),
+        async execute() {
+          return new Promise(() => undefined);
+        },
+      });
+      const agent = new Agent(
+        { ...config, maxSteps: 1, runTimeoutMs: 1_000 },
+        registry,
+        {
+          async chat() {
+            return {
+              finishReason: "tool-calls",
+              message: { role: "assistant", content: "" },
+              toolCalls: [{ toolCallId: "call-1", toolName: "count", args: { count: 1 } }],
+              usage: { totalTokens: 1 },
+            };
+          },
+        },
+        new CapabilityRegistry({ workspaceRoot: process.cwd() }),
+      );
+
+      const run = agent.run("go");
+      const rejection = expect(run).rejects.toBeInstanceOf(AgentBudgetExceededError);
       await vi.advanceTimersByTimeAsync(1_000);
 
       await rejection;

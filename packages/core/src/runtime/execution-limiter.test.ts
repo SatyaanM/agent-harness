@@ -92,4 +92,25 @@ describe("ExecutionLimiter", () => {
     gate.resolve();
     await expect(Promise.all([first, second])).resolves.toEqual([undefined, "queued"]);
   });
+
+  it("removes an aborted waiter without consuming execution capacity", async () => {
+    const limiter = new ExecutionLimiter(1, 2);
+    const gate = deferred();
+    const first = limiter.run(async () => gate.promise);
+    const controller = new AbortController();
+    const runWithSignal: (
+      operation: () => Promise<string>,
+      signal: AbortSignal,
+    ) => Promise<string> = limiter.run.bind(limiter);
+    const queued = runWithSignal(async () => "should-not-run", controller.signal);
+
+    await vi.waitFor(() => expect(limiter.snapshot().queued).toBe(1));
+    controller.abort();
+
+    await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+    expect(limiter.snapshot()).toEqual({ active: 1, limit: 1, queued: 0, queueLimit: 2 });
+    gate.resolve();
+    await first;
+    expect(limiter.snapshot().active).toBe(0);
+  });
 });

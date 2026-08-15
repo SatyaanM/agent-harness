@@ -25,13 +25,25 @@ export interface AgentConfigRef {
   modelIdMapping?: string;
 }
 
+const ModelsDevModelSchema = z
+  .object({
+    id: z.string().max(512).optional(),
+    tool_call: z.boolean().optional(),
+    modalities: z.object({ input: z.array(z.string().max(128)).max(32).optional() }).optional(),
+    limit: z.object({ output: z.number().nonnegative().optional() }).optional(),
+  })
+  .passthrough();
+
+const ModelsDevProviderSchema = z
+  .object({
+    id: z.string().max(512).optional(),
+    models: z
+      .record(ModelsDevModelSchema)
+      .refine((value) => Object.keys(value).length <= 10_000, "too many model entries"),
+  })
+  .passthrough();
+
 export const ModelsDevResponseSchema = z
-  .record(
-    z.object({
-      tool_call: z.boolean().optional(),
-      modalities: z.object({ input: z.array(z.string().max(128)).max(32).optional() }).optional(),
-      limit: z.object({ output: z.number().nonnegative().optional() }).optional(),
-    }),
-  )
-  .refine((value) => Object.keys(value).length <= 10_000, "too many model entries");
+  .record(ModelsDevProviderSchema)
+  .refine((value) => Object.keys(value).length <= 1_000, "too many provider entries");
 export type ModelsDevResponse = z.infer<typeof ModelsDevResponseSchema>;

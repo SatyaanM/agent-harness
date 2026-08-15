@@ -86,10 +86,14 @@ function loadPersistedSettings(root: string): Record<string, unknown> {
 
 let cachedConfig: Config | null = null;
 
+export function getConfigRoot(): string {
+  return process.env.ROOT ?? findProjectRoot();
+}
+
 export function getConfig(): Config {
   if (cachedConfig) return cachedConfig;
 
-  const root = process.env.ROOT ?? findProjectRoot();
+  const root = getConfigRoot();
   const persisted = loadPersistedSettings(root);
 
   cachedConfig = ConfigSchema.parse({

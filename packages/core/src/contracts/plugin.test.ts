@@ -38,4 +38,22 @@ describe("PluginManifestSchema", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("rejects browser-normalized network paths that use backslashes", () => {
+    expect(
+      PluginManifestSchema.safeParse({
+        name: "example-plugin",
+        version: "1.0.0",
+        provides: {
+          commands: [
+            {
+              id: "example.command",
+              label: "Example",
+              action: { type: "navigate", href: "/\\evil.example" },
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
+  });
 });

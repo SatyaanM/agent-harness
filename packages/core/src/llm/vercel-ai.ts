@@ -71,7 +71,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
         ...(instructions ? { instructions } : {}),
         ...(tools ? { tools } : {}),
         ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
-        ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.signal ? { abortSignal: params.signal } : {}),
       });
       const resultWithReasoning = optionalRecord(result);
 

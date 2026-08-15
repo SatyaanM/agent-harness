@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Script } from "node:vm";
 import { z } from "zod";
 import { getConfig } from "../config.js";
 import { readUtf8FileBounded } from "../filesystem/bounded-io.js";
+import { isRecord, parseBoundary } from "../validation.js";
 import type { Tool } from "./types.js";
 import {
   assertExistingPathWithinRoot,
@@ -16,6 +18,7 @@ const MAX_GREP_PATTERN_CHARS = 1_000;
 const MAX_GREP_RESULTS = 500;
 const MAX_GREP_TOTAL_BYTES = 50_000_000;
 const MAX_RESULT_LINE_CHARS = 10_000;
+const MAX_REGEX_FILE_MS = 250;
 
 const GrepParams = z
   .object({
@@ -31,9 +34,34 @@ interface Match {
   text: string;
 }
 
+const RegexMatchesSchema = z
+  .array(
+    z.object({
+      line: z.number().int().positive(),
+      text: z.string().max(MAX_RESULT_LINE_CHARS),
+    }),
+  )
+  .max(MAX_GREP_RESULTS);
+
+const regexSearchScript = new Script(`
+  const regex = new RegExp(pattern, "i");
+  const matches = [];
+  for (let index = 0; index < lines.length && matches.length < matchLimit; index += 1) {
+    if (regex.test(lines[index])) {
+      matches.push({
+        line: index + 1,
+        text: lines[index].trimEnd().slice(0, maxLineChars),
+      });
+    }
+  }
+  matches;
+`);
+
+class GrepRegexResourceError extends Error {}
+
 async function searchFile(
   filePath: string,
-  regex: RegExp,
+  pattern: string,
   root: string,
   matchLimit: number,
   byteBudget: number,
@@ -49,19 +77,25 @@ async function searchFile(
   ).catch(() => null);
   if (content === null) return { bytesRead: 0, matches: [] };
 
-  const matches: Match[] = [];
   const lines = content.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    if (regex.test(lines[i])) {
-      const rel = path.relative(root, filePath).replace(/\\/g, "/");
-      matches.push({
-        file: rel,
-        line: i + 1,
-        text: lines[i].trimEnd().slice(0, MAX_RESULT_LINE_CHARS),
-      });
-      if (matches.length >= matchLimit) break;
+  let rawMatches: unknown;
+  try {
+    rawMatches = regexSearchScript.runInNewContext(
+      { pattern, lines, matchLimit, maxLineChars: MAX_RESULT_LINE_CHARS },
+      { timeout: MAX_REGEX_FILE_MS },
+    );
+  } catch (error) {
+    if (isRecord(error) && error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") {
+      throw new GrepRegexResourceError();
     }
+    throw error;
   }
+  const rel = path.relative(root, filePath).replace(/\\/g, "/");
+  const matches: Match[] = parseBoundary(
+    RegexMatchesSchema,
+    rawMatches,
+    "grep regular expression result",
+  ).map((match) => ({ ...match, file: rel }));
   return { bytesRead: stat.size, matches };
 }
 
@@ -97,12 +131,11 @@ export const grepTool: Tool<typeof GrepParams> = {
     "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers.",
   parameters: GrepParams,
 
-  async execute(args) {
+  async execute(args, context) {
     const root = getConfig().ROOT;
     const searchPath = args.path ? path.resolve(root, args.path) : root;
     assertWithinRoot(searchPath, root);
 
-    const regex = new RegExp(args.pattern, "i");
     const results: Match[] = [];
     let bytesRead = 0;
     let filesScanned = 0;
@@ -115,16 +148,25 @@ export const grepTool: Tool<typeof GrepParams> = {
 
     const files = stat.isDirectory() ? walkDir(searchPath) : singleFile(searchPath);
     for await (const file of files) {
+      if (context?.signal.aborted) return "[error] Search cancelled.";
       if (args.include && !matchesInclude(file, args.include)) continue;
       if (filesScanned >= MAX_TOOL_ENTRIES || bytesRead >= MAX_GREP_TOTAL_BYTES) break;
       filesScanned += 1;
-      const searched = await searchFile(
-        file,
-        regex,
-        root,
-        MAX_GREP_RESULTS - results.length,
-        MAX_GREP_TOTAL_BYTES - bytesRead,
-      );
+      let searched: Awaited<ReturnType<typeof searchFile>>;
+      try {
+        searched = await searchFile(
+          file,
+          args.pattern,
+          root,
+          MAX_GREP_RESULTS - results.length,
+          MAX_GREP_TOTAL_BYTES - bytesRead,
+        );
+      } catch (error) {
+        if (error instanceof GrepRegexResourceError) {
+          return `[error] Grep regular expression resource limit exceeded (${MAX_REGEX_FILE_MS}ms per file).`;
+        }
+        throw error;
+      }
       bytesRead += searched.bytesRead;
       results.push(...searched.matches);
       if (results.length >= MAX_GREP_RESULTS) break;

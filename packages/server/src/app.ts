@@ -1,4 +1,4 @@
-import { isRecord } from "@agent-harness/core";
+import { isRecord, MAX_INBOX_FILE_REQUEST_BYTES } from "@agent-harness/core";
 import cors from "cors";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
@@ -17,6 +17,7 @@ import { sessionManager } from "./session-manager.js";
 export function createApp(options?: {
   allowedOrigins?: readonly string[];
   jsonLimit?: string | number;
+  inboxJsonLimit?: string | number;
 }) {
   const app = express();
   const allowedOrigins = new Set(options?.allowedOrigins ?? parseServerConfig().allowedOrigins);
@@ -29,12 +30,16 @@ export function createApp(options?: {
       },
     }),
   );
+  app.use(
+    "/api/inbox",
+    express.json({ limit: options?.inboxJsonLimit ?? MAX_INBOX_FILE_REQUEST_BYTES }),
+    inboxRouter,
+  );
   app.use(express.json({ limit: options?.jsonLimit ?? "12mb" }));
 
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/chat", chatRouter);
   app.use("/api/agents", agentsRouter);
-  app.use("/api/inbox", inboxRouter);
   app.use("/api/workers", workersRouter);
   app.use("/api/settings", settingsRouter);
   app.use("/api/tts", ttsRouter);

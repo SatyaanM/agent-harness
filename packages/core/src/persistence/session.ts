@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "fs-extra";
-import { MAX_SESSION_TRANSCRIPT_BYTES } from "../contracts/limits.js";
+import { MAX_SESSION_MAILBOX_BYTES, MAX_SESSION_TRANSCRIPT_BYTES } from "../contracts/limits.js";
 import {
   type PendingMessage,
   PendingMessageSchema,
@@ -12,9 +12,19 @@ import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded
 import { BoundaryValidationError, parseBoundary, parseJsonBoundary } from "../validation.js";
 import { getSessionIndex, type SessionMeta } from "./session-index.js";
 
-const MAX_SESSION_MAILBOX_BYTES = 25_000_000;
 const MAX_SESSION_MAILBOX_MESSAGES = 10_000;
 const MAX_SESSION_FILES = 10_000;
+
+export interface SessionRecordDiagnostic {
+  kind: "transcript" | "mailbox";
+  record: string;
+  message: string;
+}
+
+export interface SessionListResult {
+  sessions: SessionData[];
+  diagnostics: SessionRecordDiagnostic[];
+}
 
 export type { PendingMessage, SessionData } from "../contracts/session.js";
 export { PendingMessageSchema, SessionDataSchema } from "../contracts/session.js";
@@ -341,7 +351,18 @@ export class SessionStore {
   }
 
   async list(): Promise<SessionData[]> {
+    const result = await this.listWithDiagnostics();
+    for (const diagnostic of result.diagnostics) {
+      console.error(
+        `[sessions] Invalid durable ${diagnostic.kind} record ${diagnostic.record}: ${diagnostic.message}`,
+      );
+    }
+    return result.sessions;
+  }
+
+  async listWithDiagnostics(): Promise<SessionListResult> {
     const sessions = new Map<string, SessionData>();
+    const diagnostics: SessionRecordDiagnostic[] = [];
 
     for (const [key, state] of transcriptStates) {
       if (!key.startsWith(`${this.sessionsDir}\u0000`)) continue;
@@ -369,30 +390,52 @@ export class SessionStore {
           `session count exceeds ${MAX_SESSION_FILES}`,
         );
       }
-      const session = parseJsonBoundary(
-        SessionDataSchema,
-        await readUtf8FileBounded(
-          path.join(this.sessionsDir, file),
-          MAX_SESSION_TRANSCRIPT_BYTES,
+      try {
+        const session = parseJsonBoundary(
+          SessionDataSchema,
+          await readUtf8FileBounded(
+            path.join(this.sessionsDir, file),
+            MAX_SESSION_TRANSCRIPT_BYTES,
+            `session transcript ${sessionId}`,
+          ),
           `session transcript ${sessionId}`,
-        ),
-        `session transcript ${sessionId}`,
-      );
-      sessions.set(sessionId, session);
+        );
+        sessions.set(sessionId, session);
+      } catch (error) {
+        diagnostics.push({
+          kind: "transcript",
+          record: file,
+          message: diagnosticMessage(error),
+        });
+      }
     }
 
     const result: SessionData[] = [];
     for (const [sessionId, session] of sessions) {
-      const mailbox = await getMailboxLog(this.sessionsDir, sessionId).peek();
-      result.push(
-        cleanSession({
-          ...session,
-          mailbox: mailbox ?? session.mailbox ?? [],
-        }),
-      );
+      try {
+        const mailbox = await getMailboxLog(this.sessionsDir, sessionId).peek();
+        result.push(
+          cleanSession({
+            ...session,
+            mailbox: mailbox ?? session.mailbox ?? [],
+          }),
+        );
+      } catch (error) {
+        diagnostics.push({
+          kind: "mailbox",
+          record: `${sessionId}.mailbox.jsonl`,
+          message: diagnosticMessage(error),
+        });
+        result.push(cleanSession(session));
+      }
     }
 
-    return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return {
+      sessions: result.sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      ),
+      diagnostics,
+    };
   }
 
   async delete(sessionId: string): Promise<void> {
@@ -413,4 +456,10 @@ export class SessionStore {
   async listMeta(): Promise<SessionMeta[]> {
     return getSessionIndex(this.sessionsDir).list();
   }
+}
+
+function diagnosticMessage(error: unknown): string {
+  return error instanceof BoundaryValidationError
+    ? "Record is invalid or exceeds its configured limit."
+    : "Record could not be read.";
 }

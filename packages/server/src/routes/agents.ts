@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  type AgentConfig,
   AgentConfigSchema,
   getConfig,
   loadAgentConfig,
@@ -58,11 +60,24 @@ agentsRouter.post(
       return;
     }
 
-    const content = buildAgentMarkdown(body);
     fs.mkdirSync(config.AGENTS_DIR, { recursive: true });
-    fs.writeFileSync(filePath, content, "utf-8");
-
-    const agentConfig = loadAgentConfig(filePath);
+    const agentConfig = writeAgentConfig(filePath, {
+      name: body.name,
+      model: body.model,
+      tools: body.tools ?? [],
+      maxSteps: body.maxSteps ?? 10,
+      instructions: body.instructions ?? "",
+      ...(body.description !== undefined ? { description: body.description } : {}),
+      ...(body.capabilities !== undefined ? { capabilities: body.capabilities } : {}),
+      ...(body.modelIdMapping !== undefined ? { modelIdMapping: body.modelIdMapping } : {}),
+      ...(body.maxToolCalls !== undefined ? { maxToolCalls: body.maxToolCalls } : {}),
+      ...(body.maxToolResultChars !== undefined
+        ? { maxToolResultChars: body.maxToolResultChars }
+        : {}),
+      ...(body.maxOutputTokens !== undefined ? { maxOutputTokens: body.maxOutputTokens } : {}),
+      ...(body.maxTotalTokens !== undefined ? { maxTotalTokens: body.maxTotalTokens } : {}),
+      ...(body.runTimeoutMs !== undefined ? { runTimeoutMs: body.runTimeoutMs } : {}),
+    });
     res.status(201).json(agentConfig);
   }),
 );
@@ -81,10 +96,12 @@ agentsRouter.put(
       return;
     }
 
-    const content = buildAgentMarkdown({ ...body, name: params.name });
-    fs.writeFileSync(filePath, content, "utf-8");
-
-    const agentConfig = loadAgentConfig(filePath);
+    const existing = loadAgentConfig(filePath);
+    const agentConfig = writeAgentConfig(filePath, {
+      ...existing,
+      ...body,
+      name: params.name,
+    });
     res.json(agentConfig);
   }),
 );
@@ -116,6 +133,9 @@ function buildAgentMarkdown(config: Partial<z.infer<typeof AgentConfigSchema>>):
   if (config.capabilities) {
     frontmatter.capabilities = config.capabilities;
   }
+  if (config.description !== undefined) {
+    frontmatter.description = config.description;
+  }
   if (config.modelIdMapping) {
     frontmatter.modelIdMapping = config.modelIdMapping;
   }
@@ -131,4 +151,20 @@ function buildAgentMarkdown(config: Partial<z.infer<typeof AgentConfigSchema>>):
 
   const { stringify } = matter;
   return stringify("", frontmatter) + (config.instructions ?? "");
+}
+
+function writeAgentConfig(filePath: string, config: AgentConfig): AgentConfig {
+  const content = buildAgentMarkdown(config);
+  const temporaryFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryFile, content, "utf-8");
+    const parsed = loadAgentConfig(temporaryFile);
+    fs.renameSync(temporaryFile, filePath);
+    return parsed;
+  } catch (error) {
+    try {
+      fs.rmSync(temporaryFile, { force: true });
+    } catch {}
+    throw error;
+  }
 }

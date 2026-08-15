@@ -38,7 +38,7 @@ export class Worker {
     try {
       const execute = () => this.agent.run(task, [], this.abortSignal);
       const result = this.executionLimiter
-        ? await this.executionLimiter.run(execute)
+        ? await this.executionLimiter.run(execute, this.abortSignal)
         : await execute();
       this.messages = result.messages;
 

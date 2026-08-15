@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  BoundaryValidationError,
   getConfig,
   parseBoundary,
   parseJsonBoundary,
@@ -45,6 +47,18 @@ export function loadOpenSessions(): OpenSessionsState {
       return { ...EMPTY };
     }
     throw error;
+  }
+}
+
+export function loadOpenSessionsForRepair(): OpenSessionsState {
+  try {
+    return loadOpenSessions();
+  } catch (error) {
+    if (!(error instanceof BoundaryValidationError)) throw error;
+    const file = stateFile();
+    const quarantine = `${file}.invalid-${Date.now()}-${randomUUID()}`;
+    fs.renameSync(file, quarantine);
+    return { ...EMPTY };
   }
 }
 

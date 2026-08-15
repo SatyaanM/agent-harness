@@ -51,8 +51,8 @@ export class SessionRuntime {
   }
 
   /** Serialized delivery: only one run happens at a time per session. */
-  deliver(message?: string, agentName?: string): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName));
+  deliver(message?: string, agentName?: string, signal?: AbortSignal): Promise<AgentResult> {
+    const run = this.queue.then(() => this.runOnce(message, agentName, signal));
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -61,7 +61,11 @@ export class SessionRuntime {
     this.options.onEvent?.({ sessionId: this.options.sessionId, ...event });
   }
 
-  private async runOnce(message?: string, agentName?: string): Promise<AgentResult> {
+  private async runOnce(
+    message?: string,
+    agentName?: string,
+    signal?: AbortSignal,
+  ): Promise<AgentResult> {
     const now = new Date().toISOString();
 
     let session = await this.sessionStore.load(this.options.sessionId);
@@ -168,13 +172,14 @@ export class SessionRuntime {
       },
     );
 
-    this.emit({ type: "agent:started", agentName: agentConfig.name });
-
     let result: AgentResult;
     try {
-      const execute = () => agent.run(message, [...baseHistory, ...deliveredSystem]);
+      const execute = () => {
+        this.emit({ type: "agent:started", agentName: agentConfig.name });
+        return agent.run(message, [...baseHistory, ...deliveredSystem], signal);
+      };
       result = this.options.executionLimiter
-        ? await this.options.executionLimiter.run(execute)
+        ? await this.options.executionLimiter.run(execute, signal)
         : await execute();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -192,7 +197,7 @@ export class SessionRuntime {
       .map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
     session.messages.push(...appended);
     session.result = { status: result.status, summary: result.summary };
-    session.completedAt = now;
+    session.completedAt = new Date().toISOString();
 
     await this.sessionStore.save(session);
 

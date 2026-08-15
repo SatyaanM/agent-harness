@@ -40,6 +40,12 @@ describe("filesystem containment", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("allows in-root names that begin with two dots", () => {
+    const root = path.resolve("workspace");
+
+    expect(() => assertWithinRoot(path.join(root, "..cache", "file.txt"), root)).not.toThrow();
+  });
+
   it("rejects existing and new paths that escape through a directory symlink", async () => {
     const { root, outside } = await makeFixture();
     await writeFile(path.join(outside, "secret.txt"), "secret");

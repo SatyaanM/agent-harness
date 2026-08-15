@@ -6,6 +6,7 @@ import { z } from "zod";
 import { CapabilityRegistry } from "../capability/registry.js";
 import type { LLMChatParams, LLMClient, LLMResponse } from "../llm/client.js";
 import { SessionStore } from "../persistence/session.js";
+import { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import { ToolRegistry } from "../tool/registry.js";
 import { SessionRuntime } from "./session-runtime.js";
 import type { AgentConfig } from "./types.js";
@@ -161,5 +162,69 @@ describe("SessionRuntime delivery invariants", () => {
     const saved = await store.load("wake");
     expect(saved?.mailbox).toEqual([]);
     expect(saved?.messages.at(-1)?.content).toBe("reported completion");
+  });
+
+  it("records completion time after execution finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionsDir = await makeDirectory();
+      const response = deferred<LLMResponse>();
+      const runtime = new SessionRuntime({
+        sessionId: "completion-time",
+        sessionsDir,
+        resolveConfig: () => config(),
+        toolRegistry: new ToolRegistry(),
+        llmClient: {
+          async chat() {
+            return response.promise;
+          },
+        },
+        capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      });
+      vi.setSystemTime(new Date("2026-08-15T10:00:00.000Z"));
+      const run = runtime.deliver("work");
+      await vi.waitFor(() => undefined);
+      vi.setSystemTime(new Date("2026-08-15T10:05:00.000Z"));
+      response.resolve(stop("done"));
+
+      await run;
+
+      const saved = await new SessionStore(sessionsDir).load("completion-time");
+      expect(saved?.completedAt).toBe("2026-08-15T10:05:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("emits agent started only after the execution limiter admits the run", async () => {
+    const sessionsDir = await makeDirectory();
+    const limiter = new ExecutionLimiter(1);
+    const gate = deferred<void>();
+    const occupying = limiter.run(async () => gate.promise);
+    const events: string[] = [];
+    const runtime = new SessionRuntime({
+      sessionId: "queued-runtime",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("done");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      executionLimiter: limiter,
+      onEvent(event) {
+        events.push(event.type);
+      },
+    });
+
+    const run = runtime.deliver("work");
+    await vi.waitFor(() => expect(limiter.snapshot().queued).toBe(1));
+    expect(events).not.toContain("agent:started");
+    gate.resolve();
+
+    await Promise.all([occupying, run]);
+    expect(events).toContain("agent:started");
   });
 });

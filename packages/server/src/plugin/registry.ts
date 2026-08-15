@@ -73,7 +73,7 @@ export interface PluginEntry extends PluginManifest {
 
 export class PluginRegistry {
   private stateFile: string;
-  private enabled: Record<string, boolean> = {};
+  private enabled = new Map<string, boolean>();
 
   constructor(
     private pluginsDir: string,
@@ -86,7 +86,7 @@ export class PluginRegistry {
   list(): PluginEntry[] {
     return discoverPlugins(this.pluginsDir).map((plugin) => ({
       ...plugin,
-      enabled: this.enabled[plugin.name] ?? true,
+      enabled: this.enabled.get(plugin.name) ?? true,
     }));
   }
 
@@ -97,13 +97,13 @@ export class PluginRegistry {
   setEnabled(name: string, enabled: boolean): PluginEntry | undefined {
     const plugin = this.get(name);
     if (!plugin) return undefined;
-    const previous = this.enabled[name];
-    this.enabled[name] = enabled;
+    const previous = this.enabled.get(name);
+    this.enabled.set(name, enabled);
     try {
       this.saveState();
     } catch (error) {
-      if (previous === undefined) delete this.enabled[name];
-      else this.enabled[name] = previous;
+      if (previous === undefined) this.enabled.delete(name);
+      else this.enabled.set(name, previous);
       throw error;
     }
     return { ...plugin, enabled };
@@ -111,11 +111,12 @@ export class PluginRegistry {
 
   private loadState(): void {
     if (fs.existsSync(this.stateFile)) {
-      this.enabled = parseJsonBoundary(
+      const parsed = parseJsonBoundary(
         PluginStateSchema,
         readUtf8FileBoundedSync(this.stateFile, MAX_PLUGIN_STATE_BYTES, "plugin enabled state"),
         "plugin enabled state",
-      ).enabled;
+      );
+      this.enabled = new Map(Object.entries(parsed.enabled));
     }
   }
 
@@ -126,7 +127,7 @@ export class PluginRegistry {
       fs.writeFileSync(
         temporaryFile,
         stringifyJsonBounded(
-          { enabled: this.enabled },
+          { enabled: Object.fromEntries(this.enabled) },
           MAX_PLUGIN_STATE_BYTES,
           "plugin enabled state",
         ),

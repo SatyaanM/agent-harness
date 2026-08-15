@@ -177,7 +177,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
                 ...s,
                 messages,
                 agentName: data.agentName ?? s.agentName,
-                title: data.title ?? s.title,
+                title: data.title,
               }
             : s,
         ),

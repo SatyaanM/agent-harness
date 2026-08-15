@@ -34,11 +34,7 @@ export const PluginCommandManifestSchema = z
       z
         .object({
           type: z.literal("navigate"),
-          href: z
-            .string()
-            .min(1)
-            .max(2_048)
-            .refine((value) => value.startsWith("/") && !value.startsWith("//"), "must be local"),
+          href: z.string().min(1).max(2_048).refine(isLocalNavigationPath, "must be local"),
         })
         .strict(),
       z.object({ type: z.literal("builtin"), commandId: PluginIdentifierSchema }).strict(),
@@ -63,3 +59,25 @@ export const PluginManifestSchema = z
 export type InboxRendererManifest = z.infer<typeof InboxRendererManifestSchema>;
 export type PluginCommandManifest = z.infer<typeof PluginCommandManifestSchema>;
 export type PluginManifest = z.infer<typeof PluginManifestSchema>;
+
+function isLocalNavigationPath(value: string): boolean {
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    containsUnsafeNavigationCharacter(value)
+  ) {
+    return false;
+  }
+  const base = "https://dashboard.invalid";
+  return new URL(value, base).origin === base;
+}
+
+function containsUnsafeNavigationCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (character === "\\" || code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}

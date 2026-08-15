@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { parseJsonResponseBoundary, readResponseTextBounded } from "./http.js";
 
@@ -20,10 +20,13 @@ describe("bounded HTTP response parsing", () => {
 
   it("rejects an oversized declared content length before reading", async () => {
     const response = new Response("small", { headers: { "Content-Length": "100" } });
+    if (!response.body) throw new Error("Expected a response body");
+    const cancel = vi.spyOn(response.body, "cancel");
 
     await expect(readResponseTextBounded(response, 10, "test response")).rejects.toThrow(
       "exceeds 10 bytes",
     );
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("rejects an oversized streamed body", async () => {

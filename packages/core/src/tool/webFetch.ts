@@ -1,5 +1,8 @@
 import { lookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
+import { Readable } from "node:stream";
 import { z } from "zod";
 import { readResponseTextBounded } from "../contracts/http.js";
 import { isRecord, parseJsonBoundary } from "../validation.js";
@@ -18,6 +21,16 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 export type AddressResolver = (hostname: string) => Promise<readonly string[]>;
 type FetchImplementation = (input: string | URL, init?: RequestInit) => Promise<Response>;
+type RequestImplementation = (
+  url: URL,
+  addresses: readonly string[],
+  init: RequestInit,
+) => Promise<Response>;
+
+interface ResolvedOutboundUrl {
+  url: URL;
+  addresses: readonly string[];
+}
 
 async function resolveAddresses(hostname: string): Promise<readonly string[]> {
   return (await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
@@ -75,6 +88,13 @@ export async function validateOutboundUrl(
   rawUrl: string | URL,
   resolver: AddressResolver = resolveAddresses,
 ): Promise<URL> {
+  return (await resolveOutboundUrl(rawUrl, resolver)).url;
+}
+
+async function resolveOutboundUrl(
+  rawUrl: string | URL,
+  resolver: AddressResolver,
+): Promise<ResolvedOutboundUrl> {
   const url = rawUrl instanceof URL ? new URL(rawUrl.href) : new URL(rawUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw refused(`protocol ${url.protocol} is not allowed`);
@@ -96,15 +116,22 @@ export async function validateOutboundUrl(
       throw refused(`${hostname} resolved to non-public address ${address}`);
     }
   }
-  return url;
+  return { url, addresses };
 }
 
 export function createWebFetchTool(options?: {
   fetchImpl?: FetchImplementation;
+  requestImpl?: RequestImplementation;
   resolveAddresses?: AddressResolver;
 }): Tool<typeof WebFetchParams> {
-  const fetchImpl = options?.fetchImpl ?? fetch;
   const resolver = options?.resolveAddresses ?? resolveAddresses;
+  const requestImpl: RequestImplementation = options?.requestImpl
+    ? options.requestImpl
+    : options?.fetchImpl
+      ? (url, _addresses, init) =>
+          options.fetchImpl?.(url, init) ??
+          Promise.reject(new Error("Missing fetch implementation"))
+      : requestPinnedUrl;
 
   return {
     name: "webFetch",
@@ -112,16 +139,19 @@ export function createWebFetchTool(options?: {
       "Fetch public HTTP(S) content. Private networks and oversized responses are blocked.",
     parameters: WebFetchParams,
 
-    async execute(args) {
+    async execute(args, context) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15_000);
+      const signal = context?.signal
+        ? AbortSignal.any([context.signal, controller.signal])
+        : controller.signal;
 
       try {
-        let currentUrl = await validateOutboundUrl(args.url, resolver);
+        let currentTarget = await resolveOutboundUrl(args.url, resolver);
         let response: Response | undefined;
         for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-          response = await fetchImpl(currentUrl, {
-            signal: controller.signal,
+          response = await requestImpl(currentTarget.url, currentTarget.addresses, {
+            signal,
             headers: { "User-Agent": "agent-harness/0.1.0" },
             redirect: "manual",
           });
@@ -132,7 +162,7 @@ export function createWebFetchTool(options?: {
             return `[error] Response exceeded ${MAX_REDIRECTS} redirects.`;
           }
           await response.body?.cancel();
-          currentUrl = await validateOutboundUrl(new URL(location, currentUrl), resolver);
+          currentTarget = await resolveOutboundUrl(new URL(location, currentTarget.url), resolver);
         }
 
         if (!response) return "[error] Request did not produce a response.";
@@ -167,3 +197,53 @@ export function createWebFetchTool(options?: {
 }
 
 export const webFetchTool = createWebFetchTool();
+
+export async function requestPinnedUrl(
+  url: URL,
+  addresses: readonly string[],
+  init: RequestInit,
+): Promise<Response> {
+  const address = addresses[0];
+  if (!address) throw refused(`${url.hostname} did not resolve to an address`);
+  const family = isIP(address);
+  if (family !== 4 && family !== 6) throw refused(`invalid resolved address ${address}`);
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+
+  return new Promise<Response>((resolve, reject) => {
+    const outgoing = request(
+      url,
+      {
+        headers: Object.fromEntries(new Headers(init.headers).entries()),
+        method: init.method ?? "GET",
+        signal: init.signal ?? undefined,
+        lookup(_hostname, options, callback) {
+          if (typeof options === "object" && options.all) {
+            callback(null, [{ address, family }]);
+            return;
+          }
+          callback(null, address, family);
+        },
+      },
+      (incoming) => {
+        const headers = new Headers();
+        for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
+          const name = incoming.rawHeaders[index];
+          const value = incoming.rawHeaders[index + 1];
+          if (name !== undefined && value !== undefined) headers.append(name, value);
+        }
+        const status = incoming.statusCode ?? 500;
+        const hasBody = status !== 101 && status !== 204 && status !== 205 && status !== 304;
+        const body = hasBody ? Readable.toWeb(incoming) : null;
+        resolve(
+          new Response(body, {
+            status,
+            statusText: incoming.statusMessage,
+            headers,
+          }),
+        );
+      },
+    );
+    outgoing.once("error", reject);
+    outgoing.end();
+  });
+}

@@ -5,12 +5,20 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 const SeveritySchema = z.enum(["info", "low", "moderate", "high", "critical"]);
+const AuditAdvisorySchema = z
+  .object({
+    source: z.union([z.string(), z.number()]),
+    severity: SeveritySchema.optional(),
+    url: z.string().optional(),
+  })
+  .passthrough();
 const AuditReportSchema = z
   .object({
     vulnerabilities: z.record(
       z
         .object({
           severity: SeveritySchema,
+          via: z.array(z.union([z.string(), AuditAdvisorySchema])).optional(),
         })
         .passthrough(),
     ),
@@ -18,11 +26,12 @@ const AuditReportSchema = z
   .passthrough();
 const ExceptionFileSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     exceptions: z.array(
       z
         .object({
           package: z.string().min(1),
+          advisory: z.string().min(1),
           reason: z.string().min(1),
           expires: z.string().datetime(),
         })
@@ -37,22 +46,40 @@ export function evaluateSecurityAudit(rawAudit, rawExceptions, now = new Date())
   const expired = exceptionFile.exceptions.filter(
     (exception) => Date.parse(exception.expires) <= now.getTime(),
   );
-  const activePackages = new Set(
+  const activeExceptions = new Set(
     exceptionFile.exceptions
       .filter((exception) => Date.parse(exception.expires) > now.getTime())
-      .map((exception) => exception.package),
+      .map((exception) => `${exception.package}\u0000${exception.advisory}`),
   );
   const unaccepted = Object.entries(audit.vulnerabilities)
-    .filter(
-      ([packageName, vulnerability]) =>
-        (vulnerability.severity === "high" || vulnerability.severity === "critical") &&
-        !activePackages.has(packageName),
-    )
+    .filter(([packageName, vulnerability]) => {
+      if (vulnerability.severity !== "high" && vulnerability.severity !== "critical") {
+        return false;
+      }
+      const groups = advisoryIdentifierGroups(vulnerability.via ?? []);
+      return (
+        groups.length === 0 ||
+        groups.some(
+          (identifiers) =>
+            !identifiers.some((identifier) =>
+              activeExceptions.has(`${packageName}\u0000${identifier}`),
+            ),
+        )
+      );
+    })
     .map(([packageName, vulnerability]) => ({
       package: packageName,
       severity: vulnerability.severity,
     }));
   return { expired, unaccepted };
+}
+
+function advisoryIdentifierGroups(via) {
+  return via.flatMap((entry) => {
+    if (typeof entry === "string") return [[entry]];
+    if (entry.severity && entry.severity !== "high" && entry.severity !== "critical") return [];
+    return [[String(entry.source), ...(entry.url ? [entry.url] : [])]];
+  });
 }
 
 function runAudit() {

@@ -1,7 +1,7 @@
 min_version: 2.1.10
 
 pre-commit:
-  parallel: true
+  parallel: false
   commands:
     biome:
       run: corepack npm run quality:staged

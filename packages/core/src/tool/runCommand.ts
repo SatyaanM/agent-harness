@@ -60,7 +60,7 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
   description: "Execute a shell command. Returns stdout and stderr. Timeout: 30 seconds.",
   parameters: RunCommandParams,
 
-  async execute(args) {
+  async execute(args, context) {
     const root = getConfig().ROOT;
     const cwd = args.cwd ? path.resolve(root, args.cwd) : root;
     assertWithinRoot(cwd, root);
@@ -77,6 +77,7 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
           windowsHide: true,
           shell: false,
           env: buildSubprocessEnvironment(process.env),
+          signal: context?.signal,
         },
       );
 

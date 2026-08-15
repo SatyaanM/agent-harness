@@ -12,10 +12,15 @@ describe("models.dev capability boundary", () => {
       async () =>
         new Response(
           JSON.stringify({
-            "provider/model": {
-              tool_call: true,
-              modalities: { input: ["text", "image"] },
-              limit: { output: 4096 },
+            provider: {
+              id: "provider",
+              models: {
+                model: {
+                  tool_call: true,
+                  modalities: { input: ["text", "image"] },
+                  limit: { output: 4096 },
+                },
+              },
             },
           }),
         ),

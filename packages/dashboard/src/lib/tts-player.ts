@@ -3,7 +3,7 @@ import { z } from "zod";
 
 export type PlaybackState = "idle" | "playing" | "paused";
 
-const TTS_BASE_URL = "http://localhost:3001";
+const TTS_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const MAX_AUDIO_BYTES = 25_000_000;
 const TTSErrorSchema = z.object({ error: z.string().optional() }).passthrough();
 
@@ -157,6 +157,7 @@ export function createTTSPlayer(): TTSPlayer {
 
         const declaredLength = Number(response.headers.get("content-length"));
         if (Number.isFinite(declaredLength) && declaredLength > MAX_AUDIO_BYTES) {
+          await response.body?.cancel();
           throw new Error("TTS audio exceeds maximum size");
         }
 

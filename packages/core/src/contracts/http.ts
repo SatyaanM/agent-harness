@@ -12,6 +12,7 @@ export async function readResponseTextBounded(
 
   const declaredLength = response.headers.get("content-length");
   if (declaredLength && /^\d+$/u.test(declaredLength) && Number(declaredLength) > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
     throw new BoundaryValidationError(boundary, `body exceeds ${maxBytes} bytes`);
   }
 
