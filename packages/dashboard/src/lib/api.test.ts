@@ -1,6 +1,6 @@
 import { BoundaryValidationError } from "@agent-harness/core/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchOpenSessions, parseChatStreamEvent } from "./api";
+import { fetchInboxFile, fetchOpenSessions, fetchSession, parseChatStreamEvent } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -26,5 +26,47 @@ describe("dashboard API boundary", () => {
     );
 
     await expect(fetchOpenSessions()).rejects.toBeInstanceOf(BoundaryValidationError);
+  });
+
+  it("accepts a valid session response larger than the generic API budget", async () => {
+    const content = "x".repeat(950_000);
+    const session = {
+      sessionId: "large-session",
+      taskId: "large-task",
+      prompt: "large",
+      messages: Array.from({ length: 11 }, () => ({ role: "user", content })),
+      createdAt: "2026-08-12T00:00:00.000Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(session))),
+    );
+
+    await expect(fetchSession("large-session")).resolves.toMatchObject({
+      sessionId: "large-session",
+      messages: expect.arrayContaining([expect.objectContaining({ content })]),
+    });
+  });
+
+  it("accepts base64 expansion from a valid eight-megabyte inbox binary", async () => {
+    const content = `data:image/png;base64,${"A".repeat(10_666_668)}`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: "large.png",
+              name: "large.png",
+              type: "png",
+              size: 8_000_000,
+              lastModified: "2026-08-12T00:00:00.000Z",
+              content,
+            }),
+          ),
+      ),
+    );
+
+    await expect(fetchInboxFile("large.png")).resolves.toMatchObject({ content });
   });
 });

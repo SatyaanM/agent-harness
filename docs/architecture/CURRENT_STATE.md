@@ -7,7 +7,7 @@ read_when:
 
 # Current architecture
 
-This document describes source inspected through 2026-08-11. It treats code and passing tests as implementation evidence. `README.md`, `docs/ARCHITECTURE_DECISIONS.md`, and feature specs still contain intent that is not wired into the current application; those claims are called out rather than silently promoted to current behavior.
+This document describes source inspected through 2026-08-12. It treats code and passing tests as implementation evidence. `README.md`, `docs/ARCHITECTURE_DECISIONS.md`, and feature specs still contain intent that is not wired into the current application; those claims are called out rather than silently promoted to current behavior.
 
 ## Executed application path
 
@@ -35,7 +35,7 @@ The server does **not** instantiate the exported `Orchestrator` class. The live 
 
 ### Core
 
-- [`Agent.run`](../../packages/core/src/agent/agent.ts) owns one in-memory model/tool loop. It builds tools from an `AgentConfig`, appends assistant and tool messages, checks an abort signal between steps and tool calls, and returns after stop or `maxSteps`.
+- [`Agent.run`](../../packages/core/src/agent/agent.ts) owns one in-memory model/tool loop. It builds tools from an `AgentConfig`, appends complete assistant and tool messages, projects bounded tool content into provider context and transient tool events, checks an abort signal between steps and tool calls, and returns after stop or `maxSteps`.
 - [`SessionRuntime`](../../packages/core/src/agent/session-runtime.ts) owns serialized delivery for one top-level `sessionId`. `deliver()` chains runs on an in-memory promise queue; `runOnce()` loads history, persists a user message, drains worker completions, runs an agent, and persists the appended record.
 - [`createDelegateTool`](../../packages/core/src/agent/delegation.ts) creates a task ID, derives a synthetic worker config from the delegating agent, persists a `worker-<taskId>` session, launches a `Worker` without awaiting it, persists progress/final state, and appends a completion to the parent mailbox.
 - [`Worker.run`](../../packages/core/src/agent/worker.ts) wraps an `Agent` invocation, maps cancellation/errors to a `WorkerResult`, and also posts to the process-local `MessageBus`.
@@ -60,7 +60,7 @@ The server does **not** instantiate the exported `Orchestrator` class. The live 
 - [`useRuntimeStore`](../../packages/dashboard/src/stores/runtime-store.ts) and [`useRosterStore`](../../packages/dashboard/src/stores/agent-roster-store.ts) hold transient activity/running/worker UI state. They are not reconstructed from durable worker execution state on boot.
 - [`usePluginStore`](../../packages/dashboard/src/stores/plugin-store.ts) builds enabled renderer and command indexes from the server registry.
 - [`plugins/registry.ts`](../../packages/dashboard/src/plugins/registry.ts) statically imports a fixed set of built-in renderer components, while [`InboxItemView`](../../packages/dashboard/src/components/inbox/InboxItemView.tsx) selects among them using manifest metadata.
-- [`lib/api.ts`](../../packages/dashboard/src/lib/api.ts) is the REST adapter and [`lib/ws.ts`](../../packages/dashboard/src/lib/ws.ts) is the Socket.IO adapter.
+- [`lib/api.ts`](../../packages/dashboard/src/lib/api.ts) is the REST adapter and applies endpoint-specific response budgets for durable sessions and inbox files, including JSON/base64 expansion. [`lib/ws.ts`](../../packages/dashboard/src/lib/ws.ts) is the Socket.IO adapter.
 
 ## Implemented lifecycle
 
@@ -114,7 +114,7 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 
 ## Verification reality
 
-The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. As of the completed quality-hardening baseline, the matrix discovers 29 test files and 116 tests. Production and test sources are both typechecked under strict mode. Coverage includes:
+The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. As of the completed adversarial-review corrections, the matrix discovers 30 test files and 123 tests. Production and test sources are both typechecked under strict mode. Coverage includes:
 
 - malformed persisted configuration;
 - valid and invalid session transcript/mailbox records, including preservation of a corrupt mailbox line;
@@ -122,14 +122,14 @@ The root Vitest project matrix includes core, server, dashboard, and repository-
 - stable server request-validation errors and path-like identifier rejection;
 - dashboard HTTP, chat-stream, and WebSocket payload validation.
 - per-session delivery serialization, ordered atomic mailbox drain, wake-run delegation suppression, worker completion, and cancellation;
-- process-wide concurrency and queue limits, tool-call, tool-result, provider-output, reported-or-estimated total-token, and wall-time budgets;
+- process-wide concurrency and queue limits, tool-call, provider-context tool-result, provider-output, reported-or-estimated total-token, and wall-time budgets while durable tool results remain verbatim;
 - bounded provider/browser response parsing, workspace file/search limits, symlink-aware path containment, subprocess environment minimization, public-only outbound fetch policy, redirect revalidation, loopback binding, CORS, and stable malformed/oversized/internal error envelopes;
 - dependency-audit exceptions and their expiry behavior.
 - plugin discovery/state persistence, capability probing, inbox metadata mutations, bounded file I/O, provider response envelopes, and rejected async Express handler propagation.
 
 [`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) remains a manual console script, not part of the configured Vitest suite. There are still no automated tests for provider routing, the legacy exported `Orchestrator`, or end-to-end dashboard resynchronization. Those gaps remain visible rather than being hidden by the improved global percentage.
 
-`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. The completed hardening increment measures 24.51% statements, 18.44% branches, 19.88% functions, and 26.14% lines. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules now have focused tests, while the low UI and adapter totals are not presented as broad product protection.
+`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. The 2026-08-12 adversarial-review correction measures 25.41% statements, 19.23% branches, 20.65% functions, and 27.11% lines. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules now have focused tests, while the low UI and adapter totals are not presented as broad product protection.
 
 `corepack npm run quality:policy` resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript suppression directives, explicit `any`, type and non-null assertions other than `as const`, unwrapped async Express routes, direct Express request-data use outside `validateRequest`, raw boundary JSON parsing, unbounded HTTP JSON parsing, mutable GitHub Action tags, and Node/runtime imports from the browser-safe core contracts surface. Core session/config/cache data, server request bodies/params/query, plugin state, provider responses, dashboard HTTP/chat-stream/WebSocket responses, and local TTS settings now have explicit schemas. Dashboard code consumes those schemas through `@agent-harness/core/contracts`, which cannot import the Node-backed core runtime.
 

@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "fs-extra";
+import { MAX_SESSION_TRANSCRIPT_BYTES } from "../contracts/limits.js";
 import {
   type PendingMessage,
   PendingMessageSchema,
@@ -11,7 +12,6 @@ import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded
 import { BoundaryValidationError, parseBoundary, parseJsonBoundary } from "../validation.js";
 import { getSessionIndex, type SessionMeta } from "./session-index.js";
 
-const MAX_SESSION_TRANSCRIPT_BYTES = 25_000_000;
 const MAX_SESSION_MAILBOX_BYTES = 25_000_000;
 const MAX_SESSION_MAILBOX_MESSAGES = 10_000;
 const MAX_SESSION_FILES = 10_000;

@@ -48,3 +48,10 @@ read_when:
   - Acceptance: clean checkout reproduces required checks; hooks mirror but do not replace CI; current-state docs match implementation
   - Verify: `check:ci`, coverage, security audit, docs/skills, diff check
   - Docs/handoff: mark initiative complete and list deferred runtime/provider work
+- [x] **T07 - Resolve adversarial branch-review findings**
+  - Depends on: T06
+  - Scope: `Agent.run` provider projection and message limits; glob schema/result containment; shared session/inbox response limits; plugin route identifier contract; delegation/current-state/security documentation
+  - Acceptance: durable tool results remain verbatim while provider context is capped; absolute and parent-traversing globs fail before search and matches remain root-authorized; valid maximum-size session/inbox responses parse in the dashboard; dotted manifest names reach plugin lookup; recursive delegation status is consistent across durable docs
+  - Tests: `packages/core/src/agent/agent.test.ts`, a focused glob test, `packages/dashboard/src/lib/api.test.ts`, and `packages/server/src/app.test.ts`
+  - Verify: focused package tests and typechecks; `corepack npm run check`; `corepack npm run test:coverage`; docs/skills checks; `git diff --check`
+  - Non-goals: branch-history rewriting, recursive-delegation design, changing the 25 MB transcript ceiling, or introducing a new package/dependency

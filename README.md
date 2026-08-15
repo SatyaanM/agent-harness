@@ -213,7 +213,7 @@ tasks to specialized worker agents.
 | `tools` | string[] | yes | List of tool names |
 | `maxSteps` | number | yes | Max tool-call iterations |
 | `maxToolCalls` | number | no | Run-wide tool-call cap; defaults to 64 |
-| `maxToolResultChars` | number | no | Per-result model/transcript cap; defaults to 100,000 characters |
+| `maxToolResultChars` | number | no | Per-result model-context and transient-event cap; defaults to 100,000 characters. Durable transcripts retain the complete tool result. |
 | `maxOutputTokens` | number | no | Per-provider-call output cap; defaults to 4,096 tokens |
 | `maxTotalTokens` | number | no | Run-wide token cap; uses provider usage or a conservative fallback estimate and defaults to 100,000 tokens |
 | `runTimeoutMs` | number | no | Run deadline; defaults to 300,000 ms |

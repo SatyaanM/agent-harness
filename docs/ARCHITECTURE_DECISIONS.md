@@ -413,7 +413,7 @@ When a session's runtime processes, it drains the **entire** mailbox at once and
 
 ### 10.10 The wake-run guard
 
-A run triggered by a delivered completion (no new user message) is a **wake run**. Wake runs must report results, not spawn new work: the `delegate` tool is dropped from the wake run's tool set so a woken agent presents its delivered completions instead of autonomously re-delegating. This is what bounds runaway self-propagation when delegation is recursive.
+A run triggered by a delivered completion (no new user message) is a **wake run**. Wake runs must report results, not spawn new work: the `delegate` tool is dropped from the wake run's tool set so a woken agent presents its delivered completions instead of autonomously re-delegating. Worker configs also omit `delegate`; recursive delegation is not implemented and needs a separate bounded design before it can be enabled.
 
 - Delegation is only available on **user-initiated runs** (a message was sent).
 - A wake run with nothing to report returns immediately without calling the LLM.

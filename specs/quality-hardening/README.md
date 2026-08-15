@@ -7,7 +7,7 @@ read_when:
 
 # Quality hardening specification
 
-Status: Completed — implementation and adversarial verification finished 2026-08-11
+Status: Completed — initial implementation finished 2026-08-11; adversarial review corrections verified 2026-08-12
 
 ## Problem and evidence
 
@@ -73,6 +73,18 @@ Limits for steps, concurrent executions, delegation, retries, wall time, input/o
 - `MAX_CONCURRENT_AGENTS` and run budgets are enforced rather than merely configured.
 - Layered fast, full, CI, security, performance, and nightly commands are documented and wired to appropriate hooks or CI.
 - Root quality, typecheck, test, build, documentation, skill, coverage, and diff checks pass without modifying tracked source.
+
+### Adversarial-review corrections
+
+The 2026-08-12 branch review found five gaps in the completed baseline. The corrective increment must satisfy these observable requirements without changing the broader runtime architecture:
+
+- Tool results are preserved verbatim in the durable transcript. `maxToolResultChars` limits only the provider-facing context and transient tool event; it never rewrites durable content.
+- Glob patterns cannot be absolute or traverse a parent, and every returned match is authorized against the configured root after symlink resolution.
+- Dashboard response budgets are endpoint-specific and aligned with the maximum valid serialized session and inbox-file responses, including base64 expansion.
+- Plugin mutation routes accept exactly the same plugin-name grammar as plugin manifests.
+- Durable delegation documentation consistently records that workers do not inherit `delegate`; recursive delegation remains future work.
+
+Compatibility is additive: existing transcripts and plugin manifests require no migration. A tool result that makes the complete transcript exceed its explicit durable byte ceiling fails visibly at persistence rather than being silently truncated.
 
 ## Decisions
 

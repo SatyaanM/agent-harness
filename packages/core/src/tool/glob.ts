@@ -16,7 +16,8 @@ const GlobParams = z
       .string()
       .min(1)
       .max(2_048)
-      .refine((value) => !value.includes("\0"), "must not contain a null byte"),
+      .refine((value) => !value.includes("\0"), "must not contain a null byte")
+      .refine(isContainedGlobPattern, "must be relative and must not traverse outside its root"),
     cwd: WorkspacePathSchema.optional(),
   })
   .strict();
@@ -43,6 +44,7 @@ export const globTool: Tool<typeof GlobParams> = {
     let truncated = false;
     for await (const match of matches) {
       if (typeof match !== "string") continue;
+      await assertExistingPathWithinRoot(path.resolve(cwd, match), root);
       normalized.push(match.replace(/\\/g, "/"));
       if (normalized.length >= MAX_TOOL_ENTRIES) {
         truncated = true;
@@ -60,3 +62,10 @@ export const globTool: Tool<typeof GlobParams> = {
     return normalized.join("\n");
   },
 };
+
+function isContainedGlobPattern(value: string): boolean {
+  const normalized = value.replaceAll("\\", "/");
+  const hasAbsoluteBranch = /(?:^|[,{(|])(?:[A-Za-z]:\/|\/)/u.test(normalized);
+  const hasParentBranch = /(?:^|[/{,(|])\.\.(?=$|[/},)|])/u.test(normalized);
+  return !hasAbsoluteBranch && !hasParentBranch;
+}

@@ -1,8 +1,8 @@
 import path from "node:path";
-import { getConfig } from "@agent-harness/core";
+import { getConfig, PluginIdentifierSchema } from "@agent-harness/core";
 import { Router } from "express";
 import { z } from "zod";
-import { IdentifierSchema, validateRequest } from "../http/validation.js";
+import { validateRequest } from "../http/validation.js";
 import { PluginRegistry } from "../plugin/registry.js";
 import { parseServerConfig } from "../server-config.js";
 
@@ -26,7 +26,7 @@ export const pluginsRouter = Router();
 
 const PluginUpdateSchema = z
   .object({
-    params: z.object({ name: IdentifierSchema }).strict(),
+    params: z.object({ name: PluginIdentifierSchema }).strict(),
     body: z.object({ enabled: z.boolean() }).strict(),
   })
   .strict();

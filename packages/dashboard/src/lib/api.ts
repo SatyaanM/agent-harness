@@ -2,6 +2,8 @@ import {
   AgentConfigSchema,
   PluginManifestSchema as CorePluginManifestSchema,
   type InboxRendererManifestSchema,
+  MAX_INBOX_FILE_RESPONSE_BYTES,
+  MAX_SESSION_TRANSCRIPT_BYTES,
   type PluginCommandManifestSchema,
   parseJsonBoundary,
   parseJsonResponseBoundary,
@@ -42,8 +44,9 @@ async function parseJsonResponse<TSchema extends z.ZodTypeAny>(
   response: Response,
   schema: TSchema,
   boundary: string,
+  maxBytes = 10_000_000,
 ): Promise<z.output<TSchema>> {
-  return parseJsonResponseBoundary(response, schema, boundary, 10_000_000);
+  return parseJsonResponseBoundary(response, schema, boundary, maxBytes);
 }
 
 export function parseChatStreamEvent(data: string): ChatStreamEvent {
@@ -53,7 +56,12 @@ export function parseChatStreamEvent(data: string): ChatStreamEvent {
 export async function fetchSessions(): Promise<z.infer<typeof SessionDataSchema>[]> {
   const res = await fetch(`${BASE_URL}/api/sessions`);
   if (!res.ok) throw new Error("Failed to fetch sessions");
-  return parseJsonResponse(res, z.array(SessionDataSchema), "sessions response");
+  return parseJsonResponse(
+    res,
+    z.array(SessionDataSchema),
+    "sessions response",
+    MAX_SESSION_TRANSCRIPT_BYTES,
+  );
 }
 
 export type SessionMeta = z.infer<typeof SessionMetaSchema>;
@@ -104,7 +112,12 @@ export async function renameSession(sessionId: string, title: string): Promise<v
 export async function fetchSession(sessionId: string): Promise<z.infer<typeof SessionDataSchema>> {
   const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`);
   if (!res.ok) throw new Error("Failed to fetch session");
-  return parseJsonResponse(res, SessionDataSchema, "session response");
+  return parseJsonResponse(
+    res,
+    SessionDataSchema,
+    "session response",
+    MAX_SESSION_TRANSCRIPT_BYTES,
+  );
 }
 
 export async function cancelWorker(taskId: string): Promise<void> {
@@ -117,7 +130,12 @@ export async function cancelWorker(taskId: string): Promise<void> {
 export async function createSession(): Promise<z.infer<typeof SessionDataSchema>> {
   const res = await fetch(`${BASE_URL}/api/sessions`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to create session");
-  return parseJsonResponse(res, SessionDataSchema, "create session response");
+  return parseJsonResponse(
+    res,
+    SessionDataSchema,
+    "create session response",
+    MAX_SESSION_TRANSCRIPT_BYTES,
+  );
 }
 
 export interface InboxTreeEntry {
@@ -168,7 +186,12 @@ export async function fetchInboxTree(): Promise<InboxTreeEntry[]> {
 export async function fetchInboxFile(path: string): Promise<InboxItem> {
   const res = await fetch(`${BASE_URL}/api/inbox/file?path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error("Inbox item not found");
-  return parseJsonResponse(res, InboxItemSchema, "inbox file response");
+  return parseJsonResponse(
+    res,
+    InboxItemSchema,
+    "inbox file response",
+    MAX_INBOX_FILE_RESPONSE_BYTES,
+  );
 }
 
 export async function updateInboxFile(path: string, content: string): Promise<void> {

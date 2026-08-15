@@ -6,7 +6,7 @@ read_when:
 
 # Quality hardening implementation plan
 
-Status: Completed â€” verified 2026-08-11
+Status: Completed — initial baseline verified 2026-08-11; corrective increment verified 2026-08-12
 
 ## Inputs
 
@@ -23,6 +23,7 @@ Status: Completed â€” verified 2026-08-11
 4. **Hardening.** Minimize subprocess environments, bound request/tool/provider data, make path authorization symlink-aware, constrain outbound fetches, restrict CORS/binding defaults, and add dependency-audit exception policy.
 5. **Runtime budgets.** Enforce configured concurrency and deterministic step, delegation, retry, time, byte, and model-usage budgets. Add fake-provider tests and stable-runner benchmark reporting.
 6. **Layered automation.** Wire `check:fast`, `check`, `check:ci`, `security:audit`, `perf:report`, and `check:nightly`; keep pre-commit cheap, pre-push comprehensive, and CI authoritative. Update current-state evidence and close the initiative only after fresh verification.
+7. **Adversarial-review corrections.** Preserve raw tool results while bounding only provider context; contain glob patterns and matches; share session/inbox response-size contracts; reuse plugin identifier validation; and reconcile delegation documentation. Drive each deterministic correction through a focused failing test before the production edit, then repeat the full handoff suite.
 
 Each step should land as a coherent commit. Later steps may refine exact files when earlier schemas expose ownership constraints, but may not weaken the package, persistence, delivery, or transcript invariants.
 

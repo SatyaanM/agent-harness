@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const PluginIdentifierSchema = z
+export const PluginIdentifierSchema = z
   .string()
   .min(1)
   .max(128)

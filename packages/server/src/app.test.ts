@@ -67,6 +67,15 @@ describe("request boundary validation", () => {
     expect(res.body.error).toEqual(expect.objectContaining({ code: "invalid_request" }));
   });
 
+  it("accepts the dotted plugin-name grammar used by manifests", async () => {
+    const res = await request(createApp())
+      .put("/api/plugins/acme.renderer")
+      .send({ enabled: true });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Plugin "acme.renderer" not found');
+  });
+
   it("returns a stable error for malformed JSON without exposing parser details", async () => {
     const res = await request(createApp())
       .post("/api/chat")

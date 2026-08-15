@@ -53,7 +53,7 @@ The defining property: an agent is an *orchestrator if and only if it holds the 
 
 - Agent configs remain `.md` files with YAML frontmatter (`agents/*.md`).
 - **Delegation capability is declarative:** adding `delegate` (and optionally `readSession`) to an agent's `tools` array makes it an orchestrator. No class or hardcoded name decides this.
-- **Multiple orchestrators are allowed.** Recursive delegation is structurally possible (a worker inherits the delegator's tools), though not the primary operating mode.
+- **Multiple orchestrators are allowed.** Worker configs deliberately omit the parent-bound `delegate` tool, so recursive delegation is not implemented. Enabling it requires a future session-scoped design with explicit depth, worker, attribution, and recovery semantics.
 - Add an optional `description` field to agent frontmatter (`AgentConfig.description`), used by the picker to show each agent's purpose. Fall back to the first sentence of `instructions` when absent.
 
 ## 4. Agent selection in chat
@@ -202,7 +202,7 @@ tool:called          # NEW — agent invoked a tool (for live drawer)
 - Councils (multi-agent chat) remain un-wired.
 - Session branching and compaction (§5 of the ADR) remain future work.
 - Live wake-on-idle processing and the WebSocket UI are Phase 2/3.
-- No unbounded delegation: a max delegation depth / worker cap will be added with the runtime (Phase 2).
+- Recursive delegation is disabled for workers. Explicit depth and worker limits remain prerequisites for any future recursive-delegation design.
 
 ## 11. Acceptance criteria (Phase 1)
 

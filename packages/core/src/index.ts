@@ -43,6 +43,11 @@ export type { Config } from "./config.js";
 export { ConfigSchema, getConfig, resetConfig } from "./config.js";
 export { parseJsonResponseBoundary, readResponseTextBounded } from "./contracts/http.js";
 export {
+  MAX_INBOX_FILE_BYTES,
+  MAX_INBOX_FILE_RESPONSE_BYTES,
+  MAX_SESSION_TRANSCRIPT_BYTES,
+} from "./contracts/limits.js";
+export {
   readFileBounded,
   readUtf8FileBounded,
   readUtf8FileBoundedSync,
@@ -70,6 +75,7 @@ export type {
 export {
   InboxRendererManifestSchema,
   PluginCommandManifestSchema,
+  PluginIdentifierSchema,
   PluginManifestSchema,
 } from "./plugin/types.js";
 export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js";

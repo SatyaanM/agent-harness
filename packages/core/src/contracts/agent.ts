@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_SESSION_TRANSCRIPT_BYTES } from "./limits.js";
 
 export const TaskIdSchema = z
   .string()
@@ -51,14 +52,26 @@ export type ToolCall = z.infer<typeof ToolCallSchema>;
 export const MessageSchema = z
   .object({
     role: z.enum(["system", "user", "assistant", "tool"]),
-    content: z.string().max(1_000_000),
+    content: z.string().max(MAX_SESSION_TRANSCRIPT_BYTES),
     reasoning: z.string().max(1_000_000).optional(),
     meta: z.unknown().optional(),
     toolCalls: z.array(ToolCallSchema).max(10_000).optional(),
     toolCallId: z.string().min(1).max(256).optional(),
     createdAt: z.string().datetime().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((message, context) => {
+    if (message.role === "tool" || message.content.length <= 1_000_000) return;
+    context.addIssue({
+      code: z.ZodIssueCode.too_big,
+      maximum: 1_000_000,
+      type: "string",
+      inclusive: true,
+      exact: false,
+      path: ["content"],
+      message: "non-tool message content exceeds 1000000 characters",
+    });
+  });
 export type Message = z.infer<typeof MessageSchema>;
 
 export const AgentResultSchema = z

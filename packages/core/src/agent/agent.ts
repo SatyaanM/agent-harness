@@ -97,7 +97,7 @@ export class Agent {
       const response = parseBoundary(
         LLMResponseSchema,
         await this.llmClient.chat({
-          messages: [...this.messages],
+          messages: projectToolResultsForModel(this.messages, maxToolResultChars),
           system: this.config.instructions,
           model: this.config.model,
           ...(llmTools ? { tools: llmTools } : {}),
@@ -114,7 +114,11 @@ export class Agent {
       this.messages.push(responseMessage);
       this.onEvent?.({ type: "step", messages: [...this.messages] });
 
-      totalTokensUsed += tokenCharge(response, this.messages, this.config.instructions);
+      totalTokensUsed += tokenCharge(
+        response,
+        projectToolResultsForModel(this.messages, maxToolResultChars),
+        this.config.instructions,
+      );
       if (totalTokensUsed > maxTotalTokens) {
         return this.budgetExceeded(
           `Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}).`,
@@ -167,12 +171,12 @@ export class Agent {
               toolCall.args,
               `tool ${toolCall.toolName} arguments`,
             );
-            const result = boundToolResult(await tool.execute(args), maxToolResultChars);
+            const result = await tool.execute(args);
             if (signal.aborted) throw new AgentCancelledError();
             this.onEvent?.({
               type: "tool:completed",
               toolName: toolCall.toolName,
-              result,
+              result: boundToolResult(result, maxToolResultChars),
             });
             this.messages.push({
               role: "tool",
@@ -184,7 +188,7 @@ export class Agent {
             console.error(`[Agent] Tool "${toolCall.toolName}" failed:`, error);
             this.messages.push({
               role: "tool",
-              content: boundToolResult(`Error: ${errorMessage}`, maxToolResultChars),
+              content: `Error: ${errorMessage}`,
               toolCallId: toolCall.toolCallId,
             });
           }
@@ -192,9 +196,13 @@ export class Agent {
       }
     }
 
+    const finalMessage = this.messages[this.messages.length - 1];
     return {
       status: "maxStepsReached",
-      summary: this.messages[this.messages.length - 1]?.content ?? "",
+      summary:
+        finalMessage?.role === "tool"
+          ? boundToolResult(finalMessage.content, maxToolResultChars)
+          : (finalMessage?.content ?? ""),
       messages: [...this.messages],
     };
   }
@@ -212,6 +220,14 @@ function boundToolResult(result: string, limit: number): string {
   if (result.length <= limit) return result;
   const marker = `\n[truncated: tool result exceeded ${limit} characters]`;
   return `${result.slice(0, Math.max(0, limit - marker.length))}${marker}`;
+}
+
+function projectToolResultsForModel(messages: Message[], limit: number): Message[] {
+  return messages.map((message) =>
+    message.role === "tool"
+      ? { ...message, content: boundToolResult(message.content, limit) }
+      : message,
+  );
 }
 
 function tokenCharge(response: LLMResponse, messages: Message[], instructions: string): number {

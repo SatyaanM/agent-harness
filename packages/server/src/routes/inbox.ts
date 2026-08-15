@@ -5,6 +5,7 @@ import {
   assertExistingPathWithinRoot,
   getConfig,
   InboxManager,
+  MAX_INBOX_FILE_BYTES,
   readFileBounded,
   readUtf8FileBounded,
 } from "@agent-harness/core";
@@ -21,7 +22,6 @@ const NonEmptyRelativePathSchema = RelativePathSchema.refine(
   "must not be empty",
 );
 const FileQuerySchema = z.object({ path: NonEmptyRelativePathSchema }).passthrough();
-const MAX_INBOX_FILE_BYTES = 10_000_000;
 const MAX_INBOX_ENTRIES = 10_000;
 const FileContentSchema = z
   .object({
