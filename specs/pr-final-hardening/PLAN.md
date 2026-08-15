@@ -6,7 +6,7 @@ read_when:
 
 # Final pull-request hardening implementation plan
 
-Status: Implemented; publication pending 2026-08-15
+Status: Complete 2026-08-15
 
 ## Inputs
 
@@ -54,3 +54,5 @@ corepack npm run docs:check
 corepack npm run skills:validate
 git diff --check
 ```
+
+Final evidence: `corepack npm run check` passed with 50 test files and 201 tests; coverage measured 40.83% statements, 32.74% branches, 35.07% functions, and 43.23% lines; the production dependency audit reported no unaccepted high/critical findings; commit `87553bf` was pushed to pull request 1 before this completion record.

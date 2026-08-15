@@ -36,7 +36,7 @@ read_when:
   - Acceptance: full-source agent edits, consistent restored state, truthful/cancelable voice, terminal/bounded projections, correct rendering
   - Verify: focused server/dashboard tests and typechecks
   - Docs/handoff: README/current-state behavior
-- [ ] **T06 - Verify, re-review, commit, and push**
+- [x] **T06 - Verify, re-review, commit, and push**
   - Depends on: T01-T05
   - Scope: final docs, complete diff, all required checks, GitHub PR branch
   - Acceptance: no remaining material review findings; required checks pass from final tree; branch pushed
