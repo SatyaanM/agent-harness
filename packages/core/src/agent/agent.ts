@@ -108,8 +108,9 @@ export class Agent {
       );
       if (signal.aborted) throw new AgentCancelledError();
 
-      const responseMessage = response.toolCalls?.length
-        ? { ...response.message, toolCalls: response.toolCalls }
+      const responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+      const responseMessage = responseToolCalls.length
+        ? { ...response.message, toolCalls: responseToolCalls }
         : response.message;
       this.messages.push(responseMessage);
       this.onEvent?.({ type: "step", messages: [...this.messages] });
@@ -120,9 +121,9 @@ export class Agent {
         this.config.instructions,
       );
       if (totalTokensUsed > maxTotalTokens) {
-        if (response.toolCalls?.length) {
+        if (responseToolCalls.length) {
           this.messages.push(
-            ...response.toolCalls.map((toolCall) => ({
+            ...responseToolCalls.map((toolCall) => ({
               role: "tool" as const,
               content: `Error: Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}); tool was not executed.`,
               toolCallId: toolCall.toolCallId,
@@ -142,12 +143,20 @@ export class Agent {
         };
       }
 
-      if (response.toolCalls?.length) {
-        for (const [toolCallIndex, toolCall] of response.toolCalls.entries()) {
+      if (response.finishReason !== "tool-calls") {
+        return {
+          status: "error",
+          summary: `Provider stopped with finish reason ${response.finishReason}.`,
+          messages: [...this.messages],
+        };
+      }
+
+      if (responseToolCalls.length) {
+        for (const [toolCallIndex, toolCall] of responseToolCalls.entries()) {
           if (signal.aborted) throw new AgentCancelledError();
           if (toolCallsUsed >= maxToolCalls) {
             this.messages.push(
-              ...response.toolCalls.slice(toolCallIndex).map((skipped) => ({
+              ...responseToolCalls.slice(toolCallIndex).map((skipped) => ({
                 role: "tool" as const,
                 content: `Error: Agent tool-call budget exceeded (${maxToolCalls}).`,
                 toolCallId: skipped.toolCallId,
@@ -203,6 +212,7 @@ export class Agent {
             });
           }
         }
+        this.onEvent?.({ type: "step", messages: [...this.messages] });
       }
     }
 

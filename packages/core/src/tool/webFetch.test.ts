@@ -57,6 +57,45 @@ describe("webFetch outbound policy", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("applies the request timeout while resolving DNS", async () => {
+    const tool = createWebFetchTool({
+      timeoutMs: 10,
+      resolveAddresses: async () => new Promise<readonly string[]>(() => undefined),
+    });
+
+    const result = await Promise.race([
+      tool.execute({ url: "https://example.com", format: "text" }),
+      new Promise<string>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("webFetch did not settle")), 100),
+      ),
+    ]);
+
+    expect(result).toContain("timed out");
+  });
+
+  it("cancels the final redirect response when the redirect limit is exceeded", async () => {
+    const cancellations: Array<ReturnType<typeof vi.fn>> = [];
+    const tool = createWebFetchTool({
+      resolveAddresses: publicResolver,
+      requestImpl: async () => {
+        const response = new Response("redirect", {
+          status: 302,
+          headers: { location: "https://example.com/again" },
+        });
+        if (!response.body) throw new Error("Expected redirect body");
+        const cancel = vi.spyOn(response.body, "cancel");
+        cancellations.push(cancel);
+        return response;
+      },
+    });
+
+    await expect(tool.execute({ url: "https://example.com", format: "text" })).resolves.toContain(
+      "exceeded 5 redirects",
+    );
+    expect(cancellations).toHaveLength(6);
+    expect(cancellations.every((cancel) => cancel.mock.calls.length === 1)).toBe(true);
+  });
+
   it("cancels bodies that are not consumed after an HTTP error", async () => {
     const response = new Response("denied", { status: 403 });
     if (!response.body) throw new Error("Expected a response body");

@@ -80,4 +80,81 @@ describe("agent configuration routes", () => {
       instructions: "Original instructions.",
     });
   });
+
+  it("round-trips validated raw source without client-side YAML parsing", async () => {
+    const { app, root } = await appFixture();
+    await request(app)
+      .post("/api/agents")
+      .send({
+        name: "researcher",
+        model: "original-model",
+        tools: ["grep"],
+        maxSteps: 7,
+        instructions: "Original instructions.",
+        description: "remove me",
+      });
+    const source = `---
+# comments and quoted YAML are preserved
+name: researcher
+model: "updated-model"
+tools: []
+maxSteps: 9
+---
+Updated instructions.
+`;
+
+    const updated = await request(app).put("/api/agents/researcher/source").send({ source });
+    const fetched = await request(app).get("/api/agents/researcher/source");
+
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({
+      name: "researcher",
+      model: "updated-model",
+      tools: [],
+      maxSteps: 9,
+      instructions: "Updated instructions.",
+    });
+    expect(updated.body).not.toHaveProperty("description");
+    expect(fetched.body).toEqual({ source });
+    await expect(readFile(path.join(root, "agents", "researcher.md"), "utf8")).resolves.toBe(
+      source,
+    );
+  });
+
+  it("rejects raw source whose identity disagrees with the route", async () => {
+    const { app } = await appFixture();
+    await request(app).post("/api/agents").send({
+      name: "researcher",
+      model: "model",
+      tools: [],
+      maxSteps: 7,
+      instructions: "Original.",
+    });
+
+    const response = await request(app).put("/api/agents/researcher/source").send({
+      source: "---\nname: other\nmodel: model\ntools: []\nmaxSteps: 7\n---\nChanged.",
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects malformed YAML as invalid source", async () => {
+    const { app } = await appFixture();
+    await request(app).post("/api/agents").send({
+      name: "researcher",
+      model: "model",
+      tools: [],
+      maxSteps: 7,
+      instructions: "Original.",
+    });
+
+    const response = await request(app).put("/api/agents/researcher/source").send({
+      source: "---\nname: [unterminated\n---\nChanged.",
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: { code: "invalid_request", message: "Agent source is invalid" },
+    });
+  });
 });

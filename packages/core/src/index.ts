@@ -2,7 +2,6 @@ export type { AgentEventCallback } from "./agent/agent.js";
 export { Agent } from "./agent/agent.js";
 export type { DelegationDeps } from "./agent/delegation.js";
 export { createDelegateTool, createReadSessionTool } from "./agent/delegation.js";
-export { Orchestrator } from "./agent/orchestrator.js";
 export type { SessionRuntimeEvent, SessionRuntimeOptions } from "./agent/session-runtime.js";
 export { SessionRuntime } from "./agent/session-runtime.js";
 export type {

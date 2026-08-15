@@ -190,6 +190,19 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
   }, [editing, saved, dirty, saving, startEditing, cancelEdit, handleSave, setHeaderActions]);
 
   const components: Components = {
+    img: ({ src, alt }) => {
+      const safeSource =
+        typeof src === "string" && (src.startsWith("data:image/") || src.startsWith("blob:"))
+          ? src
+          : undefined;
+      // biome-ignore lint/performance/noImgElement: Artifact data/blob images cannot use Next image optimization.
+      return <img src={safeSource} alt={alt ?? ""} />;
+    },
+    a: ({ href, children }) => (
+      <a href={safeLinkTarget(href)} rel="noopener noreferrer">
+        {children}
+      </a>
+    ),
     pre: ({ children }) => <>{children}</>,
     code: ({ className, children }) => {
       const match = /language-(\w+)/.exec(className ?? "");
@@ -263,4 +276,9 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
       )}
     </div>
   );
+}
+
+function safeLinkTarget(href: string | undefined): string | undefined {
+  if (!href) return undefined;
+  return /^(?:https?:|mailto:|#|\/(?!\/))/iu.test(href) ? href : undefined;
 }

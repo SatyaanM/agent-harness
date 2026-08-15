@@ -2,8 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config.js";
 import { createVercelAILLMClient } from "./vercel-ai.js";
 
+interface GenerateTextResultMock {
+  text: string;
+  reasoning?: string;
+  finishReason: string;
+  toolCalls: Array<{ toolCallId: string; toolName: string; input: Record<string, unknown> }>;
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+}
+
 const mocks = vi.hoisted(() => ({
-  generateText: vi.fn(async () => ({
+  generateText: vi.fn<() => Promise<GenerateTextResultMock>>(async () => ({
     text: "done",
     finishReason: "stop",
     toolCalls: [],
@@ -32,7 +40,13 @@ const config: Config = {
 };
 
 beforeEach(() => {
-  mocks.generateText.mockClear();
+  mocks.generateText.mockReset();
+  mocks.generateText.mockResolvedValue({
+    text: "done",
+    finishReason: "stop",
+    toolCalls: [],
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  });
 });
 
 describe("Vercel AI adapter", () => {
@@ -52,5 +66,41 @@ describe("Vercel AI adapter", () => {
     expect(mocks.generateText).not.toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal }),
     );
+  });
+
+  it("keeps reasoning separate when the provider returns no answer text", async () => {
+    mocks.generateText.mockResolvedValueOnce({
+      text: "",
+      reasoning: "private reasoning",
+      finishReason: "stop",
+      toolCalls: [],
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+    const client = createVercelAILLMClient(config);
+
+    const result = await client.chat({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+    });
+
+    expect(result.message.content).toBe("");
+    expect(result.message.reasoning).toBe("private reasoning");
+  });
+
+  it("preserves non-success provider finish reasons", async () => {
+    mocks.generateText.mockResolvedValueOnce({
+      text: "partial",
+      finishReason: "length",
+      toolCalls: [],
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+    const client = createVercelAILLMClient(config);
+
+    const result = await client.chat({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+    });
+
+    expect(result.finishReason).toBe("length");
   });
 });

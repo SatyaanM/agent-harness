@@ -25,7 +25,23 @@ export const OpenSessionsStateSchema = z
     activeSessionId: IdentifierSchema.nullable(),
     openSessionIds: z.array(IdentifierSchema).max(100),
   })
-  .strict();
+  .strict()
+  .superRefine((state, context) => {
+    if (new Set(state.openSessionIds).size !== state.openSessionIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["openSessionIds"],
+        message: "open session identifiers must be unique",
+      });
+    }
+    if (state.activeSessionId !== null && !state.openSessionIds.includes(state.activeSessionId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["activeSessionId"],
+        message: "active session must be included in open sessions",
+      });
+    }
+  });
 export type OpenSessionsState = z.infer<typeof OpenSessionsStateSchema>;
 
 const EMPTY: OpenSessionsState = { activeSessionId: null, openSessionIds: [] };

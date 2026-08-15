@@ -28,12 +28,14 @@ const GeminiResponseSchema = z.object({
 
 export function createGeminiTTSProvider(): TTSProvider {
   return {
-    async synthesize(text: string, config: TTSConfig): Promise<AsyncIterable<AudioChunk>> {
+    async synthesize(
+      text: string,
+      config: TTSConfig,
+      signal?: AbortSignal,
+    ): Promise<AsyncIterable<AudioChunk>> {
       if (!config.apiKey) {
         throw new Error("Gemini API key is required");
       }
-
-      const url = `${GEMINI_TTS_ENDPOINT}?key=${config.apiKey}`;
 
       const narrationText = config.persona.trim()
         ? `Narration persona: ${config.persona.trim()}\n\n${text}`
@@ -53,11 +55,12 @@ export function createGeminiTTSProvider(): TTSProvider {
         },
       };
 
-      const response = await fetch(url, {
+      const timeoutSignal = AbortSignal.timeout(30_000);
+      const response = await fetch(GEMINI_TTS_ENDPOINT, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(30_000),
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
       });
 
       if (!response.ok) {

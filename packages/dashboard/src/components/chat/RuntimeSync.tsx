@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { fetchOpenSessions, fetchSession, updateOpenSessions } from "@/lib/api";
+import {
+  fetchOpenSessions,
+  fetchSession,
+  type OpenSessionsState,
+  updateOpenSessions,
+} from "@/lib/api";
 import {
   AgentLifecycleEventSchema,
   connectSocket,
@@ -14,6 +19,19 @@ import {
 import { useRosterStore } from "@/stores/agent-roster-store";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useSessionStore } from "@/stores/session-store";
+
+export function resolveRestoredOpenState(
+  open: OpenSessionsState,
+  restored: Array<{ sessionId: string }>,
+): OpenSessionsState {
+  const openSessionIds = restored.map((session) => session.sessionId);
+  const restoredIds = new Set(openSessionIds);
+  const activeSessionId =
+    open.activeSessionId !== null && restoredIds.has(open.activeSessionId)
+      ? open.activeSessionId
+      : (openSessionIds[0] ?? null);
+  return { activeSessionId, openSessionIds };
+}
 
 export default function RuntimeSync() {
   const sessions = useSessionStore((s) => s.sessions);
@@ -33,10 +51,14 @@ export default function RuntimeSync() {
         if (cancelled) return;
 
         useSessionStore.getState().hydrate(restored);
-        const openIds = new Set(open.openSessionIds);
-        const validActive = open.activeSessionId !== null && openIds.has(open.activeSessionId);
-        const active = validActive ? open.activeSessionId : (restored[0]?.sessionId ?? null);
-        if (active) useSessionStore.getState().setActiveSession(active);
+        const repaired = resolveRestoredOpenState(open, restored);
+        useSessionStore.getState().setActiveSession(repaired.activeSessionId);
+        if (
+          repaired.activeSessionId !== open.activeSessionId ||
+          repaired.openSessionIds.length !== open.openSessionIds.length
+        ) {
+          await updateOpenSessions(repaired);
+        }
       } catch (err) {
         console.error("[RuntimeSync] hydration failed:", err);
       } finally {

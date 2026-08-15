@@ -20,6 +20,27 @@ const config: AgentConfig = {
 };
 
 describe("Agent tool boundary", () => {
+  it("does not report provider truncation as success", async () => {
+    const agent = new Agent(
+      config,
+      new ToolRegistry(),
+      {
+        async chat() {
+          return {
+            finishReason: "length",
+            message: { role: "assistant", content: "partial" },
+          };
+        },
+      },
+      new CapabilityRegistry({ workspaceRoot: process.cwd() }),
+    );
+
+    const result = await agent.run("go");
+
+    expect(result.status).toBe("error");
+    expect(result.summary).toContain("length");
+    expect(result.messages.at(-1)?.content).toBe("partial");
+  });
   it("validates provider-supplied tool arguments before execution", async () => {
     const execute = vi.fn(async (_args: { count: number }) => "executed");
     const registry = new ToolRegistry();
@@ -76,6 +97,45 @@ describe("Agent tool boundary", () => {
         toolCallId: "call-1",
       }),
     );
+  });
+
+  it("executes tool calls carried on the assistant message", async () => {
+    const execute = vi.fn(async () => "executed");
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute,
+    });
+    let call = 0;
+    const agent = new Agent(
+      config,
+      registry,
+      {
+        async chat() {
+          call += 1;
+          return call === 1
+            ? {
+                finishReason: "tool-calls",
+                message: {
+                  role: "assistant",
+                  content: "",
+                  toolCalls: [
+                    { toolCallId: "call-message", toolName: "count", args: { count: 1 } },
+                  ],
+                },
+              }
+            : { finishReason: "stop", message: { role: "assistant", content: "done" } };
+        },
+      },
+      new CapabilityRegistry({ workspaceRoot: process.cwd() }),
+    );
+
+    const result = await agent.run("go");
+
+    expect(result.status).toBe("success");
+    expect(execute).toHaveBeenCalledWith({ count: 1 }, expect.any(Object));
   });
 
   it("rejects a pre-cancelled run before invoking the provider", async () => {

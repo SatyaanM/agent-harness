@@ -30,6 +30,10 @@ interface AgentDrawerProps {
   onClose: () => void;
 }
 
+export function shouldPollWorker(role: DrawerAgent["role"], status: string): boolean {
+  return role === "worker" && status === "running";
+}
+
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
@@ -177,27 +181,37 @@ export default function AgentDrawer({
   useEffect(() => {
     if (agent.role !== "worker" || !agent.id) {
       setTranscript(null);
+      setTranscriptLoading(false);
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
+    let requestInFlight = false;
     const load = () => {
-      fetchSession(agent.id)
+      if (requestInFlight) return;
+      requestInFlight = true;
+      void fetchSession(agent.id, { signal: controller.signal })
         .then((data) => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           setTranscript(data);
-          setTranscriptLoading(false);
         })
-        .catch(() => {});
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) {
+            console.error("Failed to load worker transcript", error);
+          }
+        })
+        .finally(() => {
+          requestInFlight = false;
+          if (!controller.signal.aborted) setTranscriptLoading(false);
+        });
     };
     setTranscriptLoading(true);
     load();
-    const id = setInterval(load, 2000);
+    const id = shouldPollWorker(agent.role, agent.status) ? setInterval(load, 2000) : undefined;
     return () => {
-      cancelled = true;
-      clearInterval(id);
-      setTranscriptLoading(false);
+      controller.abort();
+      if (id !== undefined) clearInterval(id);
     };
-  }, [agent.id, agent.role]);
+  }, [agent.id, agent.role, agent.status]);
 
   const snap = (w: number) => {
     targetRef.current = w;

@@ -6,6 +6,7 @@ import { createHighlighter, type Highlighter } from "shiki";
 interface TextRendererProps {
   content: string;
   language?: string;
+  item?: { name: string };
 }
 
 const EXTENSION_MAP: Record<string, string> = {
@@ -35,17 +36,18 @@ const EXTENSION_MAP: Record<string, string> = {
   log: "text",
 };
 
-function resolveLanguage(language?: string): string {
+export function resolveLanguage(language?: string, itemName?: string): string {
   if (language && language !== "text") return language;
-  if (language) return "text";
+  const extension = itemName?.split(".").pop()?.toLowerCase();
+  if (extension && EXTENSION_MAP[extension]) return EXTENSION_MAP[extension];
   return "text";
 }
 
-export function TextRenderer({ content, language }: TextRendererProps) {
+export function TextRenderer({ content, language, item }: TextRendererProps) {
   const [highlighter, setHighlighter] = useState<Highlighter | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const resolvedLang = useMemo(() => resolveLanguage(language), [language]);
+  const resolvedLang = useMemo(() => resolveLanguage(language, item?.name), [language, item?.name]);
 
   useEffect(() => {
     let cancelled = false;

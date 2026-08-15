@@ -7,8 +7,7 @@ read_when:
 
 # Delegate Feature Spec
 
-Status: Draft
-Branch: `feat/delegate`
+Status: Implemented through Phase 4 hardening; deferred items remain called out
 Author: Damain Joseph
 
 This spec captures the entire delegate feature as decided in the design sessions. It is grounded in `ARCHITECTURE_DECISIONS.md` §10 (Message Delivery and Session-to-Session Communication) and extends it with the agent-selection and agent-scope UI decisions. It defines the target system, the API/data contracts, and a phased implementation plan.
@@ -17,7 +16,7 @@ This spec captures the entire delegate feature as decided in the design sessions
 
 ## 1. Overview
 
-Today the app runs a single-agent chat loop. Multi-agent machinery (`Orchestrator`, `Worker`, `Council`, `MessageBus`) exists in `core` but is **not wired into the chat path**. This feature makes delegation real:
+The active chat path uses `SessionRuntime`, tool-driven delegation, and background `Worker` execution. The superseded polling `Orchestrator` path has been removed; `Council` remains an unwired library/UI concept.
 
 - Any agent whose config declares delegation tools can **delegate work to worker agents**.
 - Results are **delivered by the system** (never polled by the agent).
@@ -68,7 +67,7 @@ The defining property: an agent is an *orchestrator if and only if it holds the 
 1. An agent calls `delegate({ task, model? })`. `model` is optional: when omitted, the worker **inherits the delegating agent's model** (guaranteed supported since that agent is running on it). The system creates a **worker session** (`worker-<taskId>`), spawns a `Worker` in the background, and returns the `taskId` immediately (fire-and-forget).
 2. When the worker completes (success or error), the **system posts a completion message to the delegating session's mailbox** — summary + status + taskId (+ sender). The agent does not poll.
 3. The mailbox is **durable** (persisted with the session).
-4. When the delegating session next processes (a new message arrives, or its loaded runtime is signaled), the runtime **drains the entire mailbox at once** and injects all pending messages **together** into the agent's context before the next LLM call.
+4. When the delegating session next processes (a new message arrives, or its loaded runtime is signaled), the runtime peeks the entire mailbox, materializes all pending messages **together**, durably persists them, and only then acknowledges the batch.
 5. The agent sees, e.g.: *"Worker `worker-<id>` (task you delegated) completed: done. Summary: … You may call `readSession(<taskId>)` for the full transcript."*
 6. Full transcripts remain available on demand via the `readSession` tool.
 
@@ -81,7 +80,7 @@ See ADR §10.7–10.9. Summary:
 - **Single writer:** one code path owns all session file I/O; callers submit full-state snapshots.
 - **Per-session write queue:** serialized writes per session file; different sessions write in parallel.
 - **Atomic writes:** temp file + rename.
-- **Immediate flush, whole-queue drain:** no debounce by default; when a flush runs it writes everything queued for that file in one operation. Debounce/coalesce is transcript-only.
+- **Immediate flush, whole-queue acknowledgement:** no debounce by default; delivery persists the transcript projection before atomically removing acknowledged mailbox records. Debounce/coalesce is transcript-only.
 - **Two stores:** the transcript (latest-state-wins) and the mailbox (lossless, ordered, never coalesced, removal tied to delivery).
 - Both may live in one session file under the same writer; the mailbox may alternatively be a separate append-only log.
 
@@ -182,7 +181,7 @@ tool:called          # NEW — agent invoked a tool (for live drawer)
 - `SessionRuntime` (serialized `process()`, own mailbox) + `SessionManager` (loaded registry, routing).
 - Loaded-gate: drained only when loaded; not-loaded sessions persist mailbox untouched.
 - Wake-on-signal for loaded sessions; WebSocket client on the dashboard; server emits `worker:*` / `tool:*` / `session:updated` events.
-- Tool-driven delegation is now the single path (the old `Orchestrator` class is superseded by `SessionRuntime` + `createDelegateTool`).
+- Tool-driven delegation is the single path; the old `Orchestrator` class was removed after being superseded by `SessionRuntime` + `createDelegateTool`.
 - Worker completions are delivered into a loaded session automatically, and the chat UI syncs via `session:updated` (rendering completion cards from `meta` on system messages).
 - **Wake-run guard:** a wake (no user message) drops the `delegate` tool, so a woken agent reports its delivered results rather than spawning new work. This bounds runaway autonomous re-delegation; delegation is only available on user-initiated runs.
 - **Worker cancellation:** each spawned worker carries an `AbortController` registered by the server. `POST /api/workers/:taskId/cancel` aborts it; the agent loop checks the signal between steps and mid-LLM-call, and the worker records a `cancelled` status back to its session and the delegator's mailbox. The drawer shows a Stop button on running workers.
@@ -193,9 +192,10 @@ tool:called          # NEW — agent invoked a tool (for live drawer)
 - Drawer content per agent: status, task (workers), live tool-activity feed (from `agent:tool` events), full worker transcript (fetched via `GET /api/sessions/:id`), and the primary's delegated-work list.
 - Completion cards render from real events via `session:updated` (system messages carry `meta`), lighting up the previously-dormant `DelegationCard` UI.
 
-### Phase 4 — Durable storage hardening
-- Single-writer `SessionStore` with per-session write queue, atomic writes, whole-queue drain.
-- Optional separate append-only mailbox log.
+### Phase 4 — Durable storage hardening ✅ (implemented)
+- Single-writer `SessionStore` with per-session write queues and atomic transcript/index/mailbox writes.
+- Separate append-only mailbox log with materialize-before-acknowledge recovery and `taskId` replay deduplication.
+- Partial parent and worker transcripts persist on provider failure or cancellation; detached worker completion always enters terminal cleanup.
 
 ## 10. Non-goals (for Phase 1)
 

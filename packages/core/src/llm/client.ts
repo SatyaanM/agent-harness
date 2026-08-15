@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type Message, MessageSchema, ToolCallSchema } from "../agent/types.js";
+import { AssistantMessageSchema, type Message, ToolCallSchema } from "../agent/types.js";
 
 export interface LLMToolDefinition {
   name: string;
@@ -25,14 +25,40 @@ export const LLMUsageSchema = z
   .strict();
 export type LLMUsage = z.infer<typeof LLMUsageSchema>;
 
+export const LLMFinishReasonSchema = z.enum([
+  "stop",
+  "tool-calls",
+  "length",
+  "content-filter",
+  "error",
+  "other",
+]);
+
 export const LLMResponseSchema = z
   .object({
-    message: MessageSchema,
-    finishReason: z.enum(["stop", "tool-calls"]),
+    message: AssistantMessageSchema,
+    finishReason: LLMFinishReasonSchema,
     toolCalls: z.array(ToolCallSchema).max(10_000).optional(),
     usage: LLMUsageSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((response, context) => {
+    const toolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+    if (response.finishReason === "tool-calls" && toolCalls.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["toolCalls"],
+        message: "tool-calls finish reason requires at least one tool call",
+      });
+    }
+    if (response.finishReason !== "tool-calls" && toolCalls.length > 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["finishReason"],
+        message: "tool calls require the tool-calls finish reason",
+      });
+    }
+  });
 export type LLMResponse = z.infer<typeof LLMResponseSchema>;
 
 export interface LLMClient {

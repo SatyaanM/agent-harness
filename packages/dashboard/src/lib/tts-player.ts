@@ -35,6 +35,8 @@ export function createTTSPlayer(): TTSPlayer {
   const stateCallbacks: Array<(state: PlaybackState) => void> = [];
   let audioQueue: AudioQueueItem[] = [];
   let isPlaying = false;
+  let requestController: AbortController | null = null;
+  let playbackGeneration = 0;
 
   function notifyStateChange(newState: PlaybackState) {
     state = newState;
@@ -130,6 +132,9 @@ export function createTTSPlayer(): TTSPlayer {
   return {
     async play(text: string, options?: TTSPlayOptions): Promise<void> {
       this.stop();
+      const generation = playbackGeneration;
+      const controller = new AbortController();
+      requestController = controller;
 
       try {
         const response = await fetch(`${TTS_BASE_URL}/api/tts`, {
@@ -143,6 +148,7 @@ export function createTTSPlayer(): TTSPlayer {
             tagStyle: options?.tagStyle ?? "balanced",
             customTagInstructions: options?.customTagInstructions || "",
           }),
+          signal: controller.signal,
         });
 
         if (!response.ok) {
@@ -188,17 +194,24 @@ export function createTTSPlayer(): TTSPlayer {
         // Decode and add to queue
         const audioBuffer = await decodeAudioChunk(combinedBuffer.buffer);
         const fadedBuffer = addFadeEnvelope(audioBuffer);
+        if (generation !== playbackGeneration) return;
         audioQueue.push({ buffer: fadedBuffer });
 
         playFromQueue();
       } catch (error) {
+        if (generation !== playbackGeneration) return;
         console.error("[TTS Player] Error:", error);
         notifyStateChange("idle");
         throw error;
+      } finally {
+        if (generation === playbackGeneration) requestController = null;
       }
     },
 
     stop(): void {
+      playbackGeneration += 1;
+      requestController?.abort();
+      requestController = null;
       if (currentSource) {
         currentSource.stop();
         currentSource = null;

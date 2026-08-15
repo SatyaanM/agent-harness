@@ -7,7 +7,12 @@ import { hooks } from "../hooks.js";
 import { asyncHandler } from "../http/async-handler.js";
 import { IdentifierSchema, validateRequest } from "../http/validation.js";
 import type { OpenSessionsState } from "../open-sessions.js";
-import { loadOpenSessions, loadOpenSessionsForRepair, saveOpenSessions } from "../open-sessions.js";
+import {
+  loadOpenSessions,
+  loadOpenSessionsForRepair,
+  OpenSessionsStateSchema,
+  saveOpenSessions,
+} from "../open-sessions.js";
 import { sessionManager } from "../session-manager.js";
 import { emitAgentEvent } from "../ws/events.js";
 
@@ -63,23 +68,35 @@ sessionsRouter.get(
   }),
 );
 
-sessionsRouter.put("/open", (req, res) => {
-  const body = validateRequest(OpenSessionsUpdateSchema, req.body, res);
-  if (!body) return;
-  const prev = loadOpenSessionsForRepair();
-  const openSessionIds = body.openSessionIds ?? prev.openSessionIds;
-  const activeSessionId =
-    body.activeSessionId !== undefined ? body.activeSessionId : prev.activeSessionId;
-  const next: OpenSessionsState = { activeSessionId, openSessionIds };
-  saveOpenSessions(next);
+sessionsRouter.put(
+  "/open",
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(OpenSessionsUpdateSchema, req.body, res);
+    if (!body) return;
+    const prev = loadOpenSessionsForRepair();
+    const openSessionIds = body.openSessionIds ?? prev.openSessionIds;
+    const activeSessionId =
+      body.activeSessionId !== undefined ? body.activeSessionId : prev.activeSessionId;
+    const next = validateRequest(
+      OpenSessionsStateSchema,
+      { activeSessionId, openSessionIds } satisfies OpenSessionsState,
+      res,
+    );
+    if (!next) return;
 
-  const removed = prev.openSessionIds.filter((id) => !next.openSessionIds.includes(id));
-  for (const sessionId of removed) {
-    hooks.emit("session.closed", { sessionId });
-  }
+    const removed = prev.openSessionIds.filter((id) => !next.openSessionIds.includes(id));
+    for (const sessionId of removed) {
+      await hooks.runBefore("session.beforeClose", { sessionId });
+    }
+    saveOpenSessions(next);
+    for (const sessionId of removed) {
+      sessionManager.unload(sessionId);
+      hooks.emit("session.closed", { sessionId });
+    }
 
-  res.json(next);
-});
+    res.json(next);
+  }),
+);
 
 async function sortedSessionMeta(store: ReturnType<typeof getSessionStore>) {
   const metas = await store.listMeta();
@@ -101,6 +118,7 @@ sessionsRouter.post(
       createdAt: new Date().toISOString(),
     };
     await getSessionStore().save(session);
+    sessionManager.markSessionCreated(session.sessionId);
     hooks.emit("session.created", { sessionId: session.sessionId, agentName: session.agentName });
     res.status(201).json(session);
   }),
@@ -182,7 +200,14 @@ sessionsRouter.delete(
     const params = validateRequest(SessionParamsSchema, req.params, res);
     if (!params) return;
     const sessionId = params.id;
-    await getSessionStore().delete(sessionId);
+    await hooks.runBefore("session.beforeDelete", { sessionId });
+    sessionManager.prepareSessionDeletion(sessionId);
+    try {
+      await getSessionStore().delete(sessionId);
+    } catch (error) {
+      sessionManager.markSessionCreated(sessionId);
+      throw error;
+    }
     hooks.emit("session.deleted", { sessionId });
     res.status(204).end();
   }),

@@ -9,7 +9,11 @@ interface HtmlRendererProps {
 export function HtmlRenderer({ content }: HtmlRendererProps) {
   const [error, setError] = useState(false);
 
-  const srcDoc = useMemo(() => content, [content]);
+  const srcDoc = useMemo(() => {
+    const policy =
+      "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:;\">";
+    return `<!doctype html><html><head>${policy}</head><body>${content}</body></html>`;
+  }, [content]);
 
   if (error) {
     return (
@@ -23,7 +27,7 @@ export function HtmlRenderer({ content }: HtmlRendererProps) {
     <div className="h-full w-full">
       <iframe
         srcDoc={srcDoc}
-        sandbox="allow-scripts"
+        sandbox=""
         title="HTML preview"
         className="w-full h-full border-0 bg-white"
         onError={() => setError(true)}

@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { type AgentConfig, deleteAgent, updateAgent } from "@/lib/api";
+import { type AgentConfig, deleteAgent, fetchAgentSource, updateAgentSource } from "@/lib/api";
 import { useThemeStore } from "@/stores/theme-store";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
@@ -20,6 +20,7 @@ function configToMarkdown(config: AgentConfig): string {
   lines.push(`name: ${config.name}`);
   lines.push(`model: ${config.model}`);
   lines.push(`maxSteps: ${config.maxSteps}`);
+  if (config.description !== undefined) lines.push(`description: ${config.description}`);
   for (const key of [
     "maxToolCalls",
     "maxToolResultChars",
@@ -56,58 +57,6 @@ function configToMarkdown(config: AgentConfig): string {
   return lines.join("\n");
 }
 
-function parseMarkdownConfig(content: string): Partial<AgentConfig> {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!fmMatch) return { instructions: content };
-
-  const yamlStr = fmMatch[1];
-  const instructions = fmMatch[2];
-  const config: Partial<AgentConfig> = { instructions };
-
-  const nameMatch = yamlStr.match(/^name:\s*(.+)$/m);
-  if (nameMatch) config.name = nameMatch[1].trim();
-
-  const modelMatch = yamlStr.match(/^model:\s*(.+)$/m);
-  if (modelMatch) config.model = modelMatch[1].trim();
-
-  const maxStepsMatch = yamlStr.match(/^maxSteps:\s*(\d+)$/m);
-  if (maxStepsMatch) config.maxSteps = Number(maxStepsMatch[1]);
-
-  for (const key of [
-    "maxToolCalls",
-    "maxToolResultChars",
-    "maxOutputTokens",
-    "maxTotalTokens",
-    "runTimeoutMs",
-  ] as const) {
-    const match = yamlStr.match(new RegExp(`^${key}:\\s*(\\d+)$`, "m"));
-    if (match) config[key] = Number(match[1]);
-  }
-
-  const toolsMatch = yamlStr.match(/^tools:\s*\n((?:\s+-\s+.+\n?)*)/m);
-  if (toolsMatch) {
-    config.tools = toolsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, "")) ?? [];
-  }
-
-  const capsMatch = yamlStr.match(/^capabilities:\s*\n((?:\s{2}.+\n?)*)/m);
-  if (capsMatch) {
-    const capabilityValue = (key: string) =>
-      capsMatch[1].match(new RegExp(`^\\s{2}${key}:\\s*(.+)$`, "m"))?.[1].trim();
-    config.capabilities = {
-      chat: capabilityValue("chat") !== "false",
-      tools: capabilityValue("tools") !== "false",
-      vision: capabilityValue("vision") === "true",
-      streaming: capabilityValue("streaming") !== "false",
-      maxTokens: Number(capabilityValue("maxTokens") ?? "4096"),
-    };
-  }
-
-  const modelIdMappingMatch = yamlStr.match(/^modelIdMapping:\s*(.+)$/m);
-  if (modelIdMappingMatch) config.modelIdMapping = modelIdMappingMatch[1].trim();
-
-  return config;
-}
-
 export function AgentConfigEditor({
   agentName,
   initialConfig,
@@ -123,10 +72,21 @@ export function AgentConfigEditor({
   const theme = useThemeStore((s) => s.theme);
 
   useEffect(() => {
-    if (initialConfig) {
-      setContent(configToMarkdown(initialConfig));
-    }
-  }, [initialConfig]);
+    let cancelled = false;
+    if (initialConfig) setContent(configToMarkdown(initialConfig));
+    fetchAgentSource(agentName)
+      .then((source) => {
+        if (cancelled) return;
+        setContent(source);
+        setIsDirty(false);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Failed to load agent source");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentName, initialConfig]);
 
   const handleEditorChange = useCallback((value: string | undefined) => {
     if (value !== undefined) {
@@ -141,8 +101,7 @@ export function AgentConfigEditor({
     setError(null);
     setSuccess(false);
     try {
-      const parsed = parseMarkdownConfig(content);
-      const updated = await updateAgent(agentName, parsed);
+      const updated = await updateAgentSource(agentName, content);
       setIsDirty(false);
       setSuccess(true);
       onSaved?.(updated);

@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { SessionMeta } from "@/lib/api";
 import { createSession, fetchSession, fetchSessionMeta, openSession } from "@/lib/api";
+import { pluginCommandId } from "@/lib/plugin-command-id";
 import { useCommandPaletteStore } from "@/stores/command-palette-store";
 import { usePluginStore } from "@/stores/plugin-store";
 import { useReopenSessionStore } from "@/stores/reopen-session-store";
@@ -254,7 +255,7 @@ export default function CommandPalette() {
 
     for (const pluginCommand of pluginCommands) {
       cmds.push({
-        id: `plugin-${pluginCommand.id}`,
+        id: pluginCommandId(pluginCommand.plugin, pluginCommand.id),
         group: pluginCommand.group ?? "Plugins",
         label: pluginCommand.label,
         keywords: `${pluginCommand.keywords ?? ""} ${pluginCommand.plugin}`,

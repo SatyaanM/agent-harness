@@ -55,7 +55,7 @@ interface SessionStore {
   sessions: Session[];
   activeSessionId: string | null;
   addSession: (session: Session) => void;
-  setActiveSession: (sessionId: string) => void;
+  setActiveSession: (sessionId: string | null) => void;
   setAgentName: (sessionId: string, agentName: string) => void;
   addMessage: (sessionId: string, message: Message) => void;
   updateMessage: (sessionId: string, messageId: string, content: string) => void;

@@ -29,17 +29,17 @@ flowchart LR
   Server --> Plugin["manifest registry + enabled state"]
 ```
 
-The server does **not** instantiate the exported `Orchestrator` class. The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRuntime.deliver()` → `Agent.run()`, with delegation added as a registered tool.
+The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRuntime.deliver()` → `Agent.run()`, with delegation added as a registered tool. The superseded polling `Orchestrator` implementation has been removed.
 
 ## Package responsibilities
 
 ### Core
 
 - [`Agent.run`](../../packages/core/src/agent/agent.ts) owns one in-memory model/tool loop. It builds tools from an `AgentConfig`, appends structurally balanced assistant/tool messages even when a budget stops execution, projects bounded tool content into provider context and transient tool events, and propagates its deadline/cancellation signal into providers and tools before returning after stop or `maxSteps`.
-- [`SessionRuntime`](../../packages/core/src/agent/session-runtime.ts) owns serialized delivery for one top-level `sessionId`. `deliver()` chains runs on an in-memory promise queue; `runOnce()` loads history, persists a user message, drains worker completions, runs an agent, and persists the appended record.
+- [`SessionRuntime`](../../packages/core/src/agent/session-runtime.ts) owns serialized delivery for one top-level `sessionId`. `deliver()` chains runs on an in-memory promise queue; `runOnce()` loads history, materializes unacknowledged worker completions, persists the canonical model order, acknowledges those completions, runs an agent, and persists success or the latest partial audit record.
 - [`createDelegateTool`](../../packages/core/src/agent/delegation.ts) creates a task ID, derives a synthetic worker config from the delegating agent, persists a `worker-<taskId>` session, launches a `Worker` without awaiting it, persists progress/final state, and appends a completion to the parent mailbox.
-- [`Worker.run`](../../packages/core/src/agent/worker.ts) wraps an `Agent` invocation, maps cancellation/errors to a `WorkerResult`, and also posts to the process-local `MessageBus`.
-- [`SessionStore`](../../packages/core/src/persistence/session.ts) is the file-I/O owner for transcripts and mailboxes. Transcripts use serialized latest-snapshot writes with temp-file rename; mailboxes use serialized append-only JSONL and whole-queue drain. Collection scans preserve invalid bytes, retain healthy records, and return content-free diagnostics.
+- [`Worker.run`](../../packages/core/src/agent/worker.ts) wraps an `Agent` invocation, retains each progressive step, and maps cancellation/errors to a `WorkerResult`. Terminal delivery and cleanup are owned by the delegate/server lifecycle rather than duplicated into a process-local result queue.
+- [`SessionStore`](../../packages/core/src/persistence/session.ts) is the file-I/O owner for transcripts and mailboxes. Transcripts use serialized latest-snapshot writes with temp-file rename; mailboxes use serialized append-only JSONL plus atomic acknowledgement rewrites. A transcript is durable before its derived index is updated. Collection scans preserve invalid bytes, retain healthy records, and return content-free diagnostics.
 - [`IndexHandle`](../../packages/core/src/persistence/session-index.ts) maintains a derived `.index.json` projection used by the top-level session collection endpoints. Worker sessions are excluded by the `worker-` name convention.
 - [`ToolRegistry`](../../packages/core/src/tool/registry.ts), file/shell/web tools, [`InboxManager`](../../packages/core/src/presentation/inbox.ts), agent-config loading, settings, capability discovery, plugin schemas, collaboration primitives, and TTS are reusable library surfaces.
 
@@ -47,17 +47,17 @@ The server does **not** instantiate the exported `Orchestrator` class. The live 
 
 - [`SessionManager`](../../packages/server/src/session-manager.ts) owns loaded `SessionRuntime` objects and running worker `AbortController` objects in process memory. It builds the concrete tool registry and relays runtime events to Socket.IO.
 - [`chatRouter`](../../packages/server/src/routes/chat.ts) validates a message, aborts the delivery when its client disconnects, awaits a full `SessionRuntime.deliver()`, and only then slices the complete final summary into SSE-shaped chunks. This is response chunking, not live model token streaming.
-- [`sessionsRouter`](../../packages/server/src/routes/sessions.ts) owns session CRUD, metadata-only collection listing, safe durable-record diagnostics, rename, conditional mailbox wake on explicit open, and updates to the open-session registry.
-- [`open-sessions.ts`](../../packages/server/src/open-sessions.ts) persists the browser tab set and active tab atomically under `.harness/open-sessions.json`; an explicit update quarantines malformed prior bytes before repair. Settings use the same quarantine-on-repair policy, while `ROOT` remains environment/discovery-owned.
-- [`PluginRegistry`](../../packages/server/src/plugin/registry.ts) recursively rescans manifest files when listed and persists enabled flags. [`pluginsRouter`](../../packages/server/src/routes/plugins.ts) exposes list/toggle operations.
-- [`HookBus`](../../packages/server/src/hooks.ts) defines before middleware and after observers. Current routes emit after-events for session lifecycle; no production registration of before middleware was found.
+- [`sessionsRouter`](../../packages/server/src/routes/sessions.ts) owns session CRUD, metadata-only collection listing, safe durable-record diagnostics, rename, conditional mailbox wake on explicit open, updates to the open-session registry, and close/delete lifecycle enforcement.
+- [`open-sessions.ts`](../../packages/server/src/open-sessions.ts) persists the browser tab set and active tab atomically under `.harness/open-sessions.json`; duplicate IDs and active IDs outside the open set are rejected. An explicit update quarantines malformed prior bytes before repair. Settings use the same quarantine-on-repair policy, while `ROOT` remains environment/discovery-owned.
+- [`PluginRegistry`](../../packages/server/src/plugin/registry.ts) recursively rescans sorted manifest files when listed, rejects duplicate names deterministically, preserves invalid state for diagnosis, and repairs it through an explicit toggle. [`pluginsRouter`](../../packages/server/src/routes/plugins.ts) exposes list/toggle operations.
+- [`HookBus`](../../packages/server/src/hooks.ts) defines before middleware and after observers. Session close and delete await veto-capable before middleware before durable or runtime state changes.
 - [`ws/events.ts`](../../packages/server/src/ws/events.ts) broadcasts agent start/completion/error/tool, worker spawn/completion, and full session updates.
 
 ### Dashboard
 
-- [`RuntimeSync`](../../packages/dashboard/src/components/chat/RuntimeSync.tsx) hydrates the server-owned open-tab snapshot as history, mirrors tab changes back to the server, and consumes Socket.IO runtime events.
+- [`RuntimeSync`](../../packages/dashboard/src/components/chat/RuntimeSync.tsx) hydrates the server-owned open-tab snapshot as history, repairs it when a durable session cannot be restored, mirrors later tab changes back to the server, and consumes Socket.IO runtime events.
 - [`useSessionStore`](../../packages/dashboard/src/stores/session-store.ts) is a browser projection of transcripts and tab selection. Server session updates replace its message projection.
-- [`useRuntimeStore`](../../packages/dashboard/src/stores/runtime-store.ts) and [`useRosterStore`](../../packages/dashboard/src/stores/agent-roster-store.ts) hold transient activity/running/worker UI state. They are not reconstructed from durable worker execution state on boot.
+- [`useRuntimeStore`](../../packages/dashboard/src/stores/runtime-store.ts) and [`useRosterStore`](../../packages/dashboard/src/stores/agent-roster-store.ts) hold bounded transient activity/running/worker UI state. They are not reconstructed from durable worker execution state on boot.
 - [`usePluginStore`](../../packages/dashboard/src/stores/plugin-store.ts) builds enabled renderer and command indexes from the server registry.
 - [`plugins/registry.ts`](../../packages/dashboard/src/plugins/registry.ts) statically imports a fixed set of built-in renderer components, while [`InboxItemView`](../../packages/dashboard/src/components/inbox/InboxItemView.tsx) selects among them using manifest metadata.
 - [`lib/api.ts`](../../packages/dashboard/src/lib/api.ts) is the REST adapter and applies endpoint-specific response budgets for durable sessions and inbox files, including JSON/base64 expansion. [`lib/ws.ts`](../../packages/dashboard/src/lib/ws.ts) is the Socket.IO adapter.
@@ -66,13 +66,13 @@ The server does **not** instantiate the exported `Orchestrator` class. The live 
 
 1. The dashboard creates or selects a top-level session and sends `{sessionId, message, agentName}` to `/api/chat`.
 2. `SessionManager` creates an in-memory runtime on first execution. Merely hydrating history does not create a runtime.
-3. `SessionRuntime` serializes deliveries for that runtime, persists the user message, drains all durable completions, and materializes each completion as a system transcript message with `meta.kind = "worker_completed"`.
+3. `SessionRuntime` serializes deliveries, peeks all durable completions, deduplicates by `taskId`, persists completion system messages before the new user message, then acknowledges the peeked records. Recovery after a failure between those writes sees the durable transcript identity and does not duplicate delivery.
 4. `Agent.run()` calls the configured model and registered tools until stop, cancellation, or the step limit.
 5. Delegation returns immediately from the tool call with `taskId` and `workerSessionId`; the worker continues in the server process.
 6. Worker progress and final transcript snapshots use the same `SessionData` shape as user sessions. Final delivery is separately appended to the parent mailbox.
 7. If the parent runtime is loaded, `SessionManager.onWorkerCompleted()` starts a mailbox-only wake run. The delegate tool is removed for this wake to prevent autonomous re-delegation. If no runtime is loaded, delivery stays on disk until an explicit open or later message drains it.
 
-`MailboxLog.drain()` serializes and removes one whole in-process batch, but the end-to-end handoff is not crash-atomic: the mailbox file is truncated before `SessionRuntime` saves the corresponding system messages into the transcript. A process failure in that interval can lose the only durable copy of a completion.
+Mailbox and transcript are still separate files rather than one transaction. The recovery protocol is materialize-before-acknowledge: failure before transcript persistence leaves the mailbox intact, while failure after transcript persistence leaves a replayable record whose `taskId` is already represented in the transcript. Concurrent appends are preserved by the mailbox write queue and acknowledgement rewrite.
 
 ## Persistence and ownership
 
@@ -80,9 +80,9 @@ The server does **not** instantiate the exported `Orchestrator` class. The live 
 |---|---|---|---|
 | Agent definition | Markdown in `agents/`, CRUD via server | File-backed | Name is the effective identity; no schema version or immutable ID. |
 | Top-level transcript | `SessionStore` | Atomic JSON snapshot | The same schema also represents worker executions; invalid records remain in place and are omitted with safe diagnostics during collection scans. |
-| Worker completion | `SessionStore` mailbox | Ordered JSONL until drain | Delivery identity is `taskId`; no explicit acknowledgement or replay ledger. |
+| Worker completion | `SessionStore` mailbox | Ordered JSONL until acknowledgement | Delivery identity and replay deduplication use `taskId`; there is no independently versioned delivery-event ID. |
 | Session list metadata | `IndexHandle` | Rebuildable JSON projection | Eventually consistent by design. |
-| Open/active tabs | Server `open-sessions.ts` | Atomic JSON snapshot | Browser is the writer; closing a tab does not call `SessionManager.unload()`. Invalid bytes are quarantined only on an explicit repair update. |
+| Open/active tabs | Server `open-sessions.ts` | Atomic JSON snapshot | Browser is the writer; closing unloads its runtime after before-close hooks pass. Invalid bytes are quarantined only on an explicit repair update. |
 | Loaded runtime | `SessionManager.runtimes` | Process memory | Not recovered; plain boot hydration does not wake pending mailboxes. |
 | Running worker/cancel handle | `SessionManager.workerControllers` | Process memory | Lost on server restart; no resume/reconciliation path. |
 | Plugin enabled state | Server `PluginRegistry` | JSON snapshot | Registry has no filesystem watcher or plugin-change event. |
@@ -109,12 +109,11 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 | Live streaming | Partial | Socket events expose steps/tools; `/api/chat` waits for completion and then emits synthetic text chunks. |
 | Worker history after reconnect | Partial | Worker transcripts persist, but the browser roster is live-event-only and is not rebuilt on hydration. |
 | Councils and supervision | Library/UI remnants only | Core primitives and dashboard card types exist, but the server runtime does not create councils or emit council events. |
-| Exported `Orchestrator` class | Not the server runtime | It remains exported but is not imported by the server. Its polling inbox path differs from `SessionRuntime`'s durable mailbox path. |
 | Skills, prompt templates, branching, compaction, context-file loading | Intent only | No product runtime implementation or public contract exists. `.agents/skills` is development tooling only. |
 
 ## Verification reality
 
-The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. As of the 2026-08-15 pull-request review remediation, the matrix discovers 37 test files and 155 tests. Production and test sources are both typechecked under strict mode. Coverage includes:
+The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. As of the 2026-08-15 final hardening pass, the matrix discovers 50 test files and 201 tests. Production and test sources are both typechecked under strict mode. Coverage includes:
 
 - malformed persisted configuration, read-only root ownership, and quarantine-on-repair behavior;
 - valid and invalid session transcript/mailbox records, including byte preservation, content-free diagnostics, and healthy-record listing;
@@ -127,9 +126,9 @@ The root Vitest project matrix includes core, server, dashboard, and repository-
 - dependency-audit package/advisory exceptions and their expiry behavior;
 - plugin discovery/state persistence, capability probing, inbox metadata mutations, bounded file I/O, provider response envelopes, and rejected async Express handler propagation.
 
-[`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) remains a manual console script, not part of the configured Vitest suite. There are still no automated tests for provider routing, the legacy exported `Orchestrator`, or end-to-end dashboard resynchronization. Those gaps remain visible rather than being hidden by the improved global percentage.
+[`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) remains a manual console script, not part of the configured Vitest suite. Provider routing and broad end-to-end dashboard resynchronization remain less covered than focused boundary and projection behavior; those gaps remain visible rather than being hidden by the global percentage.
 
-`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. The 2026-08-15 remediation measures 34.13% statements, 26.84% branches, 28.10% functions, and 36.33% lines. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules now have focused tests, while the low UI and adapter totals are not presented as broad product protection.
+`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. The 2026-08-15 final hardening pass measures 40.83% statements, 32.74% branches, 35.07% functions, and 43.23% lines. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules now have focused tests, while the low UI and adapter totals are not presented as broad product protection.
 
 `corepack npm run quality:policy` resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript suppression directives, explicit `any`, type and non-null assertions other than `as const`, unwrapped async Express routes, direct Express request-data use outside `validateRequest`, raw boundary JSON parsing, unbounded HTTP JSON parsing, mutable GitHub Action tags, and Node/runtime imports from the browser-safe core contracts surface. Core session/config/cache data, server request bodies/params/query, plugin state, provider responses, dashboard HTTP/chat-stream/WebSocket responses, and local TTS settings now have explicit schemas. Dashboard code consumes those schemas through `@agent-harness/core/contracts`, which cannot import the Node-backed core runtime.
 
@@ -138,9 +137,9 @@ Privileged operations are default-off or application-bounded: shell and network 
 ## Immediate architecture risks
 
 1. The overloaded `SessionData`/`taskId` vocabulary makes future persistence changes ambiguous and migration-prone.
-2. Mailbox drain and transcript materialization are separate writes, leaving a completion-loss crash window and no durable acknowledgement/idempotency ledger.
+2. Mailbox acknowledgement and transcript materialization remain separate writes. Task-based replay is lossless for current worker completions, but there is no schema-versioned delivery-event identity for future event types.
 3. Durable delivery is stronger than worker execution recovery after append: an in-flight worker disappears on restart with no terminal reconciliation.
-4. Boot hydration restores tabs as history only, so an already-open session with a pending mailbox is not automatically woken after a server/browser restart.
+4. Boot hydration repairs missing open sessions, but it restores ordinary tabs as history only; a pending mailbox is woken only through the explicit open endpoint or a later message.
 5. Capability discovery is present but not integrated into active execution, and provider routing remains a hard-coded protocol choice rather than a registry.
 6. CORS and loopback binding are not authentication or process isolation; deliberately exposed deployments need an authenticating reverse proxy and OS/network containment.
-7. Provider routing, dashboard resynchronization, the legacy `Orchestrator`, and broad UI behavior remain substantially less tested than the critical agent/persistence path.
+7. Provider routing, dashboard resynchronization, and broad UI behavior remain substantially less tested than the critical agent/persistence path.

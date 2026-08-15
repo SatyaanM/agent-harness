@@ -49,29 +49,66 @@ export const ToolCallSchema = z
   .strict();
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
-export const MessageSchema = z
+const MessageMetadataFields = {
+  meta: z.unknown().optional(),
+  createdAt: z.string().datetime().optional(),
+};
+
+const NonToolMessageContentSchema = z.string().max(1_000_000);
+const ForbiddenReasoningSchema = z.undefined().optional();
+const ForbiddenToolCallsSchema = z.undefined().optional();
+const ForbiddenToolCallIdSchema = z.undefined().optional();
+
+export const SystemMessageSchema = z
   .object({
-    role: z.enum(["system", "user", "assistant", "tool"]),
-    content: z.string().max(MAX_SESSION_TRANSCRIPT_BYTES),
-    reasoning: z.string().max(1_000_000).optional(),
-    meta: z.unknown().optional(),
-    toolCalls: z.array(ToolCallSchema).max(10_000).optional(),
-    toolCallId: z.string().min(1).max(256).optional(),
-    createdAt: z.string().datetime().optional(),
+    role: z.literal("system"),
+    content: NonToolMessageContentSchema,
+    reasoning: ForbiddenReasoningSchema,
+    toolCalls: ForbiddenToolCallsSchema,
+    toolCallId: ForbiddenToolCallIdSchema,
+    ...MessageMetadataFields,
   })
-  .strict()
-  .superRefine((message, context) => {
-    if (message.role === "tool" || message.content.length <= 1_000_000) return;
-    context.addIssue({
-      code: z.ZodIssueCode.too_big,
-      maximum: 1_000_000,
-      type: "string",
-      inclusive: true,
-      exact: false,
-      path: ["content"],
-      message: "non-tool message content exceeds 1000000 characters",
-    });
-  });
+  .strict();
+
+export const UserMessageSchema = z
+  .object({
+    role: z.literal("user"),
+    content: NonToolMessageContentSchema,
+    reasoning: ForbiddenReasoningSchema,
+    toolCalls: ForbiddenToolCallsSchema,
+    toolCallId: ForbiddenToolCallIdSchema,
+    ...MessageMetadataFields,
+  })
+  .strict();
+
+export const AssistantMessageSchema = z
+  .object({
+    role: z.literal("assistant"),
+    content: NonToolMessageContentSchema,
+    reasoning: z.string().max(1_000_000).optional(),
+    toolCalls: z.array(ToolCallSchema).max(10_000).optional(),
+    toolCallId: ForbiddenToolCallIdSchema,
+    ...MessageMetadataFields,
+  })
+  .strict();
+
+export const ToolMessageSchema = z
+  .object({
+    role: z.literal("tool"),
+    content: z.string().max(MAX_SESSION_TRANSCRIPT_BYTES),
+    reasoning: ForbiddenReasoningSchema,
+    toolCalls: ForbiddenToolCallsSchema,
+    toolCallId: z.string().min(1).max(256),
+    ...MessageMetadataFields,
+  })
+  .strict();
+
+export const MessageSchema = z.discriminatedUnion("role", [
+  SystemMessageSchema,
+  UserMessageSchema,
+  AssistantMessageSchema,
+  ToolMessageSchema,
+]);
 export type Message = z.infer<typeof MessageSchema>;
 
 export const AgentResultSchema = z

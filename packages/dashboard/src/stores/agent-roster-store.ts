@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+export const MAX_WORKERS_PER_SESSION = 100;
+
 export type WorkerStatus = "running" | "done" | "error" | "cancelled";
 
 export interface WorkerEntry {
@@ -26,7 +28,7 @@ export const useRosterStore = create<RosterState>((set) => ({
       return {
         bySession: {
           ...state.bySession,
-          [sessionId]: [...list, entry],
+          [sessionId]: [...list, entry].slice(-MAX_WORKERS_PER_SESSION),
         },
       };
     }),

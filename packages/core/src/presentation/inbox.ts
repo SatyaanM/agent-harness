@@ -49,7 +49,7 @@ interface InboxState {
   metadata: Map<string, InboxItemMetadata>;
   loaded: boolean;
   loading: Promise<void> | null;
-  persistQueue: Promise<void>;
+  mutationQueue: Promise<void>;
 }
 
 const states = new Map<string, InboxState>();
@@ -61,7 +61,7 @@ function getState(metadataFile: string): InboxState {
       metadata: new Map(),
       loaded: false,
       loading: null,
-      persistQueue: Promise.resolve(),
+      mutationQueue: Promise.resolve(),
     };
     states.set(metadataFile, state);
   }
@@ -100,50 +100,68 @@ export class InboxManager {
     return this.state.loading;
   }
 
-  private async persist(): Promise<void> {
-    const snapshot = Object.fromEntries(this.state.metadata.entries());
-    const write = this.state.persistQueue.then(async () => {
-      const temporaryFile = `${this.metadataFile}.tmp`;
-      try {
-        await fs.writeFile(
-          temporaryFile,
-          stringifyJsonBounded(snapshot, MAX_INBOX_METADATA_BYTES, "inbox metadata"),
-          "utf8",
-        );
-        await fs.rename(temporaryFile, this.metadataFile);
-      } catch (error) {
-        await fs.remove(temporaryFile).catch(() => undefined);
-        throw error;
+  private async persist(metadata: Map<string, InboxItemMetadata>): Promise<void> {
+    const snapshot = Object.fromEntries(metadata.entries());
+    const temporaryFile = `${this.metadataFile}.tmp`;
+    try {
+      await fs.writeFile(
+        temporaryFile,
+        stringifyJsonBounded(snapshot, MAX_INBOX_METADATA_BYTES, "inbox metadata"),
+        "utf8",
+      );
+      await fs.rename(temporaryFile, this.metadataFile);
+    } catch (error) {
+      await fs.remove(temporaryFile).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private mutate<T>(
+    operation: (
+      draft: Map<string, InboxItemMetadata>,
+    ) => Promise<{ changed: boolean; result: T }> | { changed: boolean; result: T },
+  ): Promise<T> {
+    const run = this.state.mutationQueue.then(async () => {
+      await this.ensureLoaded();
+      const draft = new Map(this.state.metadata);
+      const outcome = await operation(draft);
+      if (outcome.changed) {
+        await this.persist(draft);
+        this.state.metadata = draft;
       }
+      return outcome.result;
     });
-    this.state.persistQueue = write.catch(() => undefined);
-    await write;
+    this.state.mutationQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   async trackItem(itemId: string, input: TrackItemInput): Promise<InboxItemMetadata> {
-    await this.ensureLoaded();
     const parsedItemId = parseBoundary(InboxItemIdSchema, itemId, "inbox item identifier");
     const parsedInput = parseBoundary(TrackItemInputSchema, input, "inbox item metadata");
-    const existing = this.state.metadata.get(parsedItemId);
-    if (!existing && this.state.metadata.size >= MAX_INBOX_METADATA_ENTRIES) {
-      throw new BoundaryValidationError(
-        "inbox metadata",
-        `entry count exceeds ${MAX_INBOX_METADATA_ENTRIES}`,
-      );
-    }
-    const now = new Date().toISOString();
-    const entry: InboxItemMetadata = {
-      id: parsedItemId,
-      title: parsedInput.title,
-      type: parsedInput.type,
-      authorAgent: parsedInput.authorAgent,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      version: existing ? existing.version + 1 : 1,
-    };
-    this.state.metadata.set(parsedItemId, entry);
-    await this.persist();
-    return entry;
+    return this.mutate((draft) => {
+      const existing = draft.get(parsedItemId);
+      if (!existing && draft.size >= MAX_INBOX_METADATA_ENTRIES) {
+        throw new BoundaryValidationError(
+          "inbox metadata",
+          `entry count exceeds ${MAX_INBOX_METADATA_ENTRIES}`,
+        );
+      }
+      const now = new Date().toISOString();
+      const entry: InboxItemMetadata = {
+        id: parsedItemId,
+        title: parsedInput.title,
+        type: parsedInput.type,
+        authorAgent: parsedInput.authorAgent,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        version: existing ? existing.version + 1 : 1,
+      };
+      draft.set(parsedItemId, entry);
+      return { changed: true, result: entry };
+    });
   }
 
   async getItemMetadata(itemId: string): Promise<InboxItemMetadata | null> {
@@ -158,54 +176,57 @@ export class InboxManager {
   }
 
   async deleteItem(itemId: string): Promise<void> {
-    await this.ensureLoaded();
     const parsedItemId = parseBoundary(InboxItemIdSchema, itemId, "inbox item identifier");
-    const filePath = path.join(this.inboxDir, parsedItemId);
-    if (await fs.pathExists(filePath)) {
-      await assertExistingPathWithinRoot(filePath, this.inboxDir);
-      await fs.remove(filePath);
-    }
-    this.state.metadata.delete(parsedItemId);
-    await this.persist();
+    await this.mutate(async (draft) => {
+      const filePath = path.join(this.inboxDir, parsedItemId);
+      if (await fs.pathExists(filePath)) {
+        await assertExistingPathWithinRoot(filePath, this.inboxDir);
+        await fs.remove(filePath);
+      }
+      const changed = draft.delete(parsedItemId);
+      return { changed, result: undefined };
+    });
   }
 
   async bumpVersion(itemId: string): Promise<InboxItemMetadata | null> {
-    await this.ensureLoaded();
     const parsedItemId = parseBoundary(InboxItemIdSchema, itemId, "inbox item identifier");
-    const existing = this.state.metadata.get(parsedItemId);
-    if (!existing) return null;
-    const updated: InboxItemMetadata = {
-      ...existing,
-      updatedAt: new Date().toISOString(),
-      version: existing.version + 1,
-    };
-    this.state.metadata.set(parsedItemId, updated);
-    await this.persist();
-    return updated;
+    return this.mutate((draft) => {
+      const existing = draft.get(parsedItemId);
+      if (!existing) return { changed: false, result: null };
+      const updated: InboxItemMetadata = {
+        ...existing,
+        updatedAt: new Date().toISOString(),
+        version: existing.version + 1,
+      };
+      draft.set(parsedItemId, updated);
+      return { changed: true, result: updated };
+    });
   }
 
   async renameKey(oldId: string, newId: string): Promise<void> {
-    await this.ensureLoaded();
     const parsedOldId = parseBoundary(InboxItemIdSchema, oldId, "old inbox item identifier");
     const parsedNewId = parseBoundary(InboxItemIdSchema, newId, "new inbox item identifier");
-    const existing = this.state.metadata.get(parsedOldId);
-    if (!existing) return;
-    this.state.metadata.set(parsedNewId, { ...existing, id: parsedNewId });
-    this.state.metadata.delete(parsedOldId);
-    await this.persist();
+    await this.mutate((draft) => {
+      const existing = draft.get(parsedOldId);
+      if (!existing) return { changed: false, result: undefined };
+      draft.set(parsedNewId, { ...existing, id: parsedNewId });
+      draft.delete(parsedOldId);
+      return { changed: true, result: undefined };
+    });
   }
 
   async untrackRecursive(prefix: string): Promise<void> {
-    await this.ensureLoaded();
     const parsedPrefix = parseBoundary(InboxItemIdSchema, prefix, "inbox item prefix");
-    let changed = false;
-    for (const key of this.state.metadata.keys()) {
-      if (key === parsedPrefix || key.startsWith(`${parsedPrefix}/`)) {
-        this.state.metadata.delete(key);
-        changed = true;
+    await this.mutate((draft) => {
+      let changed = false;
+      for (const key of draft.keys()) {
+        if (key === parsedPrefix || key.startsWith(`${parsedPrefix}/`)) {
+          draft.delete(key);
+          changed = true;
+        }
       }
-    }
-    if (changed) await this.persist();
+      return { changed, result: undefined };
+    });
   }
 
   getInboxDir(): string {

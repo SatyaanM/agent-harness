@@ -94,6 +94,7 @@ export async function validateOutboundUrl(
 async function resolveOutboundUrl(
   rawUrl: string | URL,
   resolver: AddressResolver,
+  signal?: AbortSignal,
 ): Promise<ResolvedOutboundUrl> {
   const url = rawUrl instanceof URL ? new URL(rawUrl.href) : new URL(rawUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -109,7 +110,8 @@ async function resolveOutboundUrl(
   }
 
   const literalVersion = isIP(hostname);
-  const addresses = literalVersion === 0 ? await resolver(hostname) : [hostname];
+  const addresses =
+    literalVersion === 0 ? await waitForAbort(resolver(hostname), signal) : [hostname];
   if (addresses.length === 0) throw refused(`${hostname} did not resolve to an address`);
   for (const address of addresses) {
     if (!isPublicIp(address)) {
@@ -123,6 +125,7 @@ export function createWebFetchTool(options?: {
   fetchImpl?: FetchImplementation;
   requestImpl?: RequestImplementation;
   resolveAddresses?: AddressResolver;
+  timeoutMs?: number;
 }): Tool<typeof WebFetchParams> {
   const resolver = options?.resolveAddresses ?? resolveAddresses;
   const requestImpl: RequestImplementation = options?.requestImpl
@@ -141,13 +144,14 @@ export function createWebFetchTool(options?: {
 
     async execute(args, context) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15_000);
+      const timeoutMs = options?.timeoutMs ?? 15_000;
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       const signal = context?.signal
         ? AbortSignal.any([context.signal, controller.signal])
         : controller.signal;
 
       try {
-        let currentTarget = await resolveOutboundUrl(args.url, resolver);
+        let currentTarget = await resolveOutboundUrl(args.url, resolver, signal);
         let response: Response | undefined;
         for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
           response = await requestImpl(currentTarget.url, currentTarget.addresses, {
@@ -159,10 +163,15 @@ export function createWebFetchTool(options?: {
           const location = response.headers.get("location");
           if (!location) break;
           if (redirects === MAX_REDIRECTS) {
+            await response.body?.cancel();
             return `[error] Response exceeded ${MAX_REDIRECTS} redirects.`;
           }
           await response.body?.cancel();
-          currentTarget = await resolveOutboundUrl(new URL(location, currentTarget.url), resolver);
+          currentTarget = await resolveOutboundUrl(
+            new URL(location, currentTarget.url),
+            resolver,
+            signal,
+          );
         }
 
         if (!response) return "[error] Request did not produce a response.";
@@ -185,7 +194,7 @@ export function createWebFetchTool(options?: {
         return text;
       } catch (err: unknown) {
         if (isRecord(err) && err.name === "AbortError") {
-          return "[error] Request timed out after 15 seconds.";
+          return `[error] Request timed out after ${timeoutMs}ms.`;
         }
         const message = err instanceof Error ? err.message : String(err);
         return `[error] ${message}`;
@@ -194,6 +203,22 @@ export function createWebFetchTool(options?: {
       }
     },
   };
+}
+
+function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+function abortError(): Error {
+  const error = new Error("Operation aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 export const webFetchTool = createWebFetchTool();

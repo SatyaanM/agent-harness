@@ -2,6 +2,7 @@ import type { TTSConfig } from "@agent-harness/core";
 import {
   createGeminiTTSProvider,
   GEMINI_VOICES,
+  getConfig,
   parseJsonResponseBoundary,
 } from "@agent-harness/core";
 import { Router } from "express";
@@ -45,7 +46,8 @@ ttsRouter.post(
     const { text, voice, persona, emotiveTags, tagStyle, customTagInstructions } = request;
 
     const geminiApiKey = process.env.GEMINI_API_KEY;
-    const openCodeApiKey = process.env.OPENCODE_API_KEY;
+    const config = getConfig();
+    const providerApiKey = process.env[config.API_KEY_ENV];
 
     if (!geminiApiKey) {
       res.status(503).json({
@@ -53,6 +55,12 @@ ttsRouter.post(
       });
       return;
     }
+
+    const controller = new AbortController();
+    const abortOnDisconnect = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    res.once("close", abortOnDisconnect);
 
     try {
       // Step 1: Paraphrase with MiMo-V2.5
@@ -65,32 +73,40 @@ ttsRouter.post(
 
       let paraphrasedText = text; // fallback to original
 
-      if (openCodeApiKey) {
-        const paraphraseResponse = await fetch("https://opencode.ai/zen/go/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${openCodeApiKey}`,
-          },
-          body: JSON.stringify({
-            model: "mimo-v2.5",
-            messages: [{ role: "user", content: paraphrasePrompt }],
-            temperature: 0.7,
-          }),
-          signal: AbortSignal.timeout(15_000),
-        });
+      if (providerApiKey) {
+        try {
+          const endpoint = `${config.PROVIDER_ENDPOINT.replace(/\/$/u, "")}/chat/completions`;
+          const paraphraseResponse = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${providerApiKey}`,
+            },
+            body: JSON.stringify({
+              model: "mimo-v2.5",
+              messages: [{ role: "user", content: paraphrasePrompt }],
+              temperature: 0.7,
+            }),
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+          });
 
-        if (paraphraseResponse.ok) {
-          const result = await parseJsonResponseBoundary(
-            paraphraseResponse,
-            ParaphraseResponseSchema,
-            "TTS paraphrase response",
-            1_000_000,
-          );
-          const message = result.choices?.[0]?.message;
-          const content =
-            message?.content || message?.reasoning || message?.reasoning_content || "";
-          if (content) paraphrasedText = content;
+          if (paraphraseResponse.ok) {
+            const result = await parseJsonResponseBoundary(
+              paraphraseResponse,
+              ParaphraseResponseSchema,
+              "TTS paraphrase response",
+              1_000_000,
+            );
+            const message = result.choices?.[0]?.message;
+            const content =
+              message?.content || message?.reasoning || message?.reasoning_content || "";
+            if (content) paraphrasedText = content;
+          } else {
+            await paraphraseResponse.body?.cancel();
+          }
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          console.error("[tts] Optional paraphrase failed; using original text");
         }
       }
 
@@ -107,7 +123,11 @@ ttsRouter.post(
       };
 
       const ttsProvider = createGeminiTTSProvider();
-      const audioChunks = await ttsProvider.synthesize(paraphrasedText, ttsConfig);
+      const audioChunks = await ttsProvider.synthesize(
+        paraphrasedText,
+        ttsConfig,
+        controller.signal,
+      );
 
       // Stream audio chunks to client
       res.setHeader("Content-Type", "application/octet-stream");
@@ -116,18 +136,21 @@ ttsRouter.post(
       res.flushHeaders();
 
       for await (const chunk of audioChunks) {
-        const buffer = Buffer.from(chunk.data.buffer);
+        const buffer = Buffer.from(chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
         res.write(buffer);
       }
 
       res.end();
     } catch {
       console.error("[tts] Request failed");
+      if (res.destroyed || res.writableEnded) return;
       if (res.headersSent) {
         res.end();
         return;
       }
       res.status(502).json({ error: "Voice generation failed" });
+    } finally {
+      res.off("close", abortOnDisconnect);
     }
   }),
 );

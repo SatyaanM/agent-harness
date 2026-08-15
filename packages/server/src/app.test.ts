@@ -253,4 +253,30 @@ describe("upstream trust boundaries", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.body).toContain("Warm professor");
     expect(fetchMock.mock.calls[1]?.[1]?.body).toContain("Warm professor");
   });
+
+  it("falls back to the original narration when optional paraphrasing fails", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.OPENCODE_API_KEY = "paraphrase-key";
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error("paraphrase unavailable"))
+      .mockResolvedValueOnce(
+        Response.json({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "audio/pcm", data: "AAA=" } }],
+              },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await request(createApp()).post("/api/tts").send({ text: "original text" });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toContain("original text");
+  });
 });

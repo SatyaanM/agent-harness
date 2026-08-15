@@ -24,10 +24,27 @@ const SessionMetaSchema = z.object({
   updatedAt: z.string().min(1),
   messageCount: z.number().int().nonnegative(),
 });
-const OpenSessionsStateSchema = z.object({
-  activeSessionId: z.string().min(1).nullable(),
-  openSessionIds: z.array(z.string().min(1)),
-});
+const OpenSessionsStateSchema = z
+  .object({
+    activeSessionId: z.string().min(1).nullable(),
+    openSessionIds: z.array(z.string().min(1)),
+  })
+  .superRefine((state, context) => {
+    if (new Set(state.openSessionIds).size !== state.openSessionIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["openSessionIds"],
+        message: "open sessions must be unique",
+      });
+    }
+    if (state.activeSessionId !== null && !state.openSessionIds.includes(state.activeSessionId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["activeSessionId"],
+        message: "active session must be open",
+      });
+    }
+  });
 const OpenSessionResultSchema = z.object({
   woke: z.boolean(),
   pendingCount: z.number().int().nonnegative(),
@@ -116,8 +133,13 @@ export async function renameSession(sessionId: string, title: string): Promise<v
   if (!res.ok) throw new Error("Failed to rename session");
 }
 
-export async function fetchSession(sessionId: string): Promise<z.infer<typeof SessionDataSchema>> {
-  const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`);
+export async function fetchSession(
+  sessionId: string,
+  options?: { signal?: AbortSignal },
+): Promise<z.infer<typeof SessionDataSchema>> {
+  const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`, {
+    signal: options?.signal,
+  });
   if (!res.ok) throw new Error("Failed to fetch session");
   return parseJsonResponse(res, SessionDataSchema, "session response", MAX_SESSION_RESPONSE_BYTES);
 }
@@ -328,6 +350,24 @@ export async function fetchAgent(name: string): Promise<AgentConfig> {
   const res = await fetch(`${BASE_URL}/api/agents/${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error("Failed to fetch agent");
   return parseJsonResponse(res, AgentConfigSchema, "agent response");
+}
+
+const AgentSourceResponseSchema = z.object({ source: z.string().max(2_000_000) }).strict();
+
+export async function fetchAgentSource(name: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/api/agents/${encodeURIComponent(name)}/source`);
+  if (!res.ok) throw new Error("Failed to fetch agent source");
+  return (await parseJsonResponse(res, AgentSourceResponseSchema, "agent source response")).source;
+}
+
+export async function updateAgentSource(name: string, source: string): Promise<AgentConfig> {
+  const res = await fetch(`${BASE_URL}/api/agents/${encodeURIComponent(name)}/source`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source }),
+  });
+  if (!res.ok) throw new Error("Failed to update agent source");
+  return parseJsonResponse(res, AgentConfigSchema, "agent source update response");
 }
 
 export async function updateAgent(

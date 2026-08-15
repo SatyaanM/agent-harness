@@ -5,8 +5,15 @@ import type { SessionData } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
+import { isRecord } from "../validation.js";
 import { Agent } from "./agent.js";
-import type { AgentConfig, AgentResult } from "./types.js";
+import {
+  AgentBudgetExceededError,
+  AgentCancelledError,
+  type AgentConfig,
+  type AgentResult,
+  type Message,
+} from "./types.js";
 
 export type SessionRuntimeEvent =
   | { sessionId: string; type: "agent:started"; agentName: string }
@@ -89,15 +96,18 @@ export class SessionRuntime {
     // sees.
     const baseHistory = [...session.messages];
 
-    if (message) {
-      session.messages.push({ role: "user", content: message, createdAt: now });
-    }
-
-    // Atomically drain the durable mailbox — the entire batch is delivered
-    // together (ADR §10.9). Messages are removed from the log only on delivery.
-    const delivered = await this.sessionStore.drainMailbox(this.options.sessionId);
-    session.mailbox = [];
-    const deliveredSystem = delivered.map((p) => ({
+    // Materialize before acknowledgement. If the process fails after the
+    // transcript save but before acknowledgement, taskId makes recovery
+    // idempotent and prevents duplicate system messages.
+    const pending = await this.sessionStore.peekMailbox(this.options.sessionId);
+    const materializedTaskIds = new Set(
+      baseHistory.flatMap((existing) => {
+        if (!isRecord(existing.meta) || existing.meta.kind !== "worker_completed") return [];
+        return typeof existing.meta.taskId === "string" ? [existing.meta.taskId] : [];
+      }),
+    );
+    const delivered = pending.filter((entry) => !materializedTaskIds.has(entry.taskId));
+    const deliveredSystem: Message[] = delivered.map((p) => ({
       role: "system" as const,
       content:
         `Worker "${p.agentName}" (task ${p.taskId}) ` +
@@ -119,12 +129,22 @@ export class SessionRuntime {
         summary: p.summary,
       },
     }));
-    if (delivered.length > 0) {
-      session.messages.push(...deliveredSystem);
-    }
+    session.messages = [
+      ...baseHistory,
+      ...deliveredSystem,
+      ...(message ? [{ role: "user" as const, content: message, createdAt: now }] : []),
+    ];
+    session.mailbox = pending;
     await this.sessionStore.save(session);
+    if (pending.length > 0) {
+      await this.sessionStore.acknowledgeMailbox(
+        this.options.sessionId,
+        pending.map((entry) => entry.taskId),
+      );
+      session.mailbox = [];
+    }
 
-    if (!message && delivered.length === 0) {
+    if (!message && deliveredSystem.length === 0) {
       return {
         status: "success",
         summary: "",
@@ -140,6 +160,7 @@ export class SessionRuntime {
       ? agentConfig.tools
       : agentConfig.tools.filter((t) => t !== "delegate");
     const runConfig = { ...agentConfig, tools: runTools };
+    let latestRunMessages: Message[] | undefined;
     const agent = new Agent(
       runConfig,
       this.options.toolRegistry,
@@ -147,6 +168,7 @@ export class SessionRuntime {
       this.options.capabilityRegistry,
       (e) => {
         if (e.type === "step") {
+          latestRunMessages = e.messages;
           // Live update: emit the session with the messages produced so far,
           // so the chat fills in as the agent works instead of all at once.
           const liveAppended = e.messages
@@ -183,6 +205,32 @@ export class SessionRuntime {
         : await execute();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const partial = (latestRunMessages ?? [])
+        .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
+        .map((entry) => ({ ...entry, createdAt: entry.createdAt ?? new Date().toISOString() }));
+      session.messages.push(...partial);
+      session.result = {
+        status:
+          error instanceof AgentCancelledError
+            ? "cancelled"
+            : error instanceof AgentBudgetExceededError
+              ? "budgetExceeded"
+              : "error",
+        summary: errorMessage,
+      };
+      session.completedAt = new Date().toISOString();
+      try {
+        await this.sessionStore.save(session);
+        this.emit({ type: "session:updated", session });
+      } catch (persistenceError) {
+        const persistenceMessage =
+          persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
+        this.emit({
+          type: "agent:error",
+          agentName: agentConfig.name,
+          error: `Failed to persist partial run: ${persistenceMessage}`,
+        });
+      }
       this.emit({ type: "agent:error", agentName: agentConfig.name, error: errorMessage });
       throw error;
     }

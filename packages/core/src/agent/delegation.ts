@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import type { CapabilityRegistry } from "../capability/registry.js";
-import { messageBus } from "../collaboration/message-bus.js";
 import type { LLMClient } from "../llm/client.js";
 import type { PendingMessage } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
@@ -25,6 +24,9 @@ export interface DelegationDeps {
     abort: AbortController,
   ) => void;
   onWorkerCompleted?: (delegatingSessionId: string, pending: PendingMessage) => void;
+  onWorkerSettled?: (taskId: TaskId) => void;
+  onBackgroundError?: (error: unknown) => void;
+  isSessionAvailable?: (sessionId: string) => boolean;
   onWorkerTool?: (
     workerSessionId: string,
     event:
@@ -34,6 +36,14 @@ export interface DelegationDeps {
 }
 
 export function createDelegateTool(deps: DelegationDeps): Tool {
+  const reportBackgroundError = (error: unknown) => {
+    try {
+      deps.onBackgroundError?.(error);
+    } catch (reportingError) {
+      console.error("[delegation] Background error observer failed", reportingError);
+    }
+  };
+
   const parameters = z.object({
     task: z.string().describe("The task description to delegate to a worker agent"),
     model: z
@@ -81,25 +91,25 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         deps.toolRegistry,
         deps.llmClient,
         deps.capabilityRegistry,
-        deps.sessionId,
-        messageBus,
         controller.signal,
         (e) => {
           if (e.type === "step") {
             // Progressively persist the worker transcript so the drawer can
             // show work-in-progress instead of waiting for completion.
-            void store.save({
-              sessionId,
-              taskId,
-              agentName: workerConfig.name,
-              prompt: task,
-              messages: e.messages.map((m) => ({
-                ...m,
-                createdAt: m.createdAt ?? new Date().toISOString(),
-              })),
-              createdAt,
-              result: { status: "running", summary: "" },
-            });
+            void store
+              .save({
+                sessionId,
+                taskId,
+                agentName: workerConfig.name,
+                prompt: task,
+                messages: e.messages.map((m) => ({
+                  ...m,
+                  createdAt: m.createdAt ?? new Date().toISOString(),
+                })),
+                createdAt,
+                result: { status: "running", summary: "" },
+              })
+              .catch(reportBackgroundError);
             return;
           }
           deps.onWorkerTool?.(sessionId, e);
@@ -109,20 +119,25 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
 
       deps.onWorkerSpawned?.(taskId, sessionId, task, controller);
 
-      void worker.run(task).then(async (result) => {
+      const finishWorker = async () => {
+        const result = await worker.run(task);
         const existing = await store.load(sessionId);
         await store.save({
           sessionId,
           taskId,
           agentName: workerConfig.name,
           prompt: task,
-          messages: result.messages,
+          messages: result.messages.map((entry) => ({
+            ...entry,
+            createdAt: entry.createdAt ?? new Date().toISOString(),
+          })),
           mailbox: existing?.mailbox ?? [],
           result: { status: result.status, summary: result.summary },
-          createdAt: existing?.createdAt ?? new Date().toISOString(),
+          createdAt: existing?.createdAt ?? createdAt,
           completedAt: new Date().toISOString(),
         });
 
+        if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) return;
         const delegating = await store.load(deps.sessionId);
         if (!delegating) return;
         const pending: PendingMessage = {
@@ -139,8 +154,22 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
           receivedAt: new Date().toISOString(),
         };
         await store.appendMailbox(deps.sessionId, pending);
+        if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
+          await store.acknowledgeMailbox(deps.sessionId, [pending.taskId]);
+          return;
+        }
         deps.onWorkerCompleted?.(deps.sessionId, pending);
-      });
+      };
+
+      void finishWorker()
+        .catch(reportBackgroundError)
+        .finally(() => {
+          try {
+            deps.onWorkerSettled?.(taskId);
+          } catch (error) {
+            reportBackgroundError(error);
+          }
+        });
 
       return JSON.stringify({ taskId, sessionId, status: "delegated" });
     },

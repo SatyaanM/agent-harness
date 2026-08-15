@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetConfig } from "../config.js";
-import { grepTool } from "./grep.js";
+import { createGrepTool, grepTool } from "./grep.js";
 
 const tempDirs: string[] = [];
 const originalRoot = process.env.ROOT;
@@ -26,5 +26,21 @@ describe("grep resource limits", () => {
     await expect(grepTool.execute({ pattern: "(a+)+$", path: "input.txt" })).resolves.toContain(
       "regular expression resource limit",
     );
+  });
+
+  it("counts excluded files toward the traversal limit", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-grep-"));
+    tempDirs.push(root);
+    process.env.ROOT = root;
+    resetConfig();
+    await writeFile(path.join(root, "one.txt"), "one", "utf8");
+    await writeFile(path.join(root, "two.txt"), "two", "utf8");
+
+    const result = await createGrepTool({ maxFiles: 1 }).execute({
+      pattern: "never",
+      include: ["md"],
+    });
+
+    expect(result).toContain("truncated");
   });
 });

@@ -1,11 +1,13 @@
 import { BoundaryValidationError } from "@agent-harness/core/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  fetchAgentSource,
   fetchInboxFile,
   fetchOpenSessions,
   fetchSession,
   fetchSessions,
   parseChatStreamEvent,
+  updateAgentSource,
 } from "./api";
 
 afterEach(() => {
@@ -25,6 +27,27 @@ describe("chat stream boundary", () => {
 });
 
 describe("dashboard API boundary", () => {
+  it("forwards cancellation to session requests", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({
+        sessionId: "worker",
+        messages: [],
+        agentName: "worker",
+        taskId: "task",
+        prompt: "work",
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await fetchSession("worker", { signal: controller.signal });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url).endsWith("/api/sessions/worker")).toBe(true);
+    expect(init).toEqual({ signal: controller.signal });
+  });
+
   it("rejects an invalid JSON response before returning it to stores", async () => {
     vi.stubGlobal(
       "fetch",
@@ -123,5 +146,32 @@ describe("dashboard API boundary", () => {
     );
 
     await expect(fetchInboxFile("large.png")).resolves.toMatchObject({ content });
+  });
+
+  it("round-trips agent source as a full server-owned document", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ source: "---\nname: test\n---" }))
+      .mockResolvedValueOnce(
+        Response.json({
+          name: "test",
+          model: "model",
+          tools: [],
+          maxSteps: 1,
+          instructions: "",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchAgentSource("test")).resolves.toBe("---\nname: test\n---");
+    await updateAgentSource("test", "---\nname: test\n---");
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("/api/agents/test/source"),
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ source: "---\nname: test\n---" }),
+      }),
+    );
   });
 });

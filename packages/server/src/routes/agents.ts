@@ -4,9 +4,11 @@ import path from "node:path";
 import {
   type AgentConfig,
   AgentConfigSchema,
+  BoundaryValidationError,
   getConfig,
   loadAgentConfig,
   loadAllAgentConfigs,
+  readUtf8FileBoundedSync,
 } from "@agent-harness/core";
 import { Router } from "express";
 import matter from "gray-matter";
@@ -21,6 +23,7 @@ const AgentCreateSchema = AgentConfigSchema.partial()
   .extend({ name: IdentifierSchema, model: z.string().min(1).max(256) })
   .strict();
 const AgentUpdateSchema = AgentConfigSchema.omit({ name: true }).partial().strict();
+const AgentSourceSchema = z.object({ source: z.string().max(2_000_000) }).strict();
 
 agentsRouter.get(
   "/",
@@ -28,6 +31,66 @@ agentsRouter.get(
     const config = getConfig();
     const agents = await loadAllAgentConfigs(config.AGENTS_DIR);
     res.json(agents);
+  }),
+);
+
+agentsRouter.get(
+  "/:name/source",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(AgentParamsSchema, req.params, res);
+    if (!params) return;
+    const filePath = path.join(getConfig().AGENTS_DIR, `${params.name}.md`);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    res.json({ source: readUtf8FileBoundedSync(filePath, 2_000_000, "agent source") });
+  }),
+);
+
+agentsRouter.put(
+  "/:name/source",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(AgentParamsSchema, req.params, res);
+    if (!params) return;
+    const body = validateRequest(AgentSourceSchema, req.body, res);
+    if (!body) return;
+    const filePath = path.join(getConfig().AGENTS_DIR, `${params.name}.md`);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    const temporaryFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temporaryFile, body.source, "utf-8");
+      const parsed = loadAgentConfig(temporaryFile);
+      if (parsed.name !== params.name) {
+        res.status(400).json({
+          error: {
+            code: "invalid_request",
+            message: "Agent source name must match the route identifier",
+          },
+        });
+        return;
+      }
+      fs.renameSync(temporaryFile, filePath);
+      res.json(parsed);
+    } catch (error) {
+      if (
+        error instanceof BoundaryValidationError ||
+        (error instanceof Error && error.name === "YAMLException")
+      ) {
+        res.status(400).json({
+          error: { code: "invalid_request", message: "Agent source is invalid" },
+        });
+        return;
+      }
+      throw error;
+    } finally {
+      try {
+        fs.rmSync(temporaryFile, { force: true });
+      } catch {}
+    }
   }),
 );
 

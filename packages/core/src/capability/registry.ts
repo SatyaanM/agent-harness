@@ -30,7 +30,7 @@ export class CapabilityRegistry {
   ): Promise<CapabilityMatrix> {
     if (agentConfig?.capabilities) {
       const manual: CapabilityMatrix = {
-        chat: true,
+        chat: agentConfig.capabilities.chat ?? true,
         tools: agentConfig.capabilities.tools ?? false,
         vision: agentConfig.capabilities.vision ?? false,
         streaming: agentConfig.capabilities.streaming ?? false,

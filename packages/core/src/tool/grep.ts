@@ -125,69 +125,84 @@ function matchesInclude(filename: string, include: string[]): boolean {
   });
 }
 
-export const grepTool: Tool<typeof GrepParams> = {
-  name: "grep",
-  description:
-    "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers.",
-  parameters: GrepParams,
+export function createGrepTool(options?: { maxFiles?: number }): Tool<typeof GrepParams> {
+  const maxFiles = options?.maxFiles ?? MAX_TOOL_ENTRIES;
+  return {
+    name: "grep",
+    description:
+      "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers.",
+    parameters: GrepParams,
 
-  async execute(args, context) {
-    const root = getConfig().ROOT;
-    const searchPath = args.path ? path.resolve(root, args.path) : root;
-    assertWithinRoot(searchPath, root);
+    async execute(args, context) {
+      const root = getConfig().ROOT;
+      const searchPath = args.path ? path.resolve(root, args.path) : root;
+      assertWithinRoot(searchPath, root);
 
-    const results: Match[] = [];
-    let bytesRead = 0;
-    let filesScanned = 0;
+      const results: Match[] = [];
+      let bytesRead = 0;
+      let filesScanned = 0;
+      let truncated = false;
 
-    const stat = await fs.stat(searchPath).catch(() => null);
-    if (!stat) {
-      return `Path not found: ${args.path ?? root}`;
-    }
-    await assertExistingPathWithinRoot(searchPath, root);
-
-    const files = stat.isDirectory() ? walkDir(searchPath) : singleFile(searchPath);
-    for await (const file of files) {
-      if (context?.signal.aborted) return "[error] Search cancelled.";
-      if (args.include && !matchesInclude(file, args.include)) continue;
-      if (filesScanned >= MAX_TOOL_ENTRIES || bytesRead >= MAX_GREP_TOTAL_BYTES) break;
-      filesScanned += 1;
-      let searched: Awaited<ReturnType<typeof searchFile>>;
-      try {
-        searched = await searchFile(
-          file,
-          args.pattern,
-          root,
-          MAX_GREP_RESULTS - results.length,
-          MAX_GREP_TOTAL_BYTES - bytesRead,
-        );
-      } catch (error) {
-        if (error instanceof GrepRegexResourceError) {
-          return `[error] Grep regular expression resource limit exceeded (${MAX_REGEX_FILE_MS}ms per file).`;
-        }
-        throw error;
+      const stat = await fs.stat(searchPath).catch(() => null);
+      if (!stat) {
+        return `Path not found: ${args.path ?? root}`;
       }
-      bytesRead += searched.bytesRead;
-      results.push(...searched.matches);
-      if (results.length >= MAX_GREP_RESULTS) break;
-    }
+      await assertExistingPathWithinRoot(searchPath, root);
 
-    async function* singleFile(filePath: string): AsyncGenerator<string> {
-      yield filePath;
-    }
+      const files = stat.isDirectory() ? walkDir(searchPath) : singleFile(searchPath);
+      for await (const file of files) {
+        if (context?.signal.aborted) return "[error] Search cancelled.";
+        if (filesScanned >= maxFiles || bytesRead >= MAX_GREP_TOTAL_BYTES) {
+          truncated = true;
+          break;
+        }
+        filesScanned += 1;
+        if (args.include && !matchesInclude(file, args.include)) continue;
+        let searched: Awaited<ReturnType<typeof searchFile>>;
+        try {
+          searched = await searchFile(
+            file,
+            args.pattern,
+            root,
+            MAX_GREP_RESULTS - results.length,
+            MAX_GREP_TOTAL_BYTES - bytesRead,
+          );
+        } catch (error) {
+          if (error instanceof GrepRegexResourceError) {
+            return `[error] Grep regular expression resource limit exceeded (${MAX_REGEX_FILE_MS}ms per file).`;
+          }
+          throw error;
+        }
+        bytesRead += searched.bytesRead;
+        results.push(...searched.matches);
+        if (results.length >= MAX_GREP_RESULTS) {
+          truncated = true;
+          break;
+        }
+      }
 
-    if (results.length === 0) {
-      return "No matches found.";
-    }
+      async function* singleFile(filePath: string): AsyncGenerator<string> {
+        yield filePath;
+      }
 
-    const output = results.map((match) => `${match.file}:${match.line}: ${match.text}`);
-    if (
-      results.length >= MAX_GREP_RESULTS ||
-      filesScanned >= MAX_TOOL_ENTRIES ||
-      bytesRead >= MAX_GREP_TOTAL_BYTES
-    ) {
-      output.push("[truncated: grep resource limit reached]");
-    }
-    return output.join("\n");
-  },
-};
+      if (results.length === 0) {
+        return truncated
+          ? "No matches found.\n[truncated: grep resource limit reached]"
+          : "No matches found.";
+      }
+
+      const output = results.map((match) => `${match.file}:${match.line}: ${match.text}`);
+      if (
+        results.length >= MAX_GREP_RESULTS ||
+        truncated ||
+        filesScanned >= maxFiles ||
+        bytesRead >= MAX_GREP_TOTAL_BYTES
+      ) {
+        output.push("[truncated: grep resource limit reached]");
+      }
+      return output.join("\n");
+    },
+  };
+}
+
+export const grepTool = createGrepTool();

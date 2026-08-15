@@ -50,10 +50,17 @@ export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
 
 export class SessionManager {
   private runtimes = new Map<string, SessionRuntime>();
-  private workerControllers = new Map<string, AbortController>();
+  private workerControllers = new Map<
+    string,
+    { controller: AbortController; parentSessionId: string }
+  >();
+  private deletedSessions = new Set<string>();
   private executionLimiter: ExecutionLimiter | undefined;
 
   getOrCreate(sessionId: string): SessionRuntime {
+    if (!this.isSessionAvailable(sessionId)) {
+      throw new Error(`Session ${sessionId} was deleted`);
+    }
     const config = getConfig();
     const executionLimiter = this.getExecutionLimiter(config.MAX_CONCURRENT_AGENTS);
     let runtime = this.runtimes.get(sessionId);
@@ -91,8 +98,33 @@ export class SessionManager {
     this.runtimes.delete(sessionId);
   }
 
+  trackWorker(taskId: string, parentSessionId: string, controller: AbortController): void {
+    this.workerControllers.set(taskId, { controller, parentSessionId });
+  }
+
+  onWorkerSettled(taskId: string): void {
+    this.workerControllers.delete(taskId);
+  }
+
+  isSessionAvailable(sessionId: string): boolean {
+    return !this.deletedSessions.has(sessionId);
+  }
+
+  markSessionCreated(sessionId: string): void {
+    this.deletedSessions.delete(sessionId);
+  }
+
+  prepareSessionDeletion(sessionId: string): void {
+    this.deletedSessions.add(sessionId);
+    this.unload(sessionId);
+    for (const [taskId, worker] of this.workerControllers) {
+      if (worker.parentSessionId !== sessionId) continue;
+      worker.controller.abort();
+      this.workerControllers.delete(taskId);
+    }
+  }
+
   onWorkerCompleted(delegatingSessionId: string, pending: PendingMessage): void {
-    this.workerControllers.delete(pending.taskId);
     emitAgentEvent("worker:completed", {
       sessionId: delegatingSessionId,
       taskId: pending.taskId,
@@ -112,9 +144,9 @@ export class SessionManager {
   }
 
   cancelWorker(taskId: string): boolean {
-    const controller = this.workerControllers.get(taskId);
-    if (!controller) return false;
-    controller.abort();
+    const worker = this.workerControllers.get(taskId);
+    if (!worker) return false;
+    worker.controller.abort();
     this.workerControllers.delete(taskId);
     return true;
   }
@@ -163,11 +195,19 @@ export class SessionManager {
         capabilityRegistry,
         executionLimiter,
         onWorkerSpawned: (taskId, workerSessionId, task, controller) => {
-          this.workerControllers.set(taskId, controller);
+          this.trackWorker(taskId, sessionId, controller);
           emitAgentEvent("worker:spawned", { sessionId, taskId, workerSessionId, task });
         },
         onWorkerCompleted: (delegatingSessionId, pending) =>
           this.onWorkerCompleted(delegatingSessionId, pending),
+        onWorkerSettled: (taskId) => this.onWorkerSettled(taskId),
+        isSessionAvailable: (candidateSessionId) => this.isSessionAvailable(candidateSessionId),
+        onBackgroundError: (error) => {
+          console.error(
+            "[session-manager] Background worker persistence failed:",
+            error instanceof Error ? error.message : error,
+          );
+        },
         onWorkerTool: (workerSessionId, event) => {
           const tool =
             event.type === "tool:called"

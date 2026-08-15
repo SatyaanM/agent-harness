@@ -17,6 +17,7 @@ export type CapabilityEntry = RegistryEntry;
 
 export interface AgentConfigRef {
   capabilities?: {
+    chat?: boolean;
     tools?: boolean;
     vision?: boolean;
     streaming?: boolean;

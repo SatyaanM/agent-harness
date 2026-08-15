@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  BoundaryValidationError,
   type PluginManifest,
   PluginManifestSchema,
   parseJsonBoundary,
@@ -47,8 +49,8 @@ export function discoverPlugins(pluginsDir: string): PluginManifest[] {
     return [];
   }
 
-  const manifests = findManifestFiles(pluginsDir);
-  const plugins: PluginManifest[] = [];
+  const manifests = findManifestFiles(pluginsDir).sort();
+  const plugins = new Map<string, PluginManifest>();
 
   for (const file of manifests) {
     try {
@@ -58,13 +60,17 @@ export function discoverPlugins(pluginsDir: string): PluginManifest[] {
         readUtf8FileBoundedSync(file, MAX_MANIFEST_BYTES, `plugin manifest ${file}`),
         `plugin manifest ${file}`,
       );
-      plugins.push(parsed);
+      if (plugins.has(parsed.name)) {
+        console.error(`[plugins] Duplicate plugin name "${parsed.name}" in ${file}; ignoring it`);
+        continue;
+      }
+      plugins.set(parsed.name, parsed);
     } catch (err) {
       console.error(`[plugins] Failed to load manifest ${file}:`, err);
     }
   }
 
-  return plugins;
+  return [...plugins.values()];
 }
 
 export interface PluginEntry extends PluginManifest {
@@ -74,6 +80,7 @@ export interface PluginEntry extends PluginManifest {
 export class PluginRegistry {
   private stateFile: string;
   private enabled = new Map<string, boolean>();
+  private invalidState = false;
 
   constructor(
     private pluginsDir: string,
@@ -111,12 +118,18 @@ export class PluginRegistry {
 
   private loadState(): void {
     if (fs.existsSync(this.stateFile)) {
-      const parsed = parseJsonBoundary(
-        PluginStateSchema,
-        readUtf8FileBoundedSync(this.stateFile, MAX_PLUGIN_STATE_BYTES, "plugin enabled state"),
-        "plugin enabled state",
-      );
-      this.enabled = new Map(Object.entries(parsed.enabled));
+      try {
+        const parsed = parseJsonBoundary(
+          PluginStateSchema,
+          readUtf8FileBoundedSync(this.stateFile, MAX_PLUGIN_STATE_BYTES, "plugin enabled state"),
+          "plugin enabled state",
+        );
+        this.enabled = new Map(Object.entries(parsed.enabled));
+      } catch (error) {
+        if (!(error instanceof BoundaryValidationError)) throw error;
+        this.invalidState = true;
+        console.error("[plugins] Enabled state is invalid; defaults remain active until repair");
+      }
     }
   }
 
@@ -124,6 +137,10 @@ export class PluginRegistry {
     const temporaryFile = `${this.stateFile}.tmp`;
     try {
       fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
+      if (this.invalidState && fs.existsSync(this.stateFile)) {
+        fs.renameSync(this.stateFile, `${this.stateFile}.invalid-${Date.now()}-${randomUUID()}`);
+        this.invalidState = false;
+      }
       fs.writeFileSync(
         temporaryFile,
         stringifyJsonBounded(

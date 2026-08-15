@@ -52,7 +52,8 @@ function cleanSession(session: SessionData): SessionData {
  *    is full state, so the newest is the merged result).
  * 2. **Mailbox** (`sessions/<id>.mailbox.jsonl`) — lossless, ordered,
  *    append-only log. Appends are never coalesced or collapsed. A message is
- *    removed only by `drainMailbox`, i.e. tied to delivery, never to a write.
+ *    removed only by explicit acknowledgement after transcript materialization,
+ *    never merely because it was read.
  *
  * The mailbox log is committed independently of the transcript snapshot, so a
  * coalesced transcript write can never drop an undelivered message.
@@ -239,16 +240,29 @@ class MailboxLog {
     });
   }
 
-  /** Atomically removes the whole queue (tied to delivery) and returns it. */
-  drain(): Promise<PendingMessage[]> {
+  /** Remove acknowledged task identities while preserving later/unmatched messages. */
+  acknowledge(taskIds: ReadonlySet<string>): Promise<void> {
     return this.enqueue(async () => {
-      const delivered = await this.ensureLoaded();
-      if (this.fileExists) {
-        await fs.writeFile(this.filePath, "", "utf-8");
+      const messages = await this.ensureLoaded();
+      const remaining = messages.filter((message) => !taskIds.has(message.taskId));
+      if (remaining.length === messages.length) return;
+      const text = remaining.map((message) => JSON.stringify(message)).join("\n");
+      const serialized = text.length > 0 ? `${text}\n` : "";
+      const temporaryFile = `${this.filePath}.tmp`;
+      try {
+        if (remaining.length === 0) {
+          await fs.remove(this.filePath);
+        } else {
+          await fs.writeFile(temporaryFile, serialized, "utf-8");
+          await fs.rename(temporaryFile, this.filePath);
+        }
+      } catch (error) {
+        await fs.remove(temporaryFile).catch(() => undefined);
+        throw error;
       }
-      this.messages = [];
-      this.loadedBytes = 0;
-      return delivered;
+      this.messages = remaining;
+      this.loadedBytes = Buffer.byteLength(serialized, "utf8");
+      this.fileExists = remaining.length > 0;
     });
   }
 
@@ -320,7 +334,7 @@ export class SessionStore {
 
   async save(session: SessionData): Promise<string> {
     const parsed = parseBoundary(SessionDataSchema, session, "session store save");
-    const result = getTranscriptState(this.sessionsDir, parsed.sessionId).save(parsed);
+    const result = await getTranscriptState(this.sessionsDir, parsed.sessionId).save(parsed);
     await getSessionIndex(this.sessionsDir).upsert(parsed);
     return result;
   }
@@ -331,10 +345,19 @@ export class SessionStore {
     await getMailboxLog(this.sessionsDir, parsedSessionId).append(pending);
   }
 
-  /** Atomically remove and return the whole pending mailbox. */
-  async drainMailbox(sessionId: string): Promise<PendingMessage[]> {
+  /** Read pending delivery without consuming it. */
+  async peekMailbox(sessionId: string): Promise<PendingMessage[]> {
     const parsedSessionId = parseBoundary(SessionIdSchema, sessionId, "session identifier");
-    return getMailboxLog(this.sessionsDir, parsedSessionId).drain();
+    return (await getMailboxLog(this.sessionsDir, parsedSessionId).peek()) ?? [];
+  }
+
+  /** Acknowledge task identities only after their transcript projection is durable. */
+  async acknowledgeMailbox(sessionId: string, taskIds: readonly string[]): Promise<void> {
+    const parsedSessionId = parseBoundary(SessionIdSchema, sessionId, "session identifier");
+    const parsedTaskIds = taskIds.map((taskId) =>
+      parseBoundary(SessionIdSchema, taskId, "mailbox task identifier"),
+    );
+    await getMailboxLog(this.sessionsDir, parsedSessionId).acknowledge(new Set(parsedTaskIds));
   }
 
   async load(sessionId: string): Promise<SessionData | null> {

@@ -55,4 +55,21 @@ describe("InboxManager durable metadata", () => {
     );
     await expect(readFile(outsideFile, "utf8")).resolves.toBe("preserve me");
   });
+
+  it("rolls back in-memory metadata when persistence fails", async () => {
+    const dir = await makeDirectory();
+    const manager = new InboxManager(dir);
+    await manager.trackItem("one.md", {
+      title: "One",
+      type: "markdown",
+      authorAgent: "agent-one",
+    });
+    await mkdir(path.join(dir, ".harness", "inbox-metadata.json.tmp"));
+
+    await expect(manager.bumpVersion("one.md")).rejects.toThrow();
+
+    await expect(manager.getItemMetadata("one.md")).resolves.toEqual(
+      expect.objectContaining({ version: 1 }),
+    );
+  });
 });

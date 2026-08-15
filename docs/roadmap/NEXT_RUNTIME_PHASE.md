@@ -79,7 +79,7 @@ Before implementation, align advertised behavior with the accepted design:
 - mark provider routing, capability discovery, concurrency, streaming, councils, and plugin surfaces as implemented, partial, or planned;
 - remove or hide settings that remain unenforced;
 - define REST and WebSocket payload versioning for task/run/delivery state;
-- decide whether the legacy exported `Orchestrator`, process-local collaboration primitives, and council UI types are retained, integrated later, or deprecated.
+- decide whether the remaining process-local collaboration primitives and council UI types are retained, integrated later, or deprecated. The legacy polling `Orchestrator` has been removed.
 
 Exit evidence: reviewed API/event tables and documentation changes with no intent-only capability described as current.
 

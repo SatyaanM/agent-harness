@@ -14,43 +14,54 @@ interface CsvRendererProps {
   content: string;
 }
 
-function parseCsv(content: string): { headers: string[]; rows: string[][] } {
-  const lines = content.trim().split(/\r?\n/);
-  if (lines.length === 0) return { headers: [], rows: [] };
+export function parseCsv(content: string): { headers: string[]; rows: string[][] } {
+  if (content.length === 0) return { headers: [], rows: [] };
 
-  const parseLine = (line: string): string[] => {
-    const result: string[] = [];
-    let current = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (inQuotes) {
-        if (ch === '"' && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else if (ch === '"') {
-          inQuotes = false;
-        } else {
-          current += ch;
-        }
-      } else {
-        if (ch === '"') {
-          inQuotes = true;
-        } else if (ch === ",") {
-          result.push(current);
-          current = "";
-        } else {
-          current += ch;
-        }
-      }
-    }
-    result.push(current);
-    return result;
+  const records: string[][] = [];
+  let record: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  const endField = () => {
+    record.push(field);
+    field = "";
+  };
+  const endRecord = () => {
+    endField();
+    records.push(record);
+    record = [];
   };
 
-  const headers = parseLine(lines[0]);
-  const rows = lines.slice(1).map(parseLine);
+  for (let index = 0; index < content.length; index++) {
+    const character = content[index];
+    if (inQuotes) {
+      if (character === '"' && content[index + 1] === '"') {
+        field += '"';
+        index++;
+      } else if (character === '"') {
+        inQuotes = false;
+      } else {
+        field += character;
+      }
+    } else if (character === '"' && field.length === 0) {
+      inQuotes = true;
+    } else if (character === ",") {
+      endField();
+    } else if (character === "\n" || character === "\r") {
+      endRecord();
+      if (character === "\r" && content[index + 1] === "\n") index++;
+    } else {
+      field += character;
+    }
+  }
+
+  if (field.length > 0 || record.length > 0 || !/[\r\n]$/.test(content)) endRecord();
+  const [headers = [], ...rows] = records;
   return { headers, rows };
+}
+
+function columnKey(index: number): string {
+  return `column_${index}`;
 }
 
 export function CsvRenderer({ content }: CsvRendererProps) {
@@ -60,7 +71,7 @@ export function CsvRenderer({ content }: CsvRendererProps) {
 
   const columns = useMemo<ColumnDef<Record<string, string>, string>[]>(() => {
     return headers.map((header, i) => ({
-      accessorKey: header || `col_${i}`,
+      accessorKey: columnKey(i),
       header: header || `Column ${i + 1}`,
       cell: (info) => info.getValue(),
     }));
@@ -69,8 +80,8 @@ export function CsvRenderer({ content }: CsvRendererProps) {
   const data = useMemo(() => {
     return rows.map((row) => {
       const obj: Record<string, string> = {};
-      headers.forEach((h, i) => {
-        obj[h || `col_${i}`] = row[i] ?? "";
+      headers.forEach((_, i) => {
+        obj[columnKey(i)] = row[i] ?? "";
       });
       return obj;
     });

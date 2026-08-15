@@ -75,16 +75,9 @@ export function createVercelAILLMClient(config: Config): LLMClient {
       });
       const resultWithReasoning = optionalRecord(result);
 
-      // Handle reasoning models: extract text from reasoning if content is empty
-      let responseText = result.text;
+      const responseText = result.text;
       const rawReasoning = resultWithReasoning.reasoning ?? resultWithReasoning.reasoning_content;
       const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
-      if (!responseText || responseText.trim().length === 0) {
-        if (reasoning) {
-          responseText = reasoning;
-        }
-      }
-
       const toolCalls = result.toolCalls?.length
         ? result.toolCalls.map((tc) => ({
             toolCallId: tc.toolCallId,
@@ -102,7 +95,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
 
       return {
         message,
-        finishReason: result.finishReason === "tool-calls" ? "tool-calls" : "stop",
+        finishReason: mapFinishReason(result.finishReason),
         ...(toolCalls ? { toolCalls } : {}),
         usage: {
           inputTokens: result.usage.inputTokens,
@@ -112,6 +105,21 @@ export function createVercelAILLMClient(config: Config): LLMClient {
       };
     },
   };
+}
+
+function mapFinishReason(
+  finishReason: string,
+): "stop" | "tool-calls" | "length" | "content-filter" | "error" | "other" {
+  switch (finishReason) {
+    case "stop":
+    case "tool-calls":
+    case "length":
+    case "content-filter":
+    case "error":
+      return finishReason;
+    default:
+      return "other";
+  }
 }
 
 function optionalRecord(value: unknown): Record<string, unknown> {
@@ -175,10 +183,8 @@ function convertMessages(messages: Message[]) {
             ],
           };
         }
-
-        default:
-          return { role: "user" as const, content: msg.content };
       }
+      throw new Error("Unsupported message role");
     });
 }
 

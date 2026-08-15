@@ -164,6 +164,139 @@ describe("SessionRuntime delivery invariants", () => {
     expect(saved?.messages.at(-1)?.content).toBe("reported completion");
   });
 
+  it("persists the same delivery and prompt order that the model receives", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+    await store.save({
+      sessionId: "ordered",
+      taskId: "parent-task",
+      prompt: "old prompt",
+      agentName: "orchestrator",
+      messages: [{ role: "user", content: "old prompt" }],
+      createdAt: "2026-08-11T00:00:00.000Z",
+    });
+    await store.appendMailbox("ordered", {
+      taskId: "worker-order",
+      from: "worker-session",
+      agentName: "worker",
+      status: "done",
+      summary: "worker result",
+      receivedAt: "2026-08-11T00:01:00.000Z",
+    });
+    let observed: LLMChatParams | undefined;
+    const runtime = new SessionRuntime({
+      sessionId: "ordered",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat(params) {
+          observed = params;
+          return stop("answer");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await runtime.deliver("new prompt");
+
+    const expectedPrefix = ["old prompt", expect.stringContaining("worker result"), "new prompt"];
+    expect(observed?.messages.map((message) => message.content)).toEqual(expectedPrefix);
+    const saved = await store.load("ordered");
+    expect(saved?.messages.slice(0, 3).map((message) => message.content)).toEqual(expectedPrefix);
+  });
+
+  it("recovers a materialized but unacknowledged completion without duplicating it", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+    const materialized = {
+      role: "system" as const,
+      content: "already materialized",
+      meta: { kind: "worker_completed", taskId: "worker-recovery" },
+    };
+    await store.save({
+      sessionId: "recovery",
+      taskId: "parent-task",
+      prompt: "old prompt",
+      agentName: "orchestrator",
+      messages: [{ role: "user", content: "old prompt" }, materialized],
+      createdAt: "2026-08-11T00:00:00.000Z",
+    });
+    await store.appendMailbox("recovery", {
+      taskId: "worker-recovery",
+      from: "worker-session",
+      agentName: "worker",
+      status: "done",
+      summary: "worker result",
+      receivedAt: "2026-08-11T00:01:00.000Z",
+    });
+    const runtime = new SessionRuntime({
+      sessionId: "recovery",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("reported");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await runtime.deliver();
+
+    const saved = await store.load("recovery");
+    expect(
+      saved?.messages.filter((message) => message.meta && message.content === materialized.content),
+    ).toHaveLength(1);
+    expect(saved?.mailbox).toEqual([]);
+  });
+
+  it("persists assistant and tool messages when a later provider call fails", async () => {
+    const sessionsDir = await makeDirectory();
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "work",
+      description: "work",
+      parameters: z.object({}),
+      async execute() {
+        return "tool result";
+      },
+    });
+    let calls = 0;
+    const runtime = new SessionRuntime({
+      sessionId: "partial-failure",
+      sessionsDir,
+      resolveConfig: () => config(["work"]),
+      toolRegistry: registry,
+      llmClient: {
+        async chat() {
+          calls += 1;
+          if (calls === 1) {
+            return {
+              finishReason: "tool-calls",
+              message: {
+                role: "assistant",
+                content: "",
+                toolCalls: [{ toolCallId: "call-1", toolName: "work", args: {} }],
+              },
+              toolCalls: [{ toolCallId: "call-1", toolName: "work", args: {} }],
+            };
+          }
+          throw new Error("provider failed");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await expect(runtime.deliver("start")).rejects.toThrow("provider failed");
+
+    const saved = await new SessionStore(sessionsDir).load("partial-failure");
+    expect(saved?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"]);
+    expect(saved?.messages.at(-1)?.content).toBe("tool result");
+    expect(saved?.result).toEqual(expect.objectContaining({ status: "error" }));
+  });
+
   it("records completion time after execution finishes", async () => {
     vi.useFakeTimers();
     try {

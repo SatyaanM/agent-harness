@@ -88,7 +88,9 @@ export default function ChatInput() {
 
       // Auto-play TTS if enabled
       if (ttsEnabled && accumulated.trim()) {
-        playTTS(accumulated);
+        void playTTS(accumulated).catch((error) => {
+          console.error("[ChatInput] Automatic voice playback failed:", error);
+        });
       }
     } catch {
       updateMessage(activeSessionId, assistantMessageId, "Error: Failed to get response");

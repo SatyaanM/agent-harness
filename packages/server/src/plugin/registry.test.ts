@@ -55,4 +55,45 @@ describe("PluginRegistry", () => {
     expect(registry.setEnabled("constructor", false)?.enabled).toBe(false);
     expect(new PluginRegistry(pluginsDir, root).get("constructor")?.enabled).toBe(false);
   });
+
+  it("keeps plugins usable with invalid state and quarantines it on explicit repair", async () => {
+    const { pluginsDir, root } = await fixture();
+    const harnessDir = path.join(root, ".harness");
+    await mkdir(harnessDir, { recursive: true });
+    const stateFile = path.join(harnessDir, "plugins-state.json");
+    await writeFile(stateFile, "{invalid-json}", "utf8");
+
+    const registry = new PluginRegistry(pluginsDir, root);
+
+    expect(registry.get("example")?.enabled).toBe(true);
+    await expect(readFile(stateFile, "utf8")).resolves.toBe("{invalid-json}");
+    expect(registry.setEnabled("example", false)?.enabled).toBe(false);
+    const files = await import("node:fs/promises").then((fs) => fs.readdir(harnessDir));
+    const quarantine = files.find((file) => file.startsWith("plugins-state.json.invalid-"));
+    expect(quarantine).toBeDefined();
+    if (!quarantine) throw new Error("Expected invalid plugin state quarantine");
+    await expect(readFile(path.join(harnessDir, quarantine), "utf8")).resolves.toBe(
+      "{invalid-json}",
+    );
+    expect(new PluginRegistry(pluginsDir, root).get("example")?.enabled).toBe(false);
+  });
+
+  it("deduplicates plugin names deterministically", async () => {
+    const { pluginsDir, root } = await fixture("duplicate");
+    const second = path.join(pluginsDir, "z-second");
+    await mkdir(second, { recursive: true });
+    await writeFile(
+      path.join(second, "manifest.json"),
+      JSON.stringify({
+        name: "duplicate",
+        version: "2.0.0",
+        provides: { commands: [] },
+      }),
+    );
+
+    const entries = new PluginRegistry(pluginsDir, root).list();
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.version).toBe("1.0.0");
+  });
 });

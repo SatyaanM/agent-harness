@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -94,11 +94,11 @@ describe("SessionStore boundary validation", () => {
     const mailboxPath = path.join(dir, "session-1.mailbox.jsonl");
     await writeFile(mailboxPath, "{corrupt-json}\n", "utf8");
 
-    await expect(store.drainMailbox("session-1")).rejects.toBeInstanceOf(BoundaryValidationError);
+    await expect(store.peekMailbox("session-1")).rejects.toBeInstanceOf(BoundaryValidationError);
     await expect(readFile(mailboxPath, "utf8")).resolves.toBe("{corrupt-json}\n");
   });
 
-  it("preserves concurrent mailbox appends in submission order and drains them once", async () => {
+  it("preserves concurrent mailbox appends in submission order until acknowledgement", async () => {
     const { store } = await makeStore();
     await store.save(session());
     const pending = ["task-1", "task-2", "task-3"].map((taskId, index) => ({
@@ -112,8 +112,42 @@ describe("SessionStore boundary validation", () => {
 
     await Promise.all(pending.map((message) => store.appendMailbox("session-1", message)));
 
-    await expect(store.drainMailbox("session-1")).resolves.toEqual(pending);
-    await expect(store.drainMailbox("session-1")).resolves.toEqual([]);
+    await expect(store.peekMailbox("session-1")).resolves.toEqual(pending);
+    await store.acknowledgeMailbox(
+      "session-1",
+      pending.map((message) => message.taskId),
+    );
+    await expect(store.peekMailbox("session-1")).resolves.toEqual([]);
+  });
+
+  it("acknowledges only materialized mailbox messages and preserves concurrent appends", async () => {
+    const { store } = await makeStore();
+    await store.save(session());
+    const first = {
+      taskId: "task-1",
+      from: "worker-1",
+      agentName: "worker-1",
+      status: "done" as const,
+      summary: "first",
+      receivedAt: "2026-08-11T00:01:00.000Z",
+    };
+    const second = {
+      taskId: "task-2",
+      from: "worker-2",
+      agentName: "worker-2",
+      status: "done" as const,
+      summary: "second",
+      receivedAt: "2026-08-11T00:02:00.000Z",
+    };
+
+    await store.appendMailbox("session-1", first);
+    await expect(store.peekMailbox("session-1")).resolves.toEqual([first]);
+    await store.appendMailbox("session-1", second);
+    await store.acknowledgeMailbox("session-1", [first.taskId]);
+
+    await expect(store.peekMailbox("session-1")).resolves.toEqual([second]);
+    await store.acknowledgeMailbox("session-1", [first.taskId]);
+    await expect(store.peekMailbox("session-1")).resolves.toEqual([second]);
   });
 
   it("persists the latest submitted snapshot when saves overlap", async () => {
@@ -131,6 +165,19 @@ describe("SessionStore boundary validation", () => {
 
     await expect(store.load("session-1")).resolves.toEqual(
       expect.objectContaining({ prompt: "version-19" }),
+    );
+  });
+
+  it("does not publish derived metadata before the transcript is durable", async () => {
+    const { dir, store } = await makeStore();
+    await mkdir(path.join(dir, "failed.json.tmp"));
+
+    await expect(
+      store.save(session({ sessionId: "failed", taskId: "failed-task" })),
+    ).rejects.toThrow();
+
+    expect(await store.listMeta()).not.toContainEqual(
+      expect.objectContaining({ sessionId: "failed" }),
     );
   });
 });

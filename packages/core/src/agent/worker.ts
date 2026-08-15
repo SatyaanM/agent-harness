@@ -1,5 +1,4 @@
 import type { CapabilityRegistry } from "../capability/registry.js";
-import type { MessageBus } from "../collaboration/message-bus.js";
 import type { LLMClient } from "../llm/client.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
@@ -25,13 +24,14 @@ export class Worker {
     toolRegistry: ToolRegistry,
     llmClient: LLMClient,
     capabilityRegistry: CapabilityRegistry,
-    private readonly orchestratorId: TaskId,
-    private readonly bus: MessageBus,
     private readonly abortSignal?: AbortSignal,
     onEvent?: AgentEventCallback,
     private readonly executionLimiter?: ExecutionLimiter,
   ) {
-    this.agent = new Agent(config, toolRegistry, llmClient, capabilityRegistry, onEvent);
+    this.agent = new Agent(config, toolRegistry, llmClient, capabilityRegistry, (event) => {
+      if (event.type === "step") this.messages = event.messages;
+      onEvent?.(event);
+    });
   }
 
   async run(task: string): Promise<WorkerResult> {
@@ -49,7 +49,6 @@ export class Worker {
         messages: this.messages,
       };
 
-      this.bus.message(this.orchestratorId, workerResult, this.taskId);
       return workerResult;
     } catch (error) {
       const workerResult: WorkerResult = {
@@ -64,7 +63,6 @@ export class Worker {
         messages: this.messages,
       };
 
-      this.bus.message(this.orchestratorId, workerResult, this.taskId);
       return workerResult;
     }
   }

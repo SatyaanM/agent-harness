@@ -278,7 +278,7 @@ session:updated      # A session's state changed (authoritative sync)
 
 Pure TypeScript library with no HTTP/UI dependencies:
 
-- `agent/` — Agent, Orchestrator, Worker classes
+- `agent/` — Agent, session runtime, delegation, and Worker execution
 - `capability/` — 4-tier capability registry
 - `collaboration/` — MessageBus, Council, Supervision
 - `tool/` — Tool implementations (readFile, writeFile, etc.)

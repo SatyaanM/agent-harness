@@ -36,8 +36,6 @@ export function VoiceSettings() {
     "Hey there! I've finished the refactoring. All tests are passing, though there were a few hiccups along the way.",
   );
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
-  const [apiKey, setApiKey] = useState("");
-  const [apiKeySet, setApiKeySet] = useState(false);
 
   const handlePreview = async () => {
     setIsPreviewPlaying(true);
@@ -51,32 +49,15 @@ export function VoiceSettings() {
     }
   };
 
-  const handleSaveApiKey = () => {
-    alert("API key saved. In production, this would be saved to .env on the server.");
-    setApiKeySet(true);
-  };
-
   return (
     <div className="space-y-6">
       <Card>
         <CardContent className="space-y-4 p-4">
           <div className="space-y-2">
-            <Label htmlFor="gemini-key">Gemini API Key</Label>
-            <div className="flex gap-2">
-              <Input
-                id="gemini-key"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Enter your Gemini API key"
-                className="flex-1"
-              />
-              <Button onClick={handleSaveApiKey} disabled={apiKeySet}>
-                {apiKeySet ? "Saved" : "Save"}
-              </Button>
-            </div>
+            <Label>Gemini API Key</Label>
             <p className="text-xs text-muted-foreground">
-              Get your API key from{" "}
+              Voice credentials are server-managed. Set <code>GEMINI_API_KEY</code> in the server
+              environment and restart the server. Get a key from{" "}
               <a
                 href="https://aistudio.google.com/apikey"
                 target="_blank"
