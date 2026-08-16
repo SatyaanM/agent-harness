@@ -7,6 +7,25 @@ import { type AgentConfig, deleteAgent, fetchAgentSource, updateAgentSource } fr
 import { useThemeStore } from "@/stores/theme-store";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+const DRAFT_KEY_PREFIX = "agent-source-draft:";
+
+function loadDraft(agentName: string): string | null {
+  try {
+    return sessionStorage.getItem(`${DRAFT_KEY_PREFIX}${agentName}`);
+  } catch {
+    return null;
+  }
+}
+
+function saveDraft(agentName: string, content: string | null) {
+  try {
+    const key = `${DRAFT_KEY_PREFIX}${agentName}`;
+    if (content === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, content);
+  } catch {
+    // Navigation protection still guards the current editor when storage is unavailable.
+  }
+}
 
 interface AgentConfigEditorProps {
   agentName: string;
@@ -73,12 +92,23 @@ export function AgentConfigEditor({
 
   useEffect(() => {
     let cancelled = false;
-    if (initialConfig) setContent(configToMarkdown(initialConfig));
+    const draft = loadDraft(agentName);
+    if (draft !== null) {
+      setContent(draft);
+      setIsDirty(true);
+    } else if (initialConfig) {
+      setContent(configToMarkdown(initialConfig));
+    }
     fetchAgentSource(agentName)
       .then((source) => {
         if (cancelled) return;
-        setContent(source);
-        setIsDirty(false);
+        if (draft !== null) {
+          setContent(draft);
+          setIsDirty(true);
+        } else {
+          setContent(source);
+          setIsDirty(false);
+        }
       })
       .catch(() => {
         if (!cancelled) setError("Failed to load agent source");
@@ -88,13 +118,52 @@ export function AgentConfigEditor({
     };
   }, [agentName, initialConfig]);
 
-  const handleEditorChange = useCallback((value: string | undefined) => {
-    if (value !== undefined) {
-      setContent(value);
-      setIsDirty(true);
-      setSuccess(false);
-    }
-  }, []);
+  useEffect(() => {
+    if (!isDirty) return;
+
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const guardInternalNavigation = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!(target instanceof HTMLAnchorElement) || target.target === "_blank") return;
+      const destination = new URL(target.href, window.location.href);
+      if (destination.origin !== window.location.origin) return;
+      if (window.confirm("Discard unsaved agent changes?")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    document.addEventListener("click", guardInternalNavigation, true);
+    return () => {
+      window.removeEventListener("beforeunload", warnBeforeUnload);
+      document.removeEventListener("click", guardInternalNavigation, true);
+    };
+  }, [isDirty]);
+
+  const handleEditorChange = useCallback(
+    (value: string | undefined) => {
+      if (value !== undefined) {
+        setContent(value);
+        setIsDirty(true);
+        setSuccess(false);
+        saveDraft(agentName, value);
+      }
+    },
+    [agentName],
+  );
 
   async function handleSave() {
     setSaving(true);
@@ -102,6 +171,7 @@ export function AgentConfigEditor({
     setSuccess(false);
     try {
       const updated = await updateAgentSource(agentName, content);
+      saveDraft(agentName, null);
       setIsDirty(false);
       setSuccess(true);
       onSaved?.(updated);
@@ -118,6 +188,7 @@ export function AgentConfigEditor({
     setError(null);
     try {
       await deleteAgent(agentName);
+      saveDraft(agentName, null);
       onDeleted?.();
     } catch {
       setError("Failed to delete agent");

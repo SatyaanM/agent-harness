@@ -21,7 +21,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <head />
       <body>
         <ThemeProvider>
-          <div className="flex h-screen">
+          <div className="flex h-screen min-w-0 overflow-hidden">
             <Sidebar />
             <PluginProvider>
               <DashboardPanels>{children}</DashboardPanels>

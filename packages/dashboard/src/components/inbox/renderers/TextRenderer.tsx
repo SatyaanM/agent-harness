@@ -68,6 +68,14 @@ export function TextRenderer({ content, language, item }: TextRendererProps) {
 
   const lines = useMemo(() => content.split("\n"), [content]);
 
+  if (content.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+        This file is empty
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-full text-red-400 text-sm">

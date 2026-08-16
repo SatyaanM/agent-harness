@@ -279,11 +279,12 @@ export async function sendMessage(
   sessionId: string,
   content: string,
   agentName?: string,
+  options?: { retry?: true },
 ): Promise<ReadableStream<Uint8Array> | null> {
   const res = await fetch(`${BASE_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, message: content, agentName }),
+    body: JSON.stringify({ sessionId, message: content, agentName, ...options }),
   });
   if (!res.ok) throw new Error("Failed to send message");
   return res.body;

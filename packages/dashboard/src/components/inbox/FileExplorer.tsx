@@ -29,6 +29,15 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   createInboxDir,
@@ -288,6 +297,10 @@ export function FileExplorer({
   const [dragPath, setDragPath] = useState<string | null>(null);
   const [hoveredDropPath, setHoveredDropPath] = useState<string | null>(null);
   const [isRootDropTarget, setIsRootDropTarget] = useState(false);
+  const [createFolderParent, setCreateFolderParent] = useState<string | null>(null);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [createFolderError, setCreateFolderError] = useState<string | null>(null);
   const selectedPath = useInboxWorkspaceStore((s) => s.selectedPath);
   const setSelectedPath = useInboxWorkspaceStore((s) => s.setSelectedPath);
   const prefillChat = useChatInputStore((s) => s.prefill);
@@ -295,6 +308,7 @@ export function FileExplorer({
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setCreateFolderError(null);
     try {
       setTree(await fetchInboxTree());
     } catch (err) {
@@ -337,6 +351,31 @@ export function FileExplorer({
     setIsRootDropTarget(false);
   };
 
+  const openCreateFolder = (parent: string) => {
+    setCreateFolderError(null);
+    setNewFolderName("");
+    setCreateFolderParent(parent);
+  };
+
+  const submitCreateFolder = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = newFolderName.trim();
+    if (!name || createFolderParent === null) return;
+    const target = createFolderParent ? `${createFolderParent}/${name}` : name;
+    setCreatingFolder(true);
+    setError(null);
+    try {
+      await createInboxDir(target);
+      await load();
+      setCreateFolderParent(null);
+      setNewFolderName("");
+    } catch (err) {
+      setCreateFolderError(err instanceof Error ? err.message : "Failed to create folder");
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
+
   const menu: MenuHandlers = {
     onCopy: async (path) => {
       try {
@@ -346,17 +385,7 @@ export function FileExplorer({
       }
     },
     onAddToChat: (path) => prefillChat(path),
-    onCreateFolder: async (parent) => {
-      const name = window.prompt("Folder name");
-      if (!name?.trim()) return;
-      const target = parent ? `${parent}/${name.trim()}` : name.trim();
-      try {
-        await createInboxDir(target);
-        await load();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to create folder");
-      }
-    },
+    onCreateFolder: openCreateFolder,
     onDelete: async (entry) => {
       const label =
         entry.type === "dir" ? `folder "${entry.name}" and its contents` : `"${entry.name}"`;
@@ -462,8 +491,12 @@ export function FileExplorer({
             ))}
           </div>
         ) : tree.length === 0 ? (
-          <div className="flex items-center justify-center h-32 text-muted-foreground">
-            Inbox is empty
+          <div className="flex h-32 flex-col items-center justify-center gap-3 text-muted-foreground">
+            <span>Inbox is empty</span>
+            <Button variant="outline" size="sm" onClick={() => openCreateFolder("")}>
+              <FolderPlus className="h-4 w-4" />
+              Create folder
+            </Button>
           </div>
         ) : (
           tree.map((entry) => (
@@ -481,6 +514,56 @@ export function FileExplorer({
           ))
         )}
       </section>
+
+      <Dialog
+        open={createFolderParent !== null}
+        onOpenChange={(open) => {
+          if (!open && !creatingFolder) setCreateFolderParent(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <form onSubmit={submitCreateFolder}>
+            <DialogHeader>
+              <DialogTitle>Create folder</DialogTitle>
+              <DialogDescription>
+                {createFolderParent
+                  ? `Create a folder inside ${createFolderParent}.`
+                  : "Create a folder at the inbox root."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="py-4">
+              <label htmlFor="inbox-folder-name" className="mb-2 block text-sm font-medium">
+                Folder name
+              </label>
+              <Input
+                id="inbox-folder-name"
+                autoFocus
+                value={newFolderName}
+                onChange={(event) => setNewFolderName(event.target.value)}
+                disabled={creatingFolder}
+              />
+              {createFolderError && (
+                <div role="alert" className="mt-2 text-sm text-destructive">
+                  {createFolderError}
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCreateFolderParent(null)}
+                disabled={creatingFolder}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!newFolderName.trim() || creatingFolder}>
+                {creatingFolder ? "Creating…" : "Create"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -323,7 +323,6 @@ export default function ChatStream() {
   const sessions = useSessionStore((s) => s.sessions);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
   const messages = activeSession?.messages ?? [];
@@ -333,25 +332,10 @@ export default function ChatStream() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
-        <div className="text-red-400 text-sm">{error}</div>
-        <button
-          type="button"
-          onClick={() => setError(null)}
-          className="px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
   if (!activeSessionId) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-zinc-400 dark:text-zinc-500">
-        Loading messages...
+        Create or reopen a session to start chatting.
       </div>
     );
   }

@@ -12,11 +12,11 @@ export default function RightPanel() {
   if (collapsed) return null;
 
   return (
-    <div className="flex h-full flex-col bg-zinc-50 dark:bg-zinc-950">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden bg-zinc-50 dark:bg-zinc-950">
       <SessionTabs />
       <div className="flex min-h-0 flex-1">
         <AgentColumn />
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex-1 overflow-hidden">
             <ChatStream />
           </div>

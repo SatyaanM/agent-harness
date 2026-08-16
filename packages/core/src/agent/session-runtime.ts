@@ -59,7 +59,14 @@ export class SessionRuntime {
 
   /** Serialized delivery: only one run happens at a time per session. */
   deliver(message?: string, agentName?: string, signal?: AbortSignal): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName, signal));
+    const run = this.queue.then(() => this.runOnce(message, agentName, signal, false));
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Replay a user delivery already present in the durable transcript. */
+  retry(message: string, agentName?: string, signal?: AbortSignal): Promise<AgentResult> {
+    const run = this.queue.then(() => this.runOnce(message, agentName, signal, true));
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -72,6 +79,7 @@ export class SessionRuntime {
     message?: string,
     agentName?: string,
     signal?: AbortSignal,
+    replayExistingUser = false,
   ): Promise<AgentResult> {
     const now = new Date().toISOString();
 
@@ -90,11 +98,33 @@ export class SessionRuntime {
     if (agentName) session.agentName = agentName;
     if (message) session.prompt = message;
 
+    const persistedHistory = [...session.messages];
+    let replayedUserIndex = -1;
+    if (replayExistingUser) {
+      for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
+        const candidate = persistedHistory[index];
+        if (candidate?.role === "user" && candidate.content === message) {
+          replayedUserIndex = index;
+          break;
+        }
+      }
+      if (replayedUserIndex === -1) {
+        throw new Error("Cannot retry a message that is not present in the session transcript");
+      }
+    }
+
     // History handed to the agent = the loaded transcript + the delivered
     // mailbox completions. The new user prompt is NOT included: agent.run
     // re-adds it as the prompt itself, so it must be the last thing the model
-    // sees.
-    const baseHistory = [...session.messages];
+    // sees. A retry removes the already-durable copy only from model context;
+    // the persisted transcript keeps that single audit record.
+    const baseHistory =
+      replayedUserIndex === -1
+        ? persistedHistory
+        : [
+            ...persistedHistory.slice(0, replayedUserIndex),
+            ...persistedHistory.slice(replayedUserIndex + 1),
+          ];
 
     // Materialize before acknowledgement. If the process fails after the
     // transcript save but before acknowledgement, taskId makes recovery
@@ -130,9 +160,11 @@ export class SessionRuntime {
       },
     }));
     session.messages = [
-      ...baseHistory,
+      ...persistedHistory,
       ...deliveredSystem,
-      ...(message ? [{ role: "user" as const, content: message, createdAt: now }] : []),
+      ...(message && !replayExistingUser
+        ? [{ role: "user" as const, content: message, createdAt: now }]
+        : []),
     ];
     session.mailbox = pending;
     await this.sessionStore.save(session);

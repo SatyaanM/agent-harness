@@ -160,6 +160,23 @@ describe("upstream trust boundaries", () => {
     expect(res.text).not.toContain("provider-secret");
   });
 
+  it("routes an explicit chat retry through replay delivery", async () => {
+    const retry = vi.spyOn(SessionRuntime.prototype, "retry").mockResolvedValue({
+      status: "success",
+      summary: "recovered",
+      messages: [{ role: "assistant", content: "recovered" }],
+    });
+    const deliver = vi.spyOn(SessionRuntime.prototype, "deliver");
+
+    const res = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "retry-session", message: "hello", retry: true });
+
+    expect(res.status).toBe(200);
+    expect(retry).toHaveBeenCalledWith("hello", undefined, expect.any(AbortSignal));
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("does not expose voice-provider failures", async () => {
     process.env.GEMINI_API_KEY = "test-key";
     delete process.env.OPENCODE_API_KEY;

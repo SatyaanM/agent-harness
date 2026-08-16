@@ -88,8 +88,9 @@ export default function AgentColumn() {
           type="button"
           key={entry.id}
           onClick={() => openDrawer(entry.id)}
+          aria-label={`${entry.role === "primary" ? "Primary" : "Worker"} agent ${entry.name}, status ${entry.status}`}
           title={`${entry.name} (${entry.status})`}
-          className={`relative flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold text-white transition-transform hover:scale-110 ${
+          className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
             entry.role === "primary" ? "bg-blue-600" : "bg-zinc-600"
           } ${selectedEntry?.id === entry.id ? "ring-2 ring-blue-400" : ""}`}
           style={{
@@ -99,6 +100,7 @@ export default function AgentColumn() {
         >
           {entry.name.charAt(0).toUpperCase()}
           <span
+            aria-hidden="true"
             className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-background ${
               entry.status === "running"
                 ? "animate-pulse bg-green-500"

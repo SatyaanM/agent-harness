@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAgentsStore } from "@/stores/agents-store";
+import { useRuntimeStore } from "@/stores/runtime-store";
 import { useSessionStore } from "@/stores/session-store";
 
 function isOrchestrator(tools: string[]): boolean {
@@ -23,6 +24,9 @@ export default function AgentPicker() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
   const setAgentName = useSessionStore((s) => s.setAgentName);
+  const running = useRuntimeStore((s) =>
+    activeSessionId ? Boolean(s.running[activeSessionId]) : false,
+  );
 
   useEffect(() => {
     if (agents.length === 0) fetchAgents();
@@ -41,14 +45,22 @@ export default function AgentPicker() {
   }
 
   return (
-    <Select value={value} onValueChange={(name) => setAgentName(activeSessionId, name)}>
-      <SelectTrigger className="h-7 w-44 text-xs" aria-label="Select agent">
+    <Select
+      value={value}
+      disabled={running}
+      onValueChange={(name) => setAgentName(activeSessionId, name)}
+    >
+      <SelectTrigger
+        className="h-7 w-44 text-xs"
+        aria-label="Select agent"
+        title={running ? "Agent cannot be changed while this session is running" : undefined}
+      >
         <Bot className="h-3.5 w-3.5 shrink-0" />
-        <SelectValue />
+        <SelectValue>{value}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         {agents.map((agent) => (
-          <SelectItem key={agent.name} value={agent.name}>
+          <SelectItem key={agent.name} value={agent.name} textValue={agent.name}>
             <span className="flex flex-col">
               <span className="flex items-center gap-2">
                 {agent.name}

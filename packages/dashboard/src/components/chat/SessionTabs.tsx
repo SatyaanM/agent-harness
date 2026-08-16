@@ -70,51 +70,62 @@ export default function SessionTabs() {
   };
 
   return (
-    <div className="flex items-center gap-1 border-b border-zinc-200 bg-white px-2 py-1 dark:border-zinc-800 dark:bg-zinc-950">
-      {sessions.map((session) => (
-        <div key={session.sessionId} className="group flex items-center">
-          {editingId === session.sessionId ? (
-            <input
-              ref={editInputRef}
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onBlur={() => commitRename(session.sessionId)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitRename(session.sessionId);
-                if (e.key === "Escape") setEditingId(null);
-              }}
-              className="w-32 rounded border border-blue-400 bg-transparent px-2 py-1 text-sm focus:outline-none"
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setActiveSession(session.sessionId)}
-              onDoubleClick={() => startRename(session.sessionId, session.title)}
-              title="Double-click to rename"
-              className={`rounded px-3 py-1.5 text-sm transition-colors ${
-                session.sessionId === activeSessionId
-                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-              }`}
-            >
-              {tabLabel(session)}
-            </button>
-          )}
-          {editingId !== session.sessionId && (
-            <button
-              type="button"
-              onClick={() => removeSession(session.sessionId)}
-              title="Close session"
-              className="ml-0.5 rounded px-1.5 py-1 text-xs text-zinc-400 transition-colors hover:text-red-500 dark:text-zinc-500"
-            >
-              ×
-            </button>
-          )}
-        </div>
-      ))}
+    <div className="flex min-w-0 items-center gap-1 border-b border-zinc-200 bg-white px-2 py-1 dark:border-zinc-800 dark:bg-zinc-950">
+      <div
+        role="tablist"
+        aria-label="Open sessions"
+        className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap"
+      >
+        {sessions.map((session) => (
+          <div key={session.sessionId} className="group flex shrink-0 items-center">
+            {editingId === session.sessionId ? (
+              <input
+                ref={editInputRef}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onBlur={() => commitRename(session.sessionId)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRename(session.sessionId);
+                  if (e.key === "Escape") setEditingId(null);
+                }}
+                className="w-32 rounded border border-blue-400 bg-transparent px-2 py-1 text-sm focus:outline-none"
+              />
+            ) : (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={session.sessionId === activeSessionId}
+                tabIndex={session.sessionId === activeSessionId ? 0 : -1}
+                onClick={() => setActiveSession(session.sessionId)}
+                onDoubleClick={() => startRename(session.sessionId, session.title)}
+                title="Double-click to rename"
+                className={`max-w-48 truncate whitespace-nowrap rounded px-3 py-1.5 text-sm transition-colors ${
+                  session.sessionId === activeSessionId
+                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                    : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                }`}
+              >
+                {tabLabel(session)}
+              </button>
+            )}
+            {editingId !== session.sessionId && (
+              <button
+                type="button"
+                onClick={() => removeSession(session.sessionId)}
+                aria-label={`Close ${tabLabel(session)}`}
+                title="Close session"
+                className="ml-0.5 rounded px-1.5 py-1 text-xs text-zinc-400 transition-colors hover:text-red-500 dark:text-zinc-500"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
       <button
         type="button"
         onClick={handleNewSession}
+        aria-label="Create new session"
         title="New session"
         className="rounded px-2 py-1.5 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
       >
@@ -123,12 +134,13 @@ export default function SessionTabs() {
       <button
         type="button"
         onClick={() => useReopenSessionStore.getState().setOpen(true)}
+        aria-label="Reopen closed session"
         title="Reopen a closed session"
         className="rounded px-2 py-1.5 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
       >
         ⌕
       </button>
-      <div className="ml-auto flex items-center">
+      <div className="flex shrink-0 items-center">
         <AgentPicker />
       </div>
     </div>

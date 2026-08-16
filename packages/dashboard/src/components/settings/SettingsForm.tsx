@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -66,6 +66,20 @@ export function SettingsForm() {
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  const loadModels = useCallback(async () => {
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const data = await fetchModels();
+      setAvailableModels(data.data || []);
+    } catch {
+      setModelsError("Unable to load provider models. The configured model is preserved.");
+    } finally {
+      setModelsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchSettings()
@@ -75,17 +89,24 @@ export function SettingsForm() {
       })
       .catch(() => setError("Failed to load settings"));
 
-    fetchModels()
-      .then((data) => {
-        setAvailableModels(data.data || []);
-      })
-      .catch((err) => {
-        console.error("Failed to fetch models:", err);
-      })
-      .finally(() => {
-        setModelsLoading(false);
-      });
-  }, []);
+    void loadModels();
+  }, [loadModels]);
+
+  const modelOptions = useMemo(() => {
+    const configuredModel = String(draft.DEFAULT_MODEL ?? "");
+    if (!configuredModel || availableModels.some((model) => model.id === configuredModel)) {
+      return availableModels;
+    }
+    return [
+      {
+        id: configuredModel,
+        object: "model",
+        created: 0,
+        owned_by: "configured",
+      },
+      ...availableModels,
+    ];
+  }, [availableModels, draft.DEFAULT_MODEL]);
 
   function validate(field: EditableSetting, value: string): string {
     if (!value.trim()) return "Required";
@@ -180,12 +201,12 @@ export function SettingsForm() {
                 <SelectValue placeholder="Select a model" />
               </SelectTrigger>
               <SelectContent>
-                {modelsLoading ? (
+                {modelsLoading && modelOptions.length === 0 ? (
                   <SelectItem value="__loading" disabled>
                     Loading models...
                   </SelectItem>
                 ) : (
-                  availableModels.map((model) => (
+                  modelOptions.map((model) => (
                     <SelectItem key={model.id} value={model.id}>
                       {model.id} ({model.owned_by})
                     </SelectItem>
@@ -207,6 +228,24 @@ export function SettingsForm() {
           )}
           {validationErrors[field] && (
             <span className="text-xs text-destructive">{validationErrors[field]}</span>
+          )}
+          {field === "DEFAULT_MODEL" && modelsError && (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-3 rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              <span>{modelsError}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void loadModels()}
+                disabled={modelsLoading}
+                aria-label="Retry loading models"
+              >
+                Retry
+              </Button>
+            </div>
           )}
         </div>
       ))}

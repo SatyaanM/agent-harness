@@ -94,6 +94,33 @@ describe("SessionRuntime delivery invariants", () => {
     ]);
   });
 
+  it("retries an existing user delivery without duplicating its durable message", async () => {
+    const sessionsDir = await makeDirectory();
+    const chat = vi
+      .fn<(params: LLMChatParams) => Promise<LLMResponse>>()
+      .mockRejectedValueOnce(new Error("provider unavailable"))
+      .mockResolvedValueOnce(stop("recovered"));
+    const runtime = new SessionRuntime({
+      sessionId: "retry",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await expect(runtime.deliver("original prompt")).rejects.toThrow("provider unavailable");
+    await expect(runtime.retry("original prompt")).resolves.toEqual(
+      expect.objectContaining({ status: "success" }),
+    );
+
+    const saved = await new SessionStore(sessionsDir).load("retry");
+    expect(saved?.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "original prompt"],
+      ["assistant", "recovered"],
+    ]);
+  });
+
   it("drains worker completions together and removes delegate from a wake run", async () => {
     const sessionsDir = await makeDirectory();
     const store = new SessionStore(sessionsDir);
