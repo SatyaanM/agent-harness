@@ -1,9 +1,9 @@
 import type { CapabilityMatrix } from "../agent/types.js";
-import type { AgentConfigRef, RegistryEntry } from "./types.js";
 import { CapabilityCache } from "../persistence/capability-cache.js";
 import { fetchCapabilities } from "./models-dev-client.js";
 import { correlateName } from "./name-correlation.js";
 import { probeCapabilities } from "./probe.js";
+import type { AgentConfigRef, RegistryEntry } from "./types.js";
 
 export interface RegistryOptions {
   workspaceRoot: string;
@@ -30,7 +30,7 @@ export class CapabilityRegistry {
   ): Promise<CapabilityMatrix> {
     if (agentConfig?.capabilities) {
       const manual: CapabilityMatrix = {
-        chat: true,
+        chat: agentConfig.capabilities.chat ?? true,
         tools: agentConfig.capabilities.tools ?? false,
         vision: agentConfig.capabilities.vision ?? false,
         streaming: agentConfig.capabilities.streaming ?? false,
@@ -52,11 +52,7 @@ export class CapabilityRegistry {
       return cached.caps;
     }
 
-    const correlatedId = correlateName(
-      provider,
-      model,
-      agentConfig?.modelIdMapping,
-    );
+    const correlatedId = correlateName(provider, model, agentConfig?.modelIdMapping);
     const modelsDevCaps = await fetchCapabilities(provider, model, correlatedId);
     if (modelsDevCaps) {
       const entry: RegistryEntry = {

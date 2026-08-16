@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { fetchInboxFile, type InboxItem } from '@/lib/api';
-import { useInboxWorkspaceStore } from '@/stores/inbox-workspace-store';
-import { InboxItemView } from './InboxItemView';
+import { useEffect, useState } from "react";
+import { fetchInboxFile, type InboxItem } from "@/lib/api";
+import { useInboxWorkspaceStore } from "@/stores/inbox-workspace-store";
+import { InboxItemView } from "./InboxItemView";
 
 export function InboxContentView() {
   const selectedPath = useInboxWorkspaceStore((s) => s.selectedPath);
@@ -30,8 +30,7 @@ export function InboxContentView() {
         if (!cancelled) setItem(data);
       })
       .catch((err) => {
-        if (!cancelled)
-          setError(err instanceof Error ? err.message : 'Failed to load item');
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load item");
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);

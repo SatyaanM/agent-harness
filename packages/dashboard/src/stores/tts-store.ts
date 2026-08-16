@@ -1,6 +1,8 @@
+import { parseJsonBoundary } from "@agent-harness/core/contracts";
+import { z } from "zod";
 import { create } from "zustand";
-import { createTTSPlayer } from "@/lib/tts-player";
 import type { PlaybackState } from "@/lib/tts-player";
+import { createTTSPlayer } from "@/lib/tts-player";
 
 export interface TTSVoice {
   name: string;
@@ -31,7 +33,23 @@ interface TTSStore {
   saveSettings: () => void;
 }
 
+type PersistedTTSSettings = Pick<
+  TTSStore,
+  "enabled" | "voice" | "persona" | "emotiveTags" | "tagStyle" | "customTagInstructions"
+>;
+
 const player = createTTSPlayer();
+const TTSSettingsSchema = z
+  .object({
+    enabled: z.boolean(),
+    voice: z.string().min(1).max(128),
+    persona: z.string().max(10_000),
+    emotiveTags: z.boolean(),
+    tagStyle: z.enum(["conservative", "balanced", "expressive"]),
+    customTagInstructions: z.string().max(10_000),
+  })
+  .partial()
+  .strict();
 
 // Available voices from Gemini
 const DEFAULT_VOICES: TTSVoice[] = [
@@ -72,24 +90,32 @@ player.onStateChange((state) => {
   useTTSStore.setState({ playbackState: state });
 });
 
-function loadSettingsFromStorage() {
+function loadSettingsFromStorage(): z.infer<typeof TTSSettingsSchema> {
   if (typeof window === "undefined") return {};
   try {
     const stored = localStorage.getItem("tts-settings");
-    return stored ? JSON.parse(stored) : {};
+    return stored ? parseJsonBoundary(TTSSettingsSchema, stored, "TTS local settings") : {};
   } catch {
     return {};
   }
 }
 
-function saveSettingsToStorage(settings: {
-  enabled: boolean;
-  voice: string;
-  persona: string;
-  emotiveTags: boolean;
-  tagStyle: string;
-  customTagInstructions: string;
-}) {
+function persistedSettings(
+  state: TTSStore,
+  overrides: Partial<PersistedTTSSettings> = {},
+): PersistedTTSSettings {
+  return {
+    enabled: state.enabled,
+    voice: state.voice,
+    persona: state.persona,
+    emotiveTags: state.emotiveTags,
+    tagStyle: state.tagStyle,
+    customTagInstructions: state.customTagInstructions,
+    ...overrides,
+  };
+}
+
+function saveSettingsToStorage(settings: PersistedTTSSettings) {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem("tts-settings", JSON.stringify(settings));
@@ -106,7 +132,7 @@ export const useTTSStore = create<TTSStore>((set, get) => {
     voice: saved.voice ?? "Gacrux",
     persona: saved.persona ?? "",
     emotiveTags: saved.emotiveTags ?? true,
-    tagStyle: (saved.tagStyle as "conservative" | "balanced" | "expressive") ?? "balanced",
+    tagStyle: saved.tagStyle ?? "balanced",
     customTagInstructions: saved.customTagInstructions ?? "",
     playbackState: "idle",
     availableVoices: DEFAULT_VOICES,
@@ -114,42 +140,42 @@ export const useTTSStore = create<TTSStore>((set, get) => {
     toggleEnabled: () => {
       set((state) => {
         const newEnabled = !state.enabled;
-        saveSettingsToStorage({ ...state, enabled: newEnabled });
+        saveSettingsToStorage(persistedSettings(state, { enabled: newEnabled }));
         return { enabled: newEnabled };
       });
     },
 
     setVoice: (voice) => {
       set((state) => {
-        saveSettingsToStorage({ ...state, voice });
+        saveSettingsToStorage(persistedSettings(state, { voice }));
         return { voice };
       });
     },
 
     setPersona: (persona) => {
       set((state) => {
-        saveSettingsToStorage({ ...state, persona });
+        saveSettingsToStorage(persistedSettings(state, { persona }));
         return { persona };
       });
     },
 
     setEmotiveTags: (emotiveTags) => {
       set((state) => {
-        saveSettingsToStorage({ ...state, emotiveTags });
+        saveSettingsToStorage(persistedSettings(state, { emotiveTags }));
         return { emotiveTags };
       });
     },
 
     setTagStyle: (tagStyle) => {
       set((state) => {
-        saveSettingsToStorage({ ...state, tagStyle });
+        saveSettingsToStorage(persistedSettings(state, { tagStyle }));
         return { tagStyle };
       });
     },
 
     setCustomTagInstructions: (customTagInstructions) => {
       set((state) => {
-        saveSettingsToStorage({ ...state, customTagInstructions });
+        saveSettingsToStorage(persistedSettings(state, { customTagInstructions }));
         return { customTagInstructions };
       });
     },
@@ -176,21 +202,13 @@ export const useTTSStore = create<TTSStore>((set, get) => {
         voice: saved.voice ?? "Gacrux",
         persona: saved.persona ?? "",
         emotiveTags: saved.emotiveTags ?? true,
-        tagStyle: (saved.tagStyle as "conservative" | "balanced" | "expressive") ?? "balanced",
+        tagStyle: saved.tagStyle ?? "balanced",
         customTagInstructions: saved.customTagInstructions ?? "",
       });
     },
 
     saveSettings: () => {
-      const state = get();
-      saveSettingsToStorage({
-        enabled: state.enabled,
-        voice: state.voice,
-        persona: state.persona,
-        emotiveTags: state.emotiveTags,
-        tagStyle: state.tagStyle,
-        customTagInstructions: state.customTagInstructions,
-      });
+      saveSettingsToStorage(persistedSettings(get()));
     },
   };
 });

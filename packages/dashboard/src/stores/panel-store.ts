@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
 interface PanelStore {
   collapsed: boolean;
@@ -14,6 +14,5 @@ export const usePanelStore = create<PanelStore>((set) => ({
   toggleCollapsed: () =>
     set((state) => ({ collapsed: !state.collapsed, expanded: state.collapsed })),
 
-  toggleExpanded: () =>
-    set((state) => ({ expanded: !state.expanded, collapsed: state.expanded })),
+  toggleExpanded: () => set((state) => ({ expanded: !state.expanded, collapsed: state.expanded })),
 }));

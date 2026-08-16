@@ -1,13 +1,7 @@
-import { create } from 'zustand';
+import { create } from "zustand";
+import { fetchInboxItems, type InboxItem } from "@/lib/api";
 
-export interface InboxItem {
-  id: string;
-  name: string;
-  type: string;
-  size: number;
-  lastModified: string;
-  content?: string;
-}
+export type { InboxItem } from "@/lib/api";
 
 interface InboxState {
   items: InboxItem[];
@@ -20,8 +14,6 @@ interface InboxState {
   clearError: () => void;
 }
 
-const BASE_URL = 'http://localhost:3001';
-
 export const useInboxStore = create<InboxState>((set) => ({
   items: [],
   currentItem: null,
@@ -30,12 +22,10 @@ export const useInboxStore = create<InboxState>((set) => ({
   fetchItems: async () => {
     set({ isLoading: true, error: null });
     try {
-      const res = await fetch(`${BASE_URL}/api/inbox`);
-      if (!res.ok) throw new Error(`Failed to fetch inbox items (${res.status})`);
-      const items: InboxItem[] = await res.json();
+      const items = await fetchInboxItems();
       set({ items, isLoading: false });
     } catch (err) {
-      set({ isLoading: false, error: err instanceof Error ? err.message : 'Failed to load inbox' });
+      set({ isLoading: false, error: err instanceof Error ? err.message : "Failed to load inbox" });
     }
   },
   setCurrentItem: (item) => set({ currentItem: item }),

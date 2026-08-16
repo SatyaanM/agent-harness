@@ -3,25 +3,65 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "build": "turbo run build",
+    "check": "node scripts/run-checks.mjs",
+    "check:ci": "node scripts/run-checks.mjs ci",
+    "check:fast": "node scripts/run-checks.mjs fast",
+    "check:nightly": "node scripts/run-checks.mjs nightly",
     "dev": "turbo run dev",
+    "docs:list": "node scripts/docs-list.mjs",
+    "docs:check": "node scripts/docs-list.mjs --check",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "hooks:install": "node scripts/install-hooks.mjs",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "perf:report": "node scripts/perf-report.mjs",
+    "preinstall": "node scripts/install-hooks.mjs --migrate-only",
+    "prepare": "node scripts/install-hooks.mjs",
+    "quality": "biome check .",
+    "quality:ci": "biome ci .",
+    "quality:fix": "biome check --write .",
+    "quality:policy": "node scripts/check-quality-policy.mjs",
+    "quality:staged": "biome check --write --staged --no-errors-on-unmatched",
+    "security:audit": "node scripts/security-audit.mjs",
+    "skills:validate": "node scripts/validate-skills.mjs",
     "start": "turbo run start",
-    "test": "turbo run test",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:packages": "turbo run test",
+    "test:ui": "vitest --ui",
+    "test:watch": "vitest",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.5",
+    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/ui": "4.1.10",
+    "lefthook": "2.1.10",
     "turbo": "^2.x",
     "typescript": "^5.x",
-    "vitest": "^4.1.10"
+    "vitest": "4.1.10"
   },
   "overrides": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "@excalidraw/excalidraw": {
+      "@excalidraw/mermaid-to-excalidraw": {
+        "nanoid": "^5.1.16"
+      },
+      "nanoid": "^3.3.17"
+    },
     "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0"
+    "@types/react-dom": "^19.0.0",
+    "dompurify": "^3.4.13",
+    "lodash-es": "^4.18.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }

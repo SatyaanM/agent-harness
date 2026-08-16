@@ -29,7 +29,11 @@ export interface AudioChunk {
 }
 
 export interface TTSProvider {
-  synthesize(text: string, config: TTSConfig): Promise<AsyncIterable<AudioChunk>>;
+  synthesize(
+    text: string,
+    config: TTSConfig,
+    signal?: AbortSignal,
+  ): Promise<AsyncIterable<AudioChunk>>;
 }
 
 export interface ParaphraseResult {

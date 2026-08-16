@@ -1,0 +1,10 @@
+# Project-scoped Codex development tooling. This is not Agent Harness runtime configuration.
+developer_instructions = """
+Follow the repository AGENTS.md hierarchy and applicable repo-local skills.
+Use custom specialists for bounded read-only exploration or review when explicitly requested or when repository instructions require it.
+Keep ownership of task boundaries, edits, integration, verification, and the final response.
+"""
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 4

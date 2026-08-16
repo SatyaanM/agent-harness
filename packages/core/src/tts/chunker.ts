@@ -11,7 +11,6 @@ export interface SpeechChunker {
 
 export function createSpeechChunker(config: ChunkerConfig): SpeechChunker {
   let buffer = "";
-  let sentenceCount = 0;
 
   function countSentences(text: string): number {
     const matches = text.match(SENTENCE_ENDINGS);
@@ -20,10 +19,7 @@ export function createSpeechChunker(config: ChunkerConfig): SpeechChunker {
 
   function hasMinimumContent(text: string): boolean {
     const strippedTags = text.replace(TAG_PATTERN, "").trim();
-    return (
-      strippedTags.length >= config.minChars ||
-      countSentences(text) >= config.minSentences
-    );
+    return strippedTags.length >= config.minChars || countSentences(text) >= config.minSentences;
   }
 
   function findSentenceBoundary(text: string): number {
@@ -52,7 +48,7 @@ export function createSpeechChunker(config: ChunkerConfig): SpeechChunker {
       // Replace trailing sentence-ending punctuation with continuation marker
       chunk = chunk.replace(/[.!?]\s*$/, ", ");
       if (!chunk.endsWith("...")) {
-        chunk = chunk.trimEnd() + "...";
+        chunk = `${chunk.trimEnd()}...`;
       }
     }
 
@@ -70,7 +66,6 @@ export function createSpeechChunker(config: ChunkerConfig): SpeechChunker {
 
         const chunk = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary);
-        sentenceCount = 0;
 
         chunks.push(prepareChunk(chunk, false));
       }
@@ -85,13 +80,11 @@ export function createSpeechChunker(config: ChunkerConfig): SpeechChunker {
 
       const chunk = prepareChunk(buffer, true);
       buffer = "";
-      sentenceCount = 0;
       return chunk;
     },
 
     reset(): void {
       buffer = "";
-      sentenceCount = 0;
     },
   };
 }

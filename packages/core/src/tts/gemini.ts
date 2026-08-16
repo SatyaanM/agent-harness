@@ -1,40 +1,48 @@
-import type { TTSProvider, TTSConfig, AudioChunk } from "./types.js";
+import { z } from "zod";
+import { parseJsonResponseBoundary } from "../contracts/http.js";
+import type { AudioChunk, TTSConfig, TTSProvider } from "./types.js";
 
 const GEMINI_TTS_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent";
 
-interface GeminiResponse {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        inlineData?: {
-          mimeType: string;
-          data: string;
-        };
-      }>;
-    };
-  }>;
-  error?: {
-    code: number;
-    message: string;
-  };
-}
+const GeminiResponseSchema = z.object({
+  candidates: z
+    .array(
+      z.object({
+        content: z
+          .object({
+            parts: z
+              .array(
+                z.object({
+                  inlineData: z.object({ mimeType: z.string(), data: z.string() }).optional(),
+                }),
+              )
+              .optional(),
+          })
+          .optional(),
+      }),
+    )
+    .optional(),
+  error: z.object({ code: z.number(), message: z.string() }).optional(),
+});
 
 export function createGeminiTTSProvider(): TTSProvider {
   return {
     async synthesize(
       text: string,
-      config: TTSConfig
+      config: TTSConfig,
+      signal?: AbortSignal,
     ): Promise<AsyncIterable<AudioChunk>> {
       if (!config.apiKey) {
         throw new Error("Gemini API key is required");
       }
 
-      const url = `${GEMINI_TTS_ENDPOINT}?key=${config.apiKey}`;
+      const narrationText = config.persona.trim()
+        ? `Narration persona: ${config.persona.trim()}\n\n${text}`
+        : text;
 
-      // Plain text only - paraphrase is done separately
       const requestBody = {
-        contents: [{ parts: [{ text }] }],
+        contents: [{ parts: [{ text: narrationText }] }],
         generation_config: {
           response_modalities: ["AUDIO"],
           speech_config: {
@@ -47,31 +55,27 @@ export function createGeminiTTSProvider(): TTSProvider {
         },
       };
 
-      console.log("[gemini-tts] Request:", {
-        voice: config.voice,
-        textLength: text.length,
-      });
-
-      const response = await fetch(url, {
+      const timeoutSignal = AbortSignal.timeout(30_000);
+      const response = await fetch(GEMINI_TTS_ENDPOINT, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
         body: JSON.stringify(requestBody),
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
       });
 
       if (!response.ok) {
-        const errorBody = await response.text();
-        console.log("[gemini-tts] Error:", response.status, errorBody);
-        throw new Error(
-          `Gemini TTS request failed: ${response.status} - ${errorBody}`
-        );
+        throw new Error(`Gemini TTS request failed with status ${response.status}`);
       }
 
-      const result = (await response.json()) as GeminiResponse;
+      const result = await parseJsonResponseBoundary(
+        response,
+        GeminiResponseSchema,
+        "Gemini TTS response",
+        25_000_000,
+      );
 
       if (result.error) {
-        throw new Error(
-          `Gemini TTS error: ${result.error.code} - ${result.error.message}`
-        );
+        throw new Error(`Gemini TTS request failed with provider code ${result.error.code}`);
       }
 
       const audioData = result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;

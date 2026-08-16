@@ -1,40 +1,40 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
-import { useSessionStore, type Message } from '@/stores/session-store';
-import { useTTSStore } from '@/stores/tts-store';
-import { DelegationCard } from './DelegationCard';
-import { CouncilCard } from './CouncilCard';
-import { InboxLink } from './InboxLink';
-import { MarkdownRenderer } from './MarkdownRenderer';
+import { useEffect, useRef, useState } from "react";
+import { type Message, useSessionStore } from "@/stores/session-store";
+import { useTTSStore } from "@/stores/tts-store";
+import { CouncilCard } from "./CouncilCard";
+import { DelegationCard } from "./DelegationCard";
+import { InboxLink } from "./InboxLink";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 const TAG_INDICATORS: Record<string, string> = {
-  excitedly: '✨',
-  excited: '✨',
-  amazed: '😲',
-  sighs: '😮‍💨',
-  laughs: '😄',
-  giggles: '😊',
-  whispers: '🤫',
-  serious: '⚠️',
-  gasp: '😮',
-  crying: '😢',
-  curious: '🤔',
-  panicked: '😰',
-  sarcastic: '😏',
-  shouting: '📢',
-  tired: '😴',
-  trembling: '🫨',
-  mischievously: '😈',
+  excitedly: "✨",
+  excited: "✨",
+  amazed: "😲",
+  sighs: "😮‍💨",
+  laughs: "😄",
+  giggles: "😊",
+  whispers: "🤫",
+  serious: "⚠️",
+  gasp: "😮",
+  crying: "😢",
+  curious: "🤔",
+  panicked: "😰",
+  sarcastic: "😏",
+  shouting: "📢",
+  tired: "😴",
+  trembling: "🫨",
+  mischievously: "😈",
 };
 
 const TAG_REGEX = /\[([^\]]+)\]/g;
 
 function stripToolCalls(content: string): string {
   let cleaned = content;
-  
-  const toolCallStart = '<' + 'tool_call>';
-  const toolCallEnd = '<' + '/tool_call>';
+
+  const toolCallStart = "<" + "tool_call>";
+  const toolCallEnd = "<" + "/tool_call>";
   while (true) {
     const startIdx = cleaned.indexOf(toolCallStart);
     if (startIdx === -1) break;
@@ -42,9 +42,9 @@ function stripToolCalls(content: string): string {
     if (endIdx === -1) break;
     cleaned = cleaned.slice(0, startIdx) + cleaned.slice(endIdx + toolCallEnd.length);
   }
-  
-  const toolResultStart = '<' + 'tool_result>';
-  const toolResultEnd = '<' + '/tool_result>';
+
+  const toolResultStart = "<" + "tool_result>";
+  const toolResultEnd = "<" + "/tool_result>";
   while (true) {
     const startIdx = cleaned.indexOf(toolResultStart);
     if (startIdx === -1) break;
@@ -52,35 +52,36 @@ function stripToolCalls(content: string): string {
     if (endIdx === -1) break;
     cleaned = cleaned.slice(0, startIdx) + cleaned.slice(endIdx + toolResultEnd.length);
   }
-  
+
   return cleaned.trim();
 }
 
 function formatTime(isoString: string): string {
   const date = new Date(isoString);
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
-  return text.slice(0, max) + '…';
+  return `${text.slice(0, max)}…`;
 }
 
 function extractTagIndicators(content: string): string[] {
   const indicators: string[] = [];
-  let match;
-  while ((match = TAG_REGEX.exec(content)) !== null) {
-    const tag = match[1].toLowerCase().split(',')[0].trim();
+  let match = TAG_REGEX.exec(content);
+  while (match !== null) {
+    const tag = match[1].toLowerCase().split(",")[0].trim();
     const indicator = TAG_INDICATORS[tag];
     if (indicator && !indicators.includes(indicator)) {
       indicators.push(indicator);
     }
+    match = TAG_REGEX.exec(content);
   }
   return indicators;
 }
 
 function stripEmotiveTags(content: string): string {
-  return content.replace(TAG_REGEX, '').replace(/\s+/g, ' ').trim();
+  return content.replace(TAG_REGEX, "").replace(/\s+/g, " ").trim();
 }
 
 function UserMessage({ message }: { message: Message }) {
@@ -112,30 +113,33 @@ function ToolCallBlock({
   const argHint = args
     ? Object.entries(args)
         .map(([key, value]) => `${key}=${String(value)}`)
-        .join(' ')
-    : '';
-  const hint = argHint.length > 0 ? ` → ${truncate(argHint, 80)}` : '';
+        .join(" ")
+    : "";
+  const hint = argHint.length > 0 ? ` → ${truncate(argHint, 80)}` : "";
 
   return (
     <div className="my-1.5 overflow-hidden rounded-md border border-zinc-300 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
       <button
+        type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
       >
-        <span className={expanded ? 'text-zinc-500' : 'text-blue-600 dark:text-blue-400'}>
-          {expanded ? '▾' : '▸'}
+        <span className={expanded ? "text-zinc-500" : "text-blue-600 dark:text-blue-400"}>
+          {expanded ? "▾" : "▸"}
         </span>
         <span className="shrink-0 font-medium">⚙ {toolName}</span>
         <span className="min-w-0 flex-1 break-words text-zinc-500 dark:text-zinc-400">{hint}</span>
         <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
-          {expanded ? 'hide' : 'details'}
+          {expanded ? "hide" : "details"}
         </span>
       </button>
       {expanded && (
         <div className="space-y-2 border-t border-zinc-200 px-3 py-2 dark:border-zinc-700">
           {args && (
             <div>
-              <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">Arguments</div>
+              <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+                Arguments
+              </div>
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-100 p-2 font-mono text-[11px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                 {JSON.stringify(args, null, 2)}
               </pre>
@@ -143,7 +147,9 @@ function ToolCallBlock({
           )}
           {result !== undefined && (
             <div>
-              <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">Result</div>
+              <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+                Result
+              </div>
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-100 p-2 font-mono text-[11px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                 {result}
               </pre>
@@ -161,13 +167,14 @@ function ReasoningBlock({ reasoning }: { reasoning: string }) {
   return (
     <div className="my-1.5 overflow-hidden rounded-md border border-dashed border-zinc-300 bg-zinc-50/60 dark:border-zinc-700 dark:bg-zinc-900/60">
       <button
+        type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-zinc-600 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
       >
-        <span>{expanded ? '▾' : '▸'}</span>
+        <span>{expanded ? "▾" : "▸"}</span>
         <span className="italic">Reasoning</span>
         <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
-          {expanded ? 'hide' : 'show'}
+          {expanded ? "hide" : "show"}
         </span>
       </button>
       {expanded && (
@@ -188,16 +195,19 @@ function ToolResultBlock({ message }: { message: Message }) {
   return (
     <div className="my-1.5 overflow-hidden rounded-md border border-zinc-300 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
       <button
+        type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
       >
-        <span className={expanded ? 'text-zinc-500' : 'text-emerald-600 dark:text-emerald-400'}>
-          {expanded ? '▾' : '▸'}
+        <span className={expanded ? "text-zinc-500" : "text-emerald-600 dark:text-emerald-400"}>
+          {expanded ? "▾" : "▸"}
         </span>
         <span className="shrink-0 text-emerald-600 dark:text-emerald-400">✓</span>
-        <span className="min-w-0 flex-1 break-words text-zinc-500 dark:text-zinc-400">{preview}</span>
+        <span className="min-w-0 flex-1 break-words text-zinc-500 dark:text-zinc-400">
+          {preview}
+        </span>
         <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
-          {expanded ? 'hide' : 'result'}
+          {expanded ? "hide" : "result"}
         </span>
       </button>
       {expanded && (
@@ -223,7 +233,7 @@ function AssistantMessage({ message }: { message: Message }) {
     try {
       await play(displayContent);
     } catch (error) {
-      console.error('TTS error:', error);
+      console.error("TTS error:", error);
     } finally {
       setIsPlaying(false);
     }
@@ -245,11 +255,12 @@ function AssistantMessage({ message }: { message: Message }) {
           <span>{formatTime(message.createdAt)}</span>
           {indicators.length > 0 && (
             <span className="text-xs" title="Emotive tags in speech">
-              {indicators.join(' ')}
+              {indicators.join(" ")}
             </span>
           )}
           {enabled && (
             <button
+              type="button"
               onClick={handlePlay}
               disabled={isPlaying}
               className="text-blue-600 hover:text-blue-800 disabled:text-zinc-400 dark:text-blue-400 dark:hover:text-blue-300 dark:disabled:text-zinc-600"
@@ -264,6 +275,7 @@ function AssistantMessage({ message }: { message: Message }) {
                   viewBox="0 0 24 24"
                   fill="currentColor"
                 >
+                  <title>Play message</title>
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
               )}
@@ -278,17 +290,21 @@ function AssistantMessage({ message }: { message: Message }) {
 function SystemCard({ message }: { message: Message }) {
   if (message.event) {
     const eventType = message.event.type;
-    if (eventType === 'delegation' || eventType === 'delegation_complete') {
+    if (eventType === "delegation" || eventType === "delegation_complete") {
       return <DelegationCard event={message.event} />;
     }
-    if (eventType === 'council_created' || eventType === 'council_message' || eventType === 'council_dissolved') {
+    if (
+      eventType === "council_created" ||
+      eventType === "council_message" ||
+      eventType === "council_dissolved"
+    ) {
       return <CouncilCard event={message.event} />;
     }
-    if (eventType === 'inbox_link') {
+    if (eventType === "inbox_link") {
       return <InboxLink event={message.event} />;
     }
   }
-  
+
   return (
     <div className="flex min-w-0 justify-center">
       <div className="min-w-0 max-w-[85%] break-words rounded border border-zinc-300 bg-zinc-100 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400">
@@ -307,33 +323,19 @@ export default function ChatStream() {
   const sessions = useSessionStore((s) => s.sessions);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
   const messages = activeSession?.messages ?? [];
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The message count is an intentional trigger for scrolling to the newest entry.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
-
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
-        <div className="text-red-400 text-sm">{error}</div>
-        <button
-          onClick={() => setError(null)}
-          className="px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
 
   if (!activeSessionId) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-zinc-400 dark:text-zinc-500">
-        Loading messages...
+        Create or reopen a session to start chatting.
       </div>
     );
   }
@@ -342,9 +344,9 @@ export default function ChatStream() {
     <div className="h-full overflow-x-hidden overflow-y-auto p-4">
       <div className="flex min-w-0 flex-col gap-3">
         {messages.map((message) => {
-          if (message.role === 'user') return <UserMessage key={message.id} message={message} />;
-          if (message.role === 'system') return <SystemCard key={message.id} message={message} />;
-          if (message.role === 'tool') {
+          if (message.role === "user") return <UserMessage key={message.id} message={message} />;
+          if (message.role === "system") return <SystemCard key={message.id} message={message} />;
+          if (message.role === "tool") {
             return (
               <div className="flex min-w-0 justify-start">
                 <div className="max-w-[80%] min-w-0 break-words">

@@ -1,5 +1,5 @@
-import type { Server as SocketIOServer } from "socket.io";
 import type { SessionData } from "@agent-harness/core";
+import type { Server as SocketIOServer } from "socket.io";
 
 export type AgentEventType =
   | "agent:started"

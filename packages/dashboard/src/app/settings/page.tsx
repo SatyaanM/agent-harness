@@ -1,16 +1,14 @@
-'use client';
+"use client";
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { SettingsForm } from '@/components/settings/SettingsForm';
-import { VoiceSettings } from '@/components/settings/VoiceSettings';
+import { SettingsForm } from "@/components/settings/SettingsForm";
+import { VoiceSettings } from "@/components/settings/VoiceSettings";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function SettingsPage() {
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-3 border-b bg-background">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">
-          Settings
-        </h2>
+        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">Settings</h2>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">

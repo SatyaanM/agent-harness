@@ -17,7 +17,8 @@ export class MessageBus {
 
     const pending = this.waiters.get(to);
     if (pending && pending.length > 0) {
-      const resolve = pending.shift()!;
+      const resolve = pending.shift();
+      if (!resolve) return;
       if (pending.length === 0) this.waiters.delete(to);
       resolve(msg);
       return;
@@ -41,7 +42,8 @@ export class MessageBus {
   awaitMessage(taskId: TaskId, timeout?: number): Promise<BusMessage> {
     const inbox = this.inboxes.get(taskId);
     if (inbox && inbox.length > 0) {
-      const msg = inbox.shift()!;
+      const msg = inbox.shift();
+      if (!msg) return Promise.reject(new Error("Inbox became empty while reading"));
       if (inbox.length === 0) this.inboxes.delete(taskId);
       return Promise.resolve(msg);
     }

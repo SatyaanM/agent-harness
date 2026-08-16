@@ -1,11 +1,19 @@
 import { v4 as uuidv4 } from "uuid";
-import type { AgentConfig, AgentResult } from "./types.js";
-import { Agent } from "./agent.js";
-import type { ToolRegistry } from "../tool/types.js";
-import type { LLMClient } from "../llm/client.js";
 import type { CapabilityRegistry } from "../capability/registry.js";
-import { SessionStore } from "../persistence/session.js";
+import type { LLMClient } from "../llm/client.js";
 import type { SessionData } from "../persistence/session.js";
+import { SessionStore } from "../persistence/session.js";
+import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
+import type { ToolRegistry } from "../tool/types.js";
+import { isRecord } from "../validation.js";
+import { Agent } from "./agent.js";
+import {
+  AgentBudgetExceededError,
+  AgentCancelledError,
+  type AgentConfig,
+  type AgentResult,
+  type Message,
+} from "./types.js";
 
 export type SessionRuntimeEvent =
   | { sessionId: string; type: "agent:started"; agentName: string }
@@ -37,6 +45,7 @@ export interface SessionRuntimeOptions {
   toolRegistry: ToolRegistry;
   llmClient: LLMClient;
   capabilityRegistry: CapabilityRegistry;
+  executionLimiter?: ExecutionLimiter;
   onEvent?: (event: SessionRuntimeEvent) => void;
 }
 
@@ -49,8 +58,15 @@ export class SessionRuntime {
   }
 
   /** Serialized delivery: only one run happens at a time per session. */
-  deliver(message?: string, agentName?: string): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName));
+  deliver(message?: string, agentName?: string, signal?: AbortSignal): Promise<AgentResult> {
+    const run = this.queue.then(() => this.runOnce(message, agentName, signal, false));
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Replay a user delivery already present in the durable transcript. */
+  retry(message: string, agentName?: string, signal?: AbortSignal): Promise<AgentResult> {
+    const run = this.queue.then(() => this.runOnce(message, agentName, signal, true));
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -59,7 +75,12 @@ export class SessionRuntime {
     this.options.onEvent?.({ sessionId: this.options.sessionId, ...event });
   }
 
-  private async runOnce(message?: string, agentName?: string): Promise<AgentResult> {
+  private async runOnce(
+    message?: string,
+    agentName?: string,
+    signal?: AbortSignal,
+    replayExistingUser = false,
+  ): Promise<AgentResult> {
     const now = new Date().toISOString();
 
     let session = await this.sessionStore.load(this.options.sessionId);
@@ -77,21 +98,46 @@ export class SessionRuntime {
     if (agentName) session.agentName = agentName;
     if (message) session.prompt = message;
 
+    const persistedHistory = [...session.messages];
+    let replayedUserIndex = -1;
+    if (replayExistingUser) {
+      for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
+        const candidate = persistedHistory[index];
+        if (candidate?.role === "user" && candidate.content === message) {
+          replayedUserIndex = index;
+          break;
+        }
+      }
+      if (replayedUserIndex === -1) {
+        throw new Error("Cannot retry a message that is not present in the session transcript");
+      }
+    }
+
     // History handed to the agent = the loaded transcript + the delivered
     // mailbox completions. The new user prompt is NOT included: agent.run
     // re-adds it as the prompt itself, so it must be the last thing the model
-    // sees.
-    const baseHistory = [...session.messages];
+    // sees. A retry removes the already-durable copy only from model context;
+    // the persisted transcript keeps that single audit record.
+    const baseHistory =
+      replayedUserIndex === -1
+        ? persistedHistory
+        : [
+            ...persistedHistory.slice(0, replayedUserIndex),
+            ...persistedHistory.slice(replayedUserIndex + 1),
+          ];
 
-    if (message) {
-      session.messages.push({ role: "user", content: message, createdAt: now });
-    }
-
-    // Atomically drain the durable mailbox — the entire batch is delivered
-    // together (ADR §10.9). Messages are removed from the log only on delivery.
-    const delivered = await this.sessionStore.drainMailbox(this.options.sessionId);
-    session.mailbox = [];
-    const deliveredSystem = delivered.map((p) => ({
+    // Materialize before acknowledgement. If the process fails after the
+    // transcript save but before acknowledgement, taskId makes recovery
+    // idempotent and prevents duplicate system messages.
+    const pending = await this.sessionStore.peekMailbox(this.options.sessionId);
+    const materializedTaskIds = new Set(
+      baseHistory.flatMap((existing) => {
+        if (!isRecord(existing.meta) || existing.meta.kind !== "worker_completed") return [];
+        return typeof existing.meta.taskId === "string" ? [existing.meta.taskId] : [];
+      }),
+    );
+    const delivered = pending.filter((entry) => !materializedTaskIds.has(entry.taskId));
+    const deliveredSystem: Message[] = delivered.map((p) => ({
       role: "system" as const,
       content:
         `Worker "${p.agentName}" (task ${p.taskId}) ` +
@@ -113,12 +159,24 @@ export class SessionRuntime {
         summary: p.summary,
       },
     }));
-    if (delivered.length > 0) {
-      session.messages.push(...deliveredSystem);
-    }
+    session.messages = [
+      ...persistedHistory,
+      ...deliveredSystem,
+      ...(message && !replayExistingUser
+        ? [{ role: "user" as const, content: message, createdAt: now }]
+        : []),
+    ];
+    session.mailbox = pending;
     await this.sessionStore.save(session);
+    if (pending.length > 0) {
+      await this.sessionStore.acknowledgeMailbox(
+        this.options.sessionId,
+        pending.map((entry) => entry.taskId),
+      );
+      session.mailbox = [];
+    }
 
-    if (!message && delivered.length === 0) {
+    if (!message && deliveredSystem.length === 0) {
       return {
         status: "success",
         summary: "",
@@ -134,6 +192,7 @@ export class SessionRuntime {
       ? agentConfig.tools
       : agentConfig.tools.filter((t) => t !== "delegate");
     const runConfig = { ...agentConfig, tools: runTools };
+    let latestRunMessages: Message[] | undefined;
     const agent = new Agent(
       runConfig,
       this.options.toolRegistry,
@@ -141,6 +200,7 @@ export class SessionRuntime {
       this.options.capabilityRegistry,
       (e) => {
         if (e.type === "step") {
+          latestRunMessages = e.messages;
           // Live update: emit the session with the messages produced so far,
           // so the chat fills in as the agent works instead of all at once.
           const liveAppended = e.messages
@@ -166,13 +226,43 @@ export class SessionRuntime {
       },
     );
 
-    this.emit({ type: "agent:started", agentName: agentConfig.name });
-
     let result: AgentResult;
     try {
-      result = await agent.run(message, [...baseHistory, ...deliveredSystem]);
+      const execute = () => {
+        this.emit({ type: "agent:started", agentName: agentConfig.name });
+        return agent.run(message, [...baseHistory, ...deliveredSystem], signal);
+      };
+      result = this.options.executionLimiter
+        ? await this.options.executionLimiter.run(execute, signal)
+        : await execute();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const partial = (latestRunMessages ?? [])
+        .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
+        .map((entry) => ({ ...entry, createdAt: entry.createdAt ?? new Date().toISOString() }));
+      session.messages.push(...partial);
+      session.result = {
+        status:
+          error instanceof AgentCancelledError
+            ? "cancelled"
+            : error instanceof AgentBudgetExceededError
+              ? "budgetExceeded"
+              : "error",
+        summary: errorMessage,
+      };
+      session.completedAt = new Date().toISOString();
+      try {
+        await this.sessionStore.save(session);
+        this.emit({ type: "session:updated", session });
+      } catch (persistenceError) {
+        const persistenceMessage =
+          persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
+        this.emit({
+          type: "agent:error",
+          agentName: agentConfig.name,
+          error: `Failed to persist partial run: ${persistenceMessage}`,
+        });
+      }
       this.emit({ type: "agent:error", agentName: agentConfig.name, error: errorMessage });
       throw error;
     }
@@ -182,12 +272,12 @@ export class SessionRuntime {
     // audit of what the agent did. Slice off the history that was passed in
     // (baseHistory + deliveredSystem + the prompt agent.run re-added), keeping
     // only the messages this run actually produced.
-    const appended = result.messages.slice(
-      baseHistory.length + deliveredSystem.length + (message ? 1 : 0)
-    ).map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
+    const appended = result.messages
+      .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
+      .map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
     session.messages.push(...appended);
     session.result = { status: result.status, summary: result.summary };
-    session.completedAt = now;
+    session.completedAt = new Date().toISOString();
 
     await this.sessionStore.save(session);
 

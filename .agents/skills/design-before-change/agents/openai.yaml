@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Before Change"
+  short_description: "Resolve designs before implementation"
+  default_prompt: "Use $design-before-change to define a bounded design for this change before implementation."

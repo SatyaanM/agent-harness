@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test-Driven Development"
+  short_description: "Implement behavior with red-green-refactor"
+  default_prompt: "Use $test-driven-development to implement this behavior through focused red-green-refactor cycles."

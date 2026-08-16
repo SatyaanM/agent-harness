@@ -1,9 +1,9 @@
-import { generateText, type LanguageModel } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
-import type { LLMClient, LLMChatParams, LLMResponse } from "./client.js";
+import { createOpenAI } from "@ai-sdk/openai";
+import { generateText } from "ai";
 import type { Message } from "../agent/types.js";
 import type { Config } from "../config.js";
+import type { LLMChatParams, LLMClient, LLMResponse } from "./client.js";
 
 // Models that use Anthropic-compatible endpoint
 const ANTHROPIC_MODELS = new Set([
@@ -16,25 +16,15 @@ const ANTHROPIC_MODELS = new Set([
 ]);
 
 function getModelProvider(modelId: string, config: Config) {
-  console.log("[llm] getModelProvider called with:", { modelId, PROVIDER_ENDPOINT: config.PROVIDER_ENDPOINT });
-
   // Strip "opencode-go/" prefix if present
   const cleanModelId = modelId.startsWith("opencode-go/")
     ? modelId.slice("opencode-go/".length)
     : modelId;
 
   const isAnthropic = ANTHROPIC_MODELS.has(cleanModelId);
-  console.log("[llm] Model routing:", { cleanModelId, isAnthropic, originalModelId: modelId });
 
   if (isAnthropic) {
     const apiKey = process.env[config.API_KEY_ENV] ?? "";
-    console.log("[llm] Creating Anthropic provider:", {
-      baseURL: config.PROVIDER_ENDPOINT,
-      apiKeySet: !!apiKey,
-      apiKeyLength: apiKey.length,
-      modelPassedToSDK: cleanModelId,
-      expectedUrl: `${config.PROVIDER_ENDPOINT}/messages`,
-    });
     const provider = createAnthropic({
       baseURL: config.PROVIDER_ENDPOINT,
       apiKey,
@@ -42,13 +32,6 @@ function getModelProvider(modelId: string, config: Config) {
     return { model: provider(cleanModelId), isAnthropic: true };
   } else {
     const apiKey = process.env[config.API_KEY_ENV] ?? "";
-    console.log("[llm] Creating OpenAI provider:", {
-      baseURL: config.PROVIDER_ENDPOINT,
-      apiKeySet: !!apiKey,
-      apiKeyLength: apiKey.length,
-      modelPassedToSDK: cleanModelId,
-      expectedUrl: `${config.PROVIDER_ENDPOINT}/chat/completions`,
-    });
     const provider = createOpenAI({
       baseURL: config.PROVIDER_ENDPOINT,
       apiKey,
@@ -60,21 +43,11 @@ function getModelProvider(modelId: string, config: Config) {
 export function createVercelAILLMClient(config: Config): LLMClient {
   return {
     async chat(params: LLMChatParams): Promise<LLMResponse> {
-      console.log("[llm] chat() called with:", {
-        model: params.model,
-        messageCount: params.messages.length,
-        hasTools: !!params.tools,
-        toolCount: params.tools?.length ?? 0,
-        systemPromptLength: params.system?.length ?? 0,
-      });
-
-      const { model, isAnthropic } = getModelProvider(params.model, config);
+      const { model } = getModelProvider(params.model, config);
 
       const systemParts = [
         params.system,
-        ...params.messages
-          .filter((m) => m.role === "system")
-          .map((m) => m.content),
+        ...params.messages.filter((m) => m.role === "system").map((m) => m.content),
       ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
       const instructions = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
 
@@ -92,78 +65,76 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           )
         : undefined;
 
-      console.log("[llm] Tools being passed to generateText:", tools ? Object.keys(tools) : "none");
-      if (tools) {
-        console.log("[llm] Tool details:", Object.entries(tools).map(([name, def]) => ({
-          name,
-          description: (def as any).description,
-          hasSchema: !!(def as any).inputSchema,
-          schemaType: typeof (def as any).inputSchema,
-        })));
-        
-        // Log the first tool's schema structure
-        const firstTool = Object.entries(tools)[0];
-        if (firstTool) {
-          const [toolName, toolDef] = firstTool;
-          console.log("[llm] First tool schema:", {
-            name: toolName,
-            schemaKeys: Object.keys(toolDef as any),
-          });
-        }
-      }
+      const result = await generateText({
+        model,
+        messages,
+        ...(instructions ? { instructions } : {}),
+        ...(tools ? { tools } : {}),
+        ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
+        ...(params.signal ? { abortSignal: params.signal } : {}),
+      });
+      const resultWithReasoning = optionalRecord(result);
 
-      console.log("[llm] Calling generateText...");
-      try {
-        const result = await generateText({
-          model,
-          messages,
-          ...(instructions ? { instructions } : {}),
-          ...(tools ? { tools } : {}),
-          ...(params.signal ? { signal: params.signal } : {}),
-        });
-        console.log("[llm] generateText succeeded:", {
-          finishReason: result.finishReason,
-          textLength: result.text?.length,
-          hasReasoning: !!(result as any).reasoning,
-        });
+      const responseText = result.text;
+      const rawReasoning = resultWithReasoning.reasoning ?? resultWithReasoning.reasoning_content;
+      const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
+      const toolCalls = result.toolCalls?.length
+        ? result.toolCalls.map((tc) => ({
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+            args: requireRecord(tc.input, `tool call ${tc.toolCallId} input`),
+          }))
+        : undefined;
 
-        // Handle reasoning models: extract text from reasoning if content is empty
-        let responseText = result.text;
-        const rawReasoning = (result as any).reasoning || (result as any).reasoning_content;
-        const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
-        if (!responseText || responseText.trim().length === 0) {
-          if (reasoning) {
-            console.log("[llm] Using reasoning as text:", { reasoningLength: reasoning.length });
-            responseText = reasoning;
-          }
-        }
+      const message: Message = {
+        role: "assistant",
+        content: responseText || "",
+        ...(reasoning ? { reasoning } : {}),
+        ...(toolCalls ? { toolCalls } : {}),
+      };
 
-        const toolCalls = result.toolCalls?.length
-          ? result.toolCalls.map((tc) => ({
-              toolCallId: tc.toolCallId,
-              toolName: tc.toolName,
-              args: tc.input as Record<string, unknown>,
-            }))
-          : undefined;
-
-        const message: Message = {
-          role: "assistant",
-          content: responseText || "",
-          ...(reasoning ? { reasoning } : {}),
-          ...(toolCalls ? { toolCalls } : {}),
-        };
-
-        return {
-          message,
-          finishReason: result.finishReason === "tool-calls" ? "tool-calls" : "stop",
-          ...(toolCalls ? { toolCalls } : {}),
-        };
-      } catch (err) {
-        console.error("[llm] generateText failed:", err);
-        throw err;
-      }
+      return {
+        message,
+        finishReason: mapFinishReason(result.finishReason),
+        ...(toolCalls ? { toolCalls } : {}),
+        usage: {
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          totalTokens: result.usage.totalTokens,
+        },
+      };
     },
   };
+}
+
+function mapFinishReason(
+  finishReason: string,
+): "stop" | "tool-calls" | "length" | "content-filter" | "error" | "other" {
+  switch (finishReason) {
+    case "stop":
+    case "tool-calls":
+    case "length":
+    case "content-filter":
+    case "error":
+      return finishReason;
+    default:
+      return "other";
+  }
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function requireRecord(value: unknown, boundary: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid provider response: ${boundary} must be an object`);
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function convertMessages(messages: Message[]) {
@@ -171,47 +142,49 @@ function convertMessages(messages: Message[]) {
     .filter((msg) => msg.role !== "system")
     .map((msg, index, arr) => {
       switch (msg.role) {
-      case "user":
-        return { role: "user" as const, content: msg.content };
+        case "user":
+          return { role: "user" as const, content: msg.content };
 
-      case "assistant":
-        if (msg.toolCalls?.length) {
+        case "assistant":
+          if (msg.toolCalls?.length) {
+            return {
+              role: "assistant" as const,
+              content: [
+                { type: "text" as const, text: msg.content || "" },
+                ...msg.toolCalls.map((tc) => ({
+                  type: "tool-call" as const,
+                  toolCallId: tc.toolCallId,
+                  toolName: tc.toolName,
+                  input: tc.args,
+                })),
+              ],
+            };
+          }
+          return { role: "assistant" as const, content: msg.content };
+
+        case "tool": {
+          if (!msg.toolCallId) {
+            throw new Error("Tool messages must include a toolCallId");
+          }
+          const toolCallId = msg.toolCallId;
+          const toolName = findToolName(toolCallId, arr.slice(0, index));
           return {
-            role: "assistant" as const,
+            role: "tool" as const,
             content: [
-              { type: "text" as const, text: msg.content || "" },
-              ...msg.toolCalls.map((tc) => ({
-                type: "tool-call" as const,
-                toolCallId: tc.toolCallId,
-                toolName: tc.toolName,
-                input: tc.args,
-              })),
+              {
+                type: "tool-result" as const,
+                toolCallId,
+                toolName: toolName ?? "unknown",
+                output: {
+                  type: "text" as const,
+                  value: msg.content,
+                },
+              },
             ],
           };
         }
-        return { role: "assistant" as const, content: msg.content };
-
-      case "tool": {
-        const toolName = findToolName(msg.toolCallId!, arr.slice(0, index));
-        return {
-          role: "tool" as const,
-          content: [
-            {
-              type: "tool-result" as const,
-              toolCallId: msg.toolCallId!,
-              toolName: toolName ?? "unknown",
-              output: {
-                type: "text" as const,
-                value: msg.content,
-              },
-            },
-          ],
-        };
       }
-
-      default:
-        return { role: "user" as const, content: msg.content };
-      }
+      throw new Error("Unsupported message role");
     });
 }
 

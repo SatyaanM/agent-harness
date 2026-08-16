@@ -1,70 +1,65 @@
 import type { CapabilityMatrix } from "../agent/types.js";
-import type { ModelsDevResponse } from "./types.js";
+import { parseJsonResponseBoundary } from "../contracts/http.js";
+import { type ModelsDevResponse, ModelsDevResponseSchema } from "./types.js";
 
 const API_URL = "https://models.dev/api.json";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
+const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_RESPONSE_BYTES = 5_000_000;
 
 let cachedApi: ModelsDevResponse | null = null;
 let fetchFailed = false;
+let pendingFetch: Promise<ModelsDevResponse | null> | null = null;
 
 function isTransientError(status: number | undefined): boolean {
   if (!status) return true;
   return status === 429 || status === 502 || status === 503 || status === 504;
 }
 
-async function fetchWithRetry(url: string, attempt: number): Promise<Response> {
-  const res = await fetch(url);
-  if (!res.ok && isTransientError(res.status) && attempt < MAX_RETRIES) {
-    const delay = BASE_DELAY_MS * Math.pow(2, attempt);
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    return fetchWithRetry(url, attempt + 1);
-  }
-  return res;
-}
-
 async function fetchApi(): Promise<ModelsDevResponse | null> {
   if (fetchFailed) return null;
   if (cachedApi) return cachedApi;
-  try {
-    const res = await fetchWithRetry(API_URL, 0);
-    if (!res.ok) {
-      fetchFailed = true;
-      return null;
-    }
-    cachedApi = (await res.json()) as ModelsDevResponse;
-    return cachedApi;
-  } catch {
-    if (fetchFailed) return null;
-    try {
-      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        const delay = BASE_DELAY_MS * Math.pow(2, attempt);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+  if (!pendingFetch) {
+    pendingFetch = (async () => {
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        const delay = BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1);
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+        let response: Response;
         try {
-          const res = await fetch(API_URL);
-          if (res.ok) {
-            cachedApi = (await res.json()) as ModelsDevResponse;
-            return cachedApi;
-          }
-          if (!isTransientError(res.status)) break;
+          response = await fetch(API_URL, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
         } catch {
-          if (attempt === MAX_RETRIES - 1) {
-            fetchFailed = true;
-            return null;
+          continue;
+        }
+        if (response.ok) {
+          try {
+            cachedApi = await parseJsonResponseBoundary(
+              response,
+              ModelsDevResponseSchema,
+              "models.dev response",
+              MAX_RESPONSE_BYTES,
+            );
+            return cachedApi;
+          } catch {
+            break;
           }
         }
+        await response.body?.cancel();
+        if (!isTransientError(response.status)) break;
       }
-    } catch {
       fetchFailed = true;
-    }
-    fetchFailed = true;
-    return null;
+      return null;
+    })().finally(() => {
+      pendingFetch = null;
+    });
   }
+  return pendingFetch;
 }
 
 export function resetModelsDevCache(): void {
   cachedApi = null;
   fetchFailed = false;
+  pendingFetch = null;
 }
 
 function normalizeId(s: string): string {
@@ -79,19 +74,25 @@ export async function fetchCapabilities(
   const api = await fetchApi();
   if (!api) return null;
 
-  const candidates = [
-    correlatedId,
-    `${provider}/${model}`,
-    model,
-  ].map(normalizeId);
+  const candidates = [correlatedId, `${provider}/${model}`, model].map(normalizeId);
 
-  let entry: ModelsDevResponse[string] | undefined;
-  for (const key of Object.keys(api)) {
-    const normalized = normalizeId(key);
-    if (candidates.includes(normalized) || candidates.includes(normalizeId(key.split("/").pop() ?? ""))) {
-      entry = api[key];
-      break;
+  let entry: ModelsDevResponse[string]["models"][string] | undefined;
+  for (const [providerKey, providerEntry] of Object.entries(api)) {
+    for (const [modelKey, modelEntry] of Object.entries(providerEntry.models)) {
+      const identifiers = [
+        modelKey,
+        `${providerKey}/${modelKey}`,
+        modelEntry.id,
+        modelEntry.id ? `${providerKey}/${modelEntry.id}` : undefined,
+      ]
+        .filter((identifier): identifier is string => identifier !== undefined)
+        .map(normalizeId);
+      if (identifiers.some((identifier) => candidates.includes(identifier))) {
+        entry = modelEntry;
+        break;
+      }
     }
+    if (entry) break;
   }
 
   if (!entry) return null;

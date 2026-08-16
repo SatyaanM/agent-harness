@@ -1,9 +1,9 @@
-export { Agent } from "./agent/agent.js";
 export type { AgentEventCallback } from "./agent/agent.js";
-export { Worker } from "./agent/worker.js";
-export type { WorkerResult } from "./agent/worker.js";
-export { SessionRuntime } from "./agent/session-runtime.js";
+export { Agent } from "./agent/agent.js";
+export type { DelegationDeps } from "./agent/delegation.js";
+export { createDelegateTool, createReadSessionTool } from "./agent/delegation.js";
 export type { SessionRuntimeEvent, SessionRuntimeOptions } from "./agent/session-runtime.js";
+export { SessionRuntime } from "./agent/session-runtime.js";
 export type {
   AgentConfig,
   AgentResult,
@@ -12,83 +12,111 @@ export type {
   TaskId,
   ToolCall,
 } from "./agent/types.js";
-export { AgentCancelledError } from "./agent/types.js";
-
-export type {
-  LLMChatParams,
-  LLMClient,
-  LLMResponse,
-  LLMToolDefinition,
-} from "./llm/client.js";
-export { createVercelAILLMClient } from "./llm/vercel-ai.js";
-
-export type { Tool, ToolRegistry as IToolRegistry } from "./tool/types.js";
-export { ToolRegistry } from "./tool/registry.js";
-export { createReadFileTool } from "./tool/readFile.js";
-export { createWriteFileTool } from "./tool/writeFile.js";
-export { createEditFileTool } from "./tool/editFile.js";
-export { createListDirectoryTool } from "./tool/listDirectory.js";
-export { globTool } from "./tool/glob.js";
-export { grepTool } from "./tool/grep.js";
-export { runCommandTool } from "./tool/runCommand.js";
-export { webFetchTool } from "./tool/webFetch.js";
-
+export {
+  AgentBudgetExceededError,
+  AgentCancelledError,
+  AgentConfigSchema,
+  AgentResultSchema,
+  CapabilityMatrixSchema,
+  MessageSchema,
+  TaskIdSchema,
+  ToolCallSchema,
+} from "./agent/types.js";
+export type { WorkerResult } from "./agent/worker.js";
+export { Worker } from "./agent/worker.js";
+export type { RegistryOptions } from "./capability/registry.js";
+export { CapabilityRegistry } from "./capability/registry.js";
 export type {
   AgentConfigRef,
   CapabilityEntry,
   ModelsDevResponse,
   RegistryEntry,
 } from "./capability/types.js";
-export { CapabilityRegistry } from "./capability/registry.js";
-export type { RegistryOptions } from "./capability/registry.js";
-export { CapabilityCache } from "./persistence/capability-cache.js";
-
-export { getConfig, resetConfig } from "./config.js";
-export type { Config } from "./config.js";
-
-export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
-export { SessionStore } from "./persistence/session.js";
-export type { SessionData, PendingMessage } from "./persistence/session.js";
-export type { SessionMeta } from "./persistence/session-index.js";
-
-export { Orchestrator } from "./agent/orchestrator.js";
-export { createDelegateTool, createReadSessionTool } from "./agent/delegation.js";
-export type { DelegationDeps } from "./agent/delegation.js";
-
-export { MessageBus, messageBus } from "./collaboration/message-bus.js";
-export type { BusMessage } from "./collaboration/message-bus.js";
-
-export { callSupervisor } from "./collaboration/supervision.js";
-export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supervision.js";
-
-export { Council, CouncilManager } from "./collaboration/council.js";
 export type { CouncilMessage } from "./collaboration/council.js";
-
-export { InboxManager } from "./presentation/inbox.js";
-export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js";
-
+export { Council, CouncilManager } from "./collaboration/council.js";
+export type { BusMessage } from "./collaboration/message-bus.js";
+export { MessageBus, messageBus } from "./collaboration/message-bus.js";
+export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supervision.js";
+export { callSupervisor } from "./collaboration/supervision.js";
+export type { Config } from "./config.js";
+export { ConfigSchema, getConfig, getConfigRoot, resetConfig } from "./config.js";
+export { parseJsonResponseBoundary, readResponseTextBounded } from "./contracts/http.js";
 export {
-  PluginManifestSchema,
-  InboxRendererManifestSchema,
-  PluginCommandManifestSchema,
-} from "./plugin/types.js";
+  MAX_INBOX_FILE_BYTES,
+  MAX_INBOX_FILE_REQUEST_BYTES,
+  MAX_INBOX_FILE_RESPONSE_BYTES,
+  MAX_SESSION_MAILBOX_BYTES,
+  MAX_SESSION_METADATA_RESPONSE_BYTES,
+  MAX_SESSION_RESPONSE_BYTES,
+  MAX_SESSION_TRANSCRIPT_BYTES,
+} from "./contracts/limits.js";
+export {
+  readFileBounded,
+  readUtf8FileBounded,
+  readUtf8FileBoundedSync,
+  stringifyJsonBounded,
+} from "./filesystem/bounded-io.js";
 export type {
-  PluginManifest,
+  LLMChatParams,
+  LLMClient,
+  LLMResponse,
+  LLMToolDefinition,
+  LLMUsage,
+} from "./llm/client.js";
+export { LLMResponseSchema, LLMUsageSchema } from "./llm/client.js";
+export { createVercelAILLMClient } from "./llm/vercel-ai.js";
+export { CapabilityCache } from "./persistence/capability-cache.js";
+export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
+export type { PendingMessage, SessionData } from "./persistence/session.js";
+export { PendingMessageSchema, SessionDataSchema, SessionStore } from "./persistence/session.js";
+export type { SessionMeta } from "./persistence/session-index.js";
+export type {
   InboxRendererManifest,
   PluginCommandManifest,
+  PluginManifest,
 } from "./plugin/types.js";
-
-export type {
-  TTSConfig,
-  ParaphraseConfig,
-  ChunkerConfig,
-  AudioChunk,
-  TTSProvider,
-  ParaphraseResult,
-} from "./tts/types.js";
-export { GEMINI_VOICES, TAG_INDICATORS } from "./tts/types.js";
-export type { GeminiVoiceName } from "./tts/types.js";
+export {
+  InboxRendererManifestSchema,
+  PluginCommandManifestSchema,
+  PluginIdentifierSchema,
+  PluginManifestSchema,
+} from "./plugin/types.js";
+export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js";
+export { InboxManager } from "./presentation/inbox.js";
+export type { ExecutionLimiterSnapshot } from "./runtime/execution-limiter.js";
+export { ExecutionLimiter, ExecutionQueueFullError } from "./runtime/execution-limiter.js";
+export { createEditFileTool } from "./tool/editFile.js";
+export { globTool } from "./tool/glob.js";
+export { grepTool } from "./tool/grep.js";
+export { createListDirectoryTool } from "./tool/listDirectory.js";
+export { createReadFileTool } from "./tool/readFile.js";
+export { ToolRegistry } from "./tool/registry.js";
+export { runCommandTool } from "./tool/runCommand.js";
+export type { Tool, ToolExecutionContext, ToolRegistry as IToolRegistry } from "./tool/types.js";
+export {
+  assertCreatablePathWithinRoot,
+  assertExistingPathWithinRoot,
+  assertWithinRoot,
+} from "./tool/utils.js";
+export { webFetchTool } from "./tool/webFetch.js";
+export { createWriteFileTool } from "./tool/writeFile.js";
+export type { SpeechChunker } from "./tts/chunker.js";
+export { createSpeechChunker } from "./tts/chunker.js";
 export { createGeminiTTSProvider } from "./tts/gemini.js";
 export { paraphrase } from "./tts/paraphrase.js";
-export { createSpeechChunker } from "./tts/chunker.js";
-export type { SpeechChunker } from "./tts/chunker.js";
+export type {
+  AudioChunk,
+  ChunkerConfig,
+  GeminiVoiceName,
+  ParaphraseConfig,
+  ParaphraseResult,
+  TTSConfig,
+  TTSProvider,
+} from "./tts/types.js";
+export { GEMINI_VOICES, TAG_INDICATORS } from "./tts/types.js";
+export {
+  BoundaryValidationError,
+  isRecord,
+  parseBoundary,
+  parseJsonBoundary,
+} from "./validation.js";

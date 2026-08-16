@@ -1,6 +1,11 @@
+import { parseJsonResponseBoundary } from "@agent-harness/core/contracts";
+import { z } from "zod";
+
 export type PlaybackState = "idle" | "playing" | "paused";
 
-const TTS_BASE_URL = "http://localhost:3001";
+const TTS_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const MAX_AUDIO_BYTES = 25_000_000;
+const TTSErrorSchema = z.object({ error: z.string().optional() }).passthrough();
 
 export interface TTSPlayer {
   play(text: string, options?: TTSPlayOptions): Promise<void>;
@@ -27,13 +32,17 @@ export function createTTSPlayer(): TTSPlayer {
   let audioContext: AudioContext | null = null;
   let currentSource: AudioBufferSourceNode | null = null;
   let state: PlaybackState = "idle";
-  let stateCallbacks: Array<(state: PlaybackState) => void> = [];
+  const stateCallbacks: Array<(state: PlaybackState) => void> = [];
   let audioQueue: AudioQueueItem[] = [];
   let isPlaying = false;
+  let requestController: AbortController | null = null;
+  let playbackGeneration = 0;
 
   function notifyStateChange(newState: PlaybackState) {
     state = newState;
-    stateCallbacks.forEach((cb) => cb(newState));
+    stateCallbacks.forEach((callback) => {
+      callback(newState);
+    });
   }
 
   function getAudioContext(): AudioContext {
@@ -45,7 +54,7 @@ export function createTTSPlayer(): TTSPlayer {
 
   async function decodeAudioChunk(
     pcmData: ArrayBuffer,
-    sampleRate: number = 24000
+    sampleRate: number = 24000,
   ): Promise<AudioBuffer> {
     const ctx = getAudioContext();
     // Convert Int16 PCM to Float32 for Web Audio API
@@ -64,7 +73,11 @@ export function createTTSPlayer(): TTSPlayer {
     if (isPlaying || audioQueue.length === 0) return;
 
     isPlaying = true;
-    const item = audioQueue.shift()!;
+    const item = audioQueue.shift();
+    if (!item) {
+      isPlaying = false;
+      return;
+    }
     const ctx = getAudioContext();
 
     const source = ctx.createBufferSource();
@@ -90,14 +103,10 @@ export function createTTSPlayer(): TTSPlayer {
   function addFadeEnvelope(
     buffer: AudioBuffer,
     fadeInMs: number = 5,
-    fadeOutMs: number = 5
+    fadeOutMs: number = 5,
   ): AudioBuffer {
     const ctx = getAudioContext();
-    const newBuffer = ctx.createBuffer(
-      buffer.numberOfChannels,
-      buffer.length,
-      buffer.sampleRate
-    );
+    const newBuffer = ctx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
 
     const fadeInSamples = Math.floor((fadeInMs / 1000) * buffer.sampleRate);
     const fadeOutSamples = Math.floor((fadeOutMs / 1000) * buffer.sampleRate);
@@ -123,6 +132,9 @@ export function createTTSPlayer(): TTSPlayer {
   return {
     async play(text: string, options?: TTSPlayOptions): Promise<void> {
       this.stop();
+      const generation = playbackGeneration;
+      const controller = new AbortController();
+      requestController = controller;
 
       try {
         const response = await fetch(`${TTS_BASE_URL}/api/tts`, {
@@ -136,25 +148,42 @@ export function createTTSPlayer(): TTSPlayer {
             tagStyle: options?.tagStyle ?? "balanced",
             customTagInstructions: options?.customTagInstructions || "",
           }),
+          signal: controller.signal,
         });
 
         if (!response.ok) {
-          const error = await response.json();
+          const error = await parseJsonResponseBoundary(
+            response,
+            TTSErrorSchema,
+            "TTS error response",
+            64_000,
+          );
           throw new Error(error.error || "TTS request failed");
+        }
+
+        const declaredLength = Number(response.headers.get("content-length"));
+        if (Number.isFinite(declaredLength) && declaredLength > MAX_AUDIO_BYTES) {
+          await response.body?.cancel();
+          throw new Error("TTS audio exceeds maximum size");
         }
 
         const reader = response.body?.getReader();
         if (!reader) throw new Error("No response body");
 
         const chunks: Uint8Array[] = [];
+        let totalLength = 0;
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           chunks.push(value);
+          totalLength += value.byteLength;
+          if (totalLength > MAX_AUDIO_BYTES) {
+            await reader.cancel();
+            throw new Error("TTS audio exceeds maximum size");
+          }
         }
 
         // Combine all chunks into a single buffer
-        const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
         const combinedBuffer = new Uint8Array(totalLength);
         let offset = 0;
         for (const chunk of chunks) {
@@ -165,17 +194,24 @@ export function createTTSPlayer(): TTSPlayer {
         // Decode and add to queue
         const audioBuffer = await decodeAudioChunk(combinedBuffer.buffer);
         const fadedBuffer = addFadeEnvelope(audioBuffer);
+        if (generation !== playbackGeneration) return;
         audioQueue.push({ buffer: fadedBuffer });
 
         playFromQueue();
       } catch (error) {
+        if (generation !== playbackGeneration) return;
         console.error("[TTS Player] Error:", error);
         notifyStateChange("idle");
         throw error;
+      } finally {
+        if (generation === playbackGeneration) requestController = null;
       }
     },
 
     stop(): void {
+      playbackGeneration += 1;
+      requestController?.abort();
+      requestController = null;
       if (currentSource) {
         currentSource.stop();
         currentSource = null;

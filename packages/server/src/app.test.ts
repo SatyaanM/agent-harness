@@ -1,6 +1,21 @@
+import { resetConfig, SessionRuntime } from "@agent-harness/core";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
+import { sessionManager } from "./session-manager.js";
+
+const ORIGINAL_GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const ORIGINAL_OPENCODE_API_KEY = process.env.OPENCODE_API_KEY;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  resetConfig();
+  if (ORIGINAL_GEMINI_API_KEY === undefined) delete process.env.GEMINI_API_KEY;
+  else process.env.GEMINI_API_KEY = ORIGINAL_GEMINI_API_KEY;
+  if (ORIGINAL_OPENCODE_API_KEY === undefined) delete process.env.OPENCODE_API_KEY;
+  else process.env.OPENCODE_API_KEY = ORIGINAL_OPENCODE_API_KEY;
+});
 
 describe("GET /api/health", () => {
   it("returns status ok", async () => {
@@ -8,5 +23,277 @@ describe("GET /api/health", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: "ok" });
+  });
+
+  it("reports bounded runtime execution metrics", async () => {
+    const res = await request(createApp()).get("/api/metrics");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      agentExecutions: expect.objectContaining({ active: 0, limit: 10, queued: 0 }),
+      loadedSessions: expect.any(Number),
+      activeWorkers: expect.any(Number),
+    });
+  });
+});
+
+describe("request boundary validation", () => {
+  it("returns a stable 400 envelope for an invalid chat body", async () => {
+    const res = await request(createApp()).post("/api/chat").send({ sessionId: 42, message: "hi" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: {
+        code: "invalid_request",
+        message: "Request validation failed",
+        issues: [expect.objectContaining({ path: "sessionId" })],
+      },
+    });
+  });
+
+  it("rejects path-like agent identifiers before filesystem access", async () => {
+    const res = await request(createApp()).get("/api/agents/%5C..%5Csecret");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toEqual(
+      expect.objectContaining({ code: "invalid_request", message: "Request validation failed" }),
+    );
+  });
+
+  it("rejects incorrect plugin mutation types", async () => {
+    const res = await request(createApp()).put("/api/plugins/example").send({ enabled: "yes" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toEqual(expect.objectContaining({ code: "invalid_request" }));
+  });
+
+  it("accepts the dotted plugin-name grammar used by manifests", async () => {
+    const res = await request(createApp())
+      .put("/api/plugins/acme.renderer")
+      .send({ enabled: true });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Plugin "acme.renderer" not found');
+  });
+
+  it("returns a stable error for malformed JSON without exposing parser details", async () => {
+    const res = await request(createApp())
+      .post("/api/chat")
+      .set("Content-Type", "application/json")
+      .send('{"sessionId":');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: { code: "invalid_json", message: "Request body contains malformed JSON" },
+    });
+  });
+
+  it("returns a stable 413 envelope for oversized JSON", async () => {
+    const res = await request(createApp({ jsonLimit: "1kb" }))
+      .post("/api/chat")
+      .send({ sessionId: "safe-session", message: "x".repeat(2_000) });
+
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({
+      error: { code: "request_too_large", message: "Request body exceeds maximum size" },
+    });
+  });
+});
+
+describe("browser origin policy", () => {
+  it("allows configured dashboard origins", async () => {
+    const res = await request(createApp({ allowedOrigins: ["http://localhost:3000"] }))
+      .get("/api/health")
+      .set("Origin", "http://localhost:3000");
+
+    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
+  });
+
+  it("does not grant CORS access to an untrusted origin", async () => {
+    const res = await request(createApp({ allowedOrigins: ["http://localhost:3000"] }))
+      .get("/api/health")
+      .set("Origin", "https://attacker.example");
+
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+});
+
+describe("upstream trust boundaries", () => {
+  it("validates provider model responses before returning them", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ object: "list", data: [{ id: 42 }] }))),
+    );
+
+    const res = await request(createApp()).get("/api/settings/models");
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Failed to fetch models" });
+  });
+
+  it("does not return provider failure details to clients", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("provider-secret", { status: 500 })),
+    );
+
+    const res = await request(createApp()).get("/api/settings/models");
+
+    expect(res.status).toBe(502);
+    expect(res.text).not.toContain("provider-secret");
+  });
+
+  it("does not expose agent failures through the chat stream", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(sessionManager, "getOrCreate").mockImplementation(() => {
+      throw new Error("provider-secret");
+    });
+
+    const res = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "safe-session", message: "hello" });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("Agent request failed");
+    expect(res.text).not.toContain("provider-secret");
+  });
+
+  it("routes an explicit chat retry through replay delivery", async () => {
+    const retry = vi.spyOn(SessionRuntime.prototype, "retry").mockResolvedValue({
+      status: "success",
+      summary: "recovered",
+      messages: [{ role: "assistant", content: "recovered" }],
+    });
+    const deliver = vi.spyOn(SessionRuntime.prototype, "deliver");
+
+    const res = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "retry-session", message: "hello", retry: true });
+
+    expect(res.status).toBe(200);
+    expect(retry).toHaveBeenCalledWith("hello", undefined, expect.any(AbortSignal));
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("does not expose voice-provider failures", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    delete process.env.OPENCODE_API_KEY;
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("provider-secret", { status: 500 })),
+    );
+
+    const res = await request(createApp()).post("/api/tts").send({ text: "hello" });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Voice generation failed" });
+    expect(res.text).not.toContain("provider-secret");
+  });
+
+  it("preserves long unbroken agent summaries in the chat stream", async () => {
+    const summary = "x".repeat(100);
+    vi.spyOn(SessionRuntime.prototype, "deliver").mockResolvedValue({
+      status: "success",
+      summary,
+      messages: [{ role: "assistant", content: summary }],
+    });
+
+    const response = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "chunking-session", message: "hello" });
+
+    expect(response.status).toBe(200);
+    const emittedCharacters = Array.from(response.text.matchAll(/"text":"(x*)"/gu)).reduce(
+      (total, match) => total + (match[1]?.length ?? 0),
+      0,
+    );
+    expect(emittedCharacters).toBe(100);
+  });
+
+  it("aborts an in-flight run when the chat client disconnects", async () => {
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(SessionRuntime.prototype, "deliver").mockImplementation(
+      async (_message, _agentName, signal) => {
+        observedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("client disconnected")), {
+            once: true,
+          });
+        });
+      },
+    );
+    const pending = request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "disconnect-session", message: "hello" });
+    const completion = pending.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await vi.waitFor(() => expect(observedSignal).toBeDefined());
+
+    pending.abort();
+
+    await vi.waitFor(() => expect(observedSignal?.aborted).toBe(true));
+    await expect(completion).resolves.toBe("rejected");
+  });
+
+  it("includes the configured persona in the TTS narration prompt", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.OPENCODE_API_KEY = "paraphrase-key";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ choices: [{ message: { content: "spoken summary" } }] }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "audio/pcm", data: "AAA=" } }],
+              },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await request(createApp()).post("/api/tts").send({
+      text: "hello",
+      persona: "Warm professor",
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toContain("Warm professor");
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toContain("Warm professor");
+  });
+
+  it("falls back to the original narration when optional paraphrasing fails", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.OPENCODE_API_KEY = "paraphrase-key";
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error("paraphrase unavailable"))
+      .mockResolvedValueOnce(
+        Response.json({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "audio/pcm", data: "AAA=" } }],
+              },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await request(createApp()).post("/api/tts").send({ text: "original text" });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toContain("original text");
   });
 });

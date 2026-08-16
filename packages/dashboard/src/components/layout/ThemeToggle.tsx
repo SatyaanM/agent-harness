@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import { Sun, Moon } from 'lucide-react';
-import { useThemeStore } from '@/stores/theme-store';
-import { Button } from '@/components/ui/button';
+import { Moon, Sun } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useThemeStore } from "@/stores/theme-store";
 
 export function ThemeToggle() {
   const theme = useThemeStore((s) => s.theme);
@@ -13,10 +13,10 @@ export function ThemeToggle() {
       variant="ghost"
       size="icon"
       onClick={toggle}
-      title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       aria-label="Toggle color theme"
     >
-      {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+      {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </Button>
   );
 }

@@ -1,5 +1,9 @@
+import path from "node:path";
 import fs from "fs-extra";
-import path from "path";
+import { z } from "zod";
+import { SessionIdSchema } from "../contracts/session.js";
+import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded-io.js";
+import { parseJsonBoundary } from "../validation.js";
 import type { SessionData } from "./session.js";
 
 /**
@@ -28,10 +32,25 @@ export interface SessionMeta {
   messageCount: number;
 }
 
-interface SessionIndexFile {
-  version: 1;
-  sessions: Record<string, SessionMeta>;
-}
+const SessionMetaSchema = z
+  .object({
+    sessionId: SessionIdSchema,
+    title: z.string().max(512).optional(),
+    agentName: z.string().min(1).max(128).optional(),
+    prompt: z.string().max(1_000_000),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    messageCount: z.number().int().nonnegative().max(20_000),
+  })
+  .strict();
+const SessionIndexFileSchema = z
+  .object({
+    version: z.literal(1),
+    sessions: z.record(SessionMetaSchema).refine((value) => Object.keys(value).length <= 10_000),
+  })
+  .strict();
+type SessionIndexFile = z.infer<typeof SessionIndexFileSchema>;
+const MAX_SESSION_INDEX_BYTES = 10_000_000;
 
 function isWorkerSession(sessionId: string): boolean {
   return sessionId.startsWith("worker-");
@@ -67,11 +86,16 @@ export class IndexHandle {
       let state: SessionIndexFile = { version: 1, sessions: {} };
       try {
         if (await fs.pathExists(this.filePath)) {
-          const raw = JSON.parse(await fs.readFile(this.filePath, "utf-8"));
-          if (raw && raw.version === 1 && raw.sessions && typeof raw.sessions === "object") {
-            state = raw;
-            this.loaded = true;
-          }
+          state = parseJsonBoundary(
+            SessionIndexFileSchema,
+            await readUtf8FileBounded(
+              this.filePath,
+              MAX_SESSION_INDEX_BYTES,
+              "session metadata index",
+            ),
+            "session metadata index",
+          );
+          this.loaded = true;
         }
       } catch {
         // Corrupt or unreadable: start empty; it will be rebuilt on demand.
@@ -145,7 +169,10 @@ export class IndexHandle {
 
   private markDirty(): void {
     this.dirty = true;
-    void this.flush();
+    void this.flush().catch(() => {
+      this.dirty = true;
+      console.error("[session-index] Failed to persist derived metadata index");
+    });
   }
 
   /** Coalesced flush: many dirty upserts become one full-snapshot write. */
@@ -167,7 +194,11 @@ export class IndexHandle {
     const state = await this.ensureLoaded();
     const tmpPath = `${this.filePath}.tmp`;
     try {
-      await fs.writeJson(tmpPath, state, { spaces: 2 });
+      await fs.writeFile(
+        tmpPath,
+        stringifyJsonBounded(state, MAX_SESSION_INDEX_BYTES, "session metadata index"),
+        "utf8",
+      );
       await fs.rename(tmpPath, this.filePath);
     } catch (err) {
       await fs.remove(tmpPath).catch(() => undefined);

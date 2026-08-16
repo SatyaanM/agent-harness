@@ -1,21 +1,21 @@
-'use client';
+"use client";
 
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface MarkdownRendererProps {
   content: string;
   className?: string;
 }
 
-export function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, className = "" }: MarkdownRendererProps) {
   return (
     <div className={`markdown-body min-w-0 break-words ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           code({ node, className: codeClassName, children, ...props }) {
-            const match = /language-(\w+)/.exec(codeClassName || '');
+            const match = /language-(\w+)/.exec(codeClassName || "");
             const isInline = !match && !codeClassName;
 
             if (isInline) {
@@ -68,7 +68,10 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
           },
           th({ children, ...props }) {
             return (
-              <th className="border border-gray-300 bg-gray-200 px-2 py-1 text-left font-semibold" {...props}>
+              <th
+                className="border border-gray-300 bg-gray-200 px-2 py-1 text-left font-semibold"
+                {...props}
+              >
                 {children}
               </th>
             );
@@ -112,16 +115,32 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
             );
           },
           h1({ children, ...props }) {
-            return <h1 className="my-2 text-lg font-bold" {...props}>{children}</h1>;
+            return (
+              <h1 className="my-2 text-lg font-bold" {...props}>
+                {children}
+              </h1>
+            );
           },
           h2({ children, ...props }) {
-            return <h2 className="my-2 text-base font-bold" {...props}>{children}</h2>;
+            return (
+              <h2 className="my-2 text-base font-bold" {...props}>
+                {children}
+              </h2>
+            );
           },
           h3({ children, ...props }) {
-            return <h3 className="my-1 text-sm font-bold" {...props}>{children}</h3>;
+            return (
+              <h3 className="my-1 text-sm font-bold" {...props}>
+                {children}
+              </h3>
+            );
           },
           p({ children, ...props }) {
-            return <p className="my-1 text-sm leading-relaxed" {...props}>{children}</p>;
+            return (
+              <p className="my-1 text-sm leading-relaxed" {...props}>
+                {children}
+              </p>
+            );
           },
           hr({ ...props }) {
             return <hr className="my-3 border-gray-300" {...props} />;

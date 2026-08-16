@@ -1,25 +1,24 @@
-'use client';
+"use client";
 
-import { Volume2, VolumeX, Pause, Play, Square } from 'lucide-react';
-import { useTTSStore } from '@/stores/tts-store';
-import { Button } from '@/components/ui/button';
+import { Pause, Play, Square, Volume2, VolumeX } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useTTSStore } from "@/stores/tts-store";
 
 export function TTSButton() {
-  const { enabled, playbackState, toggleEnabled, stop, pause, resume } =
-    useTTSStore();
+  const { enabled, playbackState, toggleEnabled, stop, pause, resume } = useTTSStore();
 
-  const isPlaying = playbackState === 'playing';
-  const isPaused = playbackState === 'paused';
+  const isPlaying = playbackState === "playing";
+  const isPaused = playbackState === "paused";
 
   return (
     <div className="flex items-center gap-1">
       <Button
-        variant={enabled ? 'default' : 'secondary'}
+        variant={enabled ? "default" : "secondary"}
         size="icon"
         onClick={toggleEnabled}
-        title={enabled ? 'Voice output enabled' : 'Voice output disabled'}
+        title={enabled ? "Voice output enabled" : "Voice output disabled"}
         aria-label="Toggle voice output"
-        className={enabled ? 'bg-green-600 hover:bg-green-700' : ''}
+        className={enabled ? "bg-green-600 hover:bg-green-700" : ""}
       >
         {enabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
       </Button>

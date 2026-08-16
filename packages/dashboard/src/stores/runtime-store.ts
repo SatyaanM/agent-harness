@@ -1,10 +1,12 @@
-import { create } from 'zustand';
+import { create } from "zustand";
+
+export const MAX_TOOL_ACTIVITY_PER_SESSION = 200;
 
 export interface ToolActivity {
   id: string;
   agentName: string;
   toolName: string;
-  type: 'called' | 'completed';
+  type: "called" | "completed";
   args?: unknown;
   result?: string;
   timestamp: number;
@@ -25,7 +27,9 @@ export const useRuntimeStore = create<RuntimeStore>((set) => ({
     set((state) => ({
       activity: {
         ...state.activity,
-        [sessionId]: [...(state.activity[sessionId] ?? []), activity],
+        [sessionId]: [...(state.activity[sessionId] ?? []), activity].slice(
+          -MAX_TOOL_ACTIVITY_PER_SESSION,
+        ),
       },
     })),
   setRunning: (sessionId, running) =>

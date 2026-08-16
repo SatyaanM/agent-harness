@@ -1,5 +1,5 @@
-import type { MessageBus } from "./message-bus.js";
 import type { TaskId } from "../agent/types.js";
+import type { MessageBus } from "./message-bus.js";
 
 export interface SupervisorRequest {
   roomId: string;

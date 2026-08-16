@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json"
   },
   "dependencies": {
     "@agent-harness/core": "*",
@@ -18,7 +18,8 @@
     "dotenv": "^17.4.2",
     "express": "^4.x",
     "helmet": "^7.x",
-    "socket.io": "^4.x"
+    "socket.io": "^4.x",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/cors": "^2.x",
@@ -28,6 +29,6 @@
     "supertest": "^7.2.2",
     "tsx": "^4.x",
     "typescript": "^5.x",
-    "vitest": "^4.1.10"
+    "vitest": "4.1.10"
   }
 }

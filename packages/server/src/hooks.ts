@@ -55,6 +55,8 @@ export type LifecycleEvent =
   | "session.renamed"
   | "session.deleted";
 
+export type BeforeLifecycleEvent = "session.beforeClose" | "session.beforeDelete";
+
 export type LifecycleObserver = (payload: SessionData | LifecyclePayload) => void | Promise<void>;
 
 export interface AfterRegistration {
@@ -90,7 +92,10 @@ export class HookBus {
       } else {
         const prev = this.afterQueue.get(event) ?? Promise.resolve();
         const next = prev.then(() => this.runObserver(event, reg.handler, payload));
-        this.afterQueue.set(event, next.catch(() => undefined));
+        this.afterQueue.set(
+          event,
+          next.catch(() => undefined),
+        );
       }
     }
   }
@@ -99,7 +104,7 @@ export class HookBus {
    * Run before-middleware for an event. Awaits each in order; a throw
    * propagates to the caller (which must abort the action) and skips the rest.
    */
-  async runBefore(event: string, payload: LifecyclePayload): Promise<void> {
+  async runBefore(event: BeforeLifecycleEvent, payload: LifecyclePayload): Promise<void> {
     const regs = this.before.get(event) ?? [];
     for (const handler of regs) {
       await handler(payload);
@@ -109,7 +114,7 @@ export class HookBus {
   private async runObserver(
     event: string,
     handler: LifecycleObserver,
-    payload: LifecyclePayload
+    payload: LifecyclePayload,
   ): Promise<void> {
     try {
       await handler(payload);

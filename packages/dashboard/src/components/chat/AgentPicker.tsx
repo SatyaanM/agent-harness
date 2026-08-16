@@ -1,19 +1,20 @@
-'use client';
+"use client";
 
-import { useEffect } from 'react';
-import { Bot } from 'lucide-react';
+import { Bot } from "lucide-react";
+import { useEffect } from "react";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { useAgentsStore } from '@/stores/agents-store';
-import { useSessionStore } from '@/stores/session-store';
+} from "@/components/ui/select";
+import { useAgentsStore } from "@/stores/agents-store";
+import { useRuntimeStore } from "@/stores/runtime-store";
+import { useSessionStore } from "@/stores/session-store";
 
 function isOrchestrator(tools: string[]): boolean {
-  return tools.includes('delegate');
+  return tools.includes("delegate");
 }
 
 export default function AgentPicker() {
@@ -23,32 +24,43 @@ export default function AgentPicker() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
   const setAgentName = useSessionStore((s) => s.setAgentName);
+  const running = useRuntimeStore((s) =>
+    activeSessionId ? Boolean(s.running[activeSessionId]) : false,
+  );
 
   useEffect(() => {
     if (agents.length === 0) fetchAgents();
   }, [agents.length, fetchAgents]);
 
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
-  const value = activeSession?.agentName ?? 'orchestrator';
+  const value = activeSession?.agentName ?? "orchestrator";
 
   if (!activeSessionId || loading) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-zinc-400 dark:text-zinc-500">
         <Bot className="h-3.5 w-3.5" />
-        {activeSessionId ? 'Loading agents…' : 'Create a session first'}
+        {activeSessionId ? "Loading agents…" : "Create a session first"}
       </div>
     );
   }
 
   return (
-    <Select value={value} onValueChange={(name) => setAgentName(activeSessionId, name)}>
-      <SelectTrigger className="h-7 w-44 text-xs" aria-label="Select agent">
+    <Select
+      value={value}
+      disabled={running}
+      onValueChange={(name) => setAgentName(activeSessionId, name)}
+    >
+      <SelectTrigger
+        className="h-7 w-44 text-xs"
+        aria-label="Select agent"
+        title={running ? "Agent cannot be changed while this session is running" : undefined}
+      >
         <Bot className="h-3.5 w-3.5 shrink-0" />
-        <SelectValue />
+        <SelectValue>{value}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         {agents.map((agent) => (
-          <SelectItem key={agent.name} value={agent.name}>
+          <SelectItem key={agent.name} value={agent.name} textValue={agent.name}>
             <span className="flex flex-col">
               <span className="flex items-center gap-2">
                 {agent.name}
@@ -59,9 +71,7 @@ export default function AgentPicker() {
                 )}
               </span>
               {agent.description && (
-                <span className="text-xs text-muted-foreground">
-                  {agent.description}
-                </span>
+                <span className="text-xs text-muted-foreground">{agent.description}</span>
               )}
             </span>
           </SelectItem>

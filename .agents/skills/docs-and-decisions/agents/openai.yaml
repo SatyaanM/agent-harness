@@ -1,0 +1,4 @@
+interface:
+  display_name: "Docs and Decisions"
+  short_description: "Maintain durable docs and architecture decisions"
+  default_prompt: "Use $docs-and-decisions to update the durable repository documentation for this change."

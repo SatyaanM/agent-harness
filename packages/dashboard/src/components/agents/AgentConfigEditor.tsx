@@ -1,12 +1,31 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import dynamic from 'next/dynamic';
-import { updateAgent, deleteAgent, type AgentConfig } from '@/lib/api';
-import { useThemeStore } from '@/stores/theme-store';
-import { Button } from '@/components/ui/button';
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { type AgentConfig, deleteAgent, fetchAgentSource, updateAgentSource } from "@/lib/api";
+import { useThemeStore } from "@/stores/theme-store";
 
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+const DRAFT_KEY_PREFIX = "agent-source-draft:";
+
+function loadDraft(agentName: string): string | null {
+  try {
+    return sessionStorage.getItem(`${DRAFT_KEY_PREFIX}${agentName}`);
+  } catch {
+    return null;
+  }
+}
+
+function saveDraft(agentName: string, content: string | null) {
+  try {
+    const key = `${DRAFT_KEY_PREFIX}${agentName}`;
+    if (content === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, content);
+  } catch {
+    // Navigation protection still guards the current editor when storage is unavailable.
+  }
+}
 
 interface AgentConfigEditorProps {
   agentName: string;
@@ -16,70 +35,54 @@ interface AgentConfigEditorProps {
 }
 
 function configToMarkdown(config: AgentConfig): string {
-  const lines: string[] = ['---'];
+  const lines: string[] = ["---"];
   lines.push(`name: ${config.name}`);
   lines.push(`model: ${config.model}`);
   lines.push(`maxSteps: ${config.maxSteps}`);
+  if (config.description !== undefined) lines.push(`description: ${config.description}`);
+  for (const key of [
+    "maxToolCalls",
+    "maxToolResultChars",
+    "maxOutputTokens",
+    "maxTotalTokens",
+    "runTimeoutMs",
+  ] as const) {
+    if (config[key] !== undefined) lines.push(`${key}: ${config[key]}`);
+  }
   if (config.tools && config.tools.length > 0) {
-    lines.push('tools:');
+    lines.push("tools:");
     for (const t of config.tools) {
       lines.push(`  - ${t}`);
     }
   } else {
-    lines.push('tools: []');
+    lines.push("tools: []");
   }
-  if (config.capabilities && config.capabilities.length > 0) {
-    lines.push('capabilities:');
-    for (const c of config.capabilities) {
-      lines.push(`  - ${c}`);
-    }
+  if (config.capabilities) {
+    lines.push("capabilities:");
+    lines.push(`  chat: ${config.capabilities.chat}`);
+    lines.push(`  tools: ${config.capabilities.tools}`);
+    lines.push(`  vision: ${config.capabilities.vision}`);
+    lines.push(`  streaming: ${config.capabilities.streaming}`);
+    lines.push(`  maxTokens: ${config.capabilities.maxTokens}`);
   }
-  if (config.modelIdMapping && Object.keys(config.modelIdMapping).length > 0) {
-    lines.push('modelIdMapping:');
-    for (const [k, v] of Object.entries(config.modelIdMapping)) {
-      lines.push(`  ${k}: ${v}`);
-    }
+  if (config.modelIdMapping) {
+    lines.push(`modelIdMapping: ${config.modelIdMapping}`);
   }
-  lines.push('---');
-  lines.push('');
+  lines.push("---");
+  lines.push("");
   if (config.instructions) {
     lines.push(config.instructions);
   }
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
-function parseMarkdownConfig(content: string): Partial<AgentConfig> {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!fmMatch) return { instructions: content };
-
-  const yamlStr = fmMatch[1];
-  const instructions = fmMatch[2];
-  const config: Partial<AgentConfig> = { instructions };
-
-  const nameMatch = yamlStr.match(/^name:\s*(.+)$/m);
-  if (nameMatch) config.name = nameMatch[1].trim();
-
-  const modelMatch = yamlStr.match(/^model:\s*(.+)$/m);
-  if (modelMatch) config.model = modelMatch[1].trim();
-
-  const maxStepsMatch = yamlStr.match(/^maxSteps:\s*(\d+)$/m);
-  if (maxStepsMatch) config.maxSteps = Number(maxStepsMatch[1]);
-
-  const toolsMatch = yamlStr.match(/^tools:\s*\n((?:\s+-\s+.+\n?)*)/m);
-  if (toolsMatch) {
-    config.tools = toolsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, '')) ?? [];
-  }
-
-  const capsMatch = yamlStr.match(/^capabilities:\s*\n((?:\s+-\s+.+\n?)*)/m);
-  if (capsMatch) {
-    config.capabilities = capsMatch[1].match(/-\s+(.+)/g)?.map((t) => t.replace(/^-\s+/, '')) ?? [];
-  }
-
-  return config;
-}
-
-export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved }: AgentConfigEditorProps) {
-  const [content, setContent] = useState('');
+export function AgentConfigEditor({
+  agentName,
+  initialConfig,
+  onDeleted,
+  onSaved,
+}: AgentConfigEditorProps) {
+  const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,31 +91,92 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
   const theme = useThemeStore((s) => s.theme);
 
   useEffect(() => {
-    if (initialConfig) {
+    let cancelled = false;
+    const draft = loadDraft(agentName);
+    if (draft !== null) {
+      setContent(draft);
+      setIsDirty(true);
+    } else if (initialConfig) {
       setContent(configToMarkdown(initialConfig));
     }
-  }, [initialConfig]);
+    fetchAgentSource(agentName)
+      .then((source) => {
+        if (cancelled) return;
+        if (draft !== null) {
+          setContent(draft);
+          setIsDirty(true);
+        } else {
+          setContent(source);
+          setIsDirty(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError("Failed to load agent source");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentName, initialConfig]);
 
-  const handleEditorChange = useCallback((value: string | undefined) => {
-    if (value !== undefined) {
-      setContent(value);
-      setIsDirty(true);
-      setSuccess(false);
-    }
-  }, []);
+  useEffect(() => {
+    if (!isDirty) return;
+
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const guardInternalNavigation = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!(target instanceof HTMLAnchorElement) || target.target === "_blank") return;
+      const destination = new URL(target.href, window.location.href);
+      if (destination.origin !== window.location.origin) return;
+      if (window.confirm("Discard unsaved agent changes?")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    document.addEventListener("click", guardInternalNavigation, true);
+    return () => {
+      window.removeEventListener("beforeunload", warnBeforeUnload);
+      document.removeEventListener("click", guardInternalNavigation, true);
+    };
+  }, [isDirty]);
+
+  const handleEditorChange = useCallback(
+    (value: string | undefined) => {
+      if (value !== undefined) {
+        setContent(value);
+        setIsDirty(true);
+        setSuccess(false);
+        saveDraft(agentName, value);
+      }
+    },
+    [agentName],
+  );
 
   async function handleSave() {
     setSaving(true);
     setError(null);
     setSuccess(false);
     try {
-      const parsed = parseMarkdownConfig(content);
-      const updated = await updateAgent(agentName, parsed);
+      const updated = await updateAgentSource(agentName, content);
+      saveDraft(agentName, null);
       setIsDirty(false);
       setSuccess(true);
       onSaved?.(updated);
     } catch {
-      setError('Failed to save agent');
+      setError("Failed to save agent");
     } finally {
       setSaving(false);
     }
@@ -124,9 +188,10 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
     setError(null);
     try {
       await deleteAgent(agentName);
+      saveDraft(agentName, null);
       onDeleted?.();
     } catch {
-      setError('Failed to delete agent');
+      setError("Failed to delete agent");
     } finally {
       setDeleting(false);
     }
@@ -149,10 +214,10 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
             size="sm"
             className="border-destructive/50 text-destructive hover:bg-destructive/10"
           >
-            {deleting ? 'Deleting...' : 'Delete'}
+            {deleting ? "Deleting..." : "Delete"}
           </Button>
           <Button onClick={handleSave} disabled={saving || !isDirty} size="sm">
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? "Saving..." : "Save"}
           </Button>
         </div>
       </div>
@@ -172,15 +237,15 @@ export function AgentConfigEditor({ agentName, initialConfig, onDeleted, onSaved
         <MonacoEditor
           height="100%"
           language="markdown"
-          theme={theme === 'dark' ? 'vs-dark' : 'light'}
+          theme={theme === "dark" ? "vs-dark" : "light"}
           value={content}
           onChange={handleEditorChange}
           options={{
             minimap: { enabled: false },
             fontSize: 13,
-            lineNumbers: 'on',
+            lineNumbers: "on",
             scrollBeyondLastLine: false,
-            wordWrap: 'on',
+            wordWrap: "on",
             automaticLayout: true,
             tabSize: 2,
           }}

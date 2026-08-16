@@ -2,7 +2,9 @@
 
 A TypeScript multi-agent orchestration harness with a web dashboard for managing AI agent collaborations.
 
-An **orchestrator agent** delegates tasks to **worker agents**, coordinates them via **councils** (ephemeral group chats), and deposits the results into a **knowledge inbox** for you to review. Everything runs through a persistent split-panel dashboard.
+An **orchestrator agent** can delegate tasks to background **worker agents** and deposit artifacts into a **knowledge inbox** for review. Everything runs through a persistent split-panel dashboard.
+
+> Implementation status: see [`docs/architecture/CURRENT_STATE.md`](docs/architecture/CURRENT_STATE.md). Architecture and feature documents also contain explicit target direction; they are not proof that a capability is wired into the running application.
 
 ## Features
 
@@ -11,11 +13,11 @@ An **orchestrator agent** delegates tasks to **worker agents**, coordinates them
 - **Knowledge inbox** — Agents deposit files (reports, diagrams, data) for user review
 - **File explorer** — Browse, drag-and-drop, rename, and delete inbox files
 - **In-place editing** — Edit and save markdown and Excalidraw files directly in the dashboard
-- **Any LLM provider** — OpenAI-compatible or Anthropic-compatible endpoints (not locked to one vendor)
-- **4-tier capability discovery** — Dynamic model capability detection (manual → cache → models.dev → probe)
+- **Configurable LLM endpoint** — One OpenAI-compatible or Anthropic-compatible endpoint at a time
+- **Capability discovery library** — Manual, cache, models.dev, and probe tiers exist in core but are not yet enforced by the live agent path
 - **File-based agent config** — Define agents as `.md` files with YAML frontmatter
-- **Plugin system** — Renderers and UI extensions are packaged as plugins
-- **Real-time collaboration** — Councils for multi-agent deliberation
+- **Manifest-backed built-ins** — Enabled inbox renderers and command metadata are discovered by the server
+- **Real-time activity** — Agent, worker, tool, and session updates over WebSocket
 
 ## Quick Start
 
@@ -23,7 +25,7 @@ These steps get a fresh copy of the app running on your machine.
 
 ### 1. Prerequisites
 
-- **Node.js 18.18+** (20.x or newer recommended) and **npm 10+**
+- **Node.js 20.9+** and the repository-pinned **npm 10.9.2** through Corepack
 - An API key for an LLM provider (see [Using any LLM provider](#using-any-llm-provider))
 
 ### 2. Clone and install
@@ -31,10 +33,10 @@ These steps get a fresh copy of the app running on your machine.
 ```bash
 git clone https://github.com/<you>/agent-harness.git
 cd agent-harness
-npm install
+corepack npm ci
 ```
 
-This installs all three workspace packages (`core`, `server`, `dashboard`).
+This installs all three workspace packages (`core`, `server`, `dashboard`) and installs the repository's Lefthook-managed Git hooks.
 
 ### 3. Configure your API key
 
@@ -57,7 +59,7 @@ PROVIDER_ENDPOINT=https://api.openai.com/v1
 ### 4. Start in development mode
 
 ```bash
-npm run dev
+corepack npm run dev
 ```
 
 This starts everything in parallel:
@@ -81,7 +83,7 @@ Navigate to **http://localhost:3000**. Click **+** in the right panel to create 
 
 ## Using Any LLM Provider
 
-The app is **not** locked to a single vendor. It talks to whatever endpoint you configure using standard OpenAI-compatible (`/chat/completions`) and Anthropic-compatible (`/messages`) APIs.
+The app configures one provider endpoint and key source at a time. It can talk to OpenAI-compatible (`/chat/completions`) or Anthropic-compatible (`/messages`) endpoints, subject to the model-routing limitation below.
 
 | Setting | Env var | Default | Purpose |
 |---|---|---|---|
@@ -113,13 +115,13 @@ PROVIDER_ENDPOINT=http://localhost:11434/v1
 
 **Model routing note:** a small set of models (`minimax-m3`, `minimax-m2.x`, `qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-plus`) are sent to the **Anthropic** message format; everything else uses the **OpenAI** chat-completions format. Pick a model that matches your provider's protocol, and set it in agent configs or `DEFAULT_MODEL`.
 
-**Capability discovery:** the system checks the model's capabilities in four tiers — manual override in the agent config, a local cache (`.harness/capabilities.json`), the models.dev API, then a direct probe. It never hardcodes capabilities and adapts automatically as models change.
+**Capability discovery status:** core contains manual, cache, models.dev, and probe tiers, but `Agent.run()` does not currently call the registry. Treat configured tools and provider compatibility as operator responsibility until that integration is designed and tested.
 
 ## Production
 
 ```bash
-npm run build
-npm start
+corepack npm run build
+corepack npm start
 ```
 
 `npm run build` compiles all packages; `npm start` runs the built server (port `3001`) and dashboard (port `3000`).
@@ -128,19 +130,24 @@ npm start
 
 ## Configuration Reference
 
-These are read from the environment or the dashboard **Settings** page (persisted to `.harness/settings.json`). Environment variables take precedence.
+These are read from the environment or the dashboard **Settings** page (persisted to `.harness/settings.json`). Environment variables take precedence. `ROOT` is environment/discovery-owned and is shown read-only because the settings file beneath it cannot safely redefine its own location or sandbox boundary.
 
 | Variable | Default | Description |
 |---|---|---|
-| `ROOT` | repo root | Project root — the sandbox boundary for file tools |
+| `ROOT` | repo root | Environment-owned project root — the read-only sandbox boundary for file tools |
 | `INBOX_ROOT` | `./inbox` | Where inbox files are stored |
 | `SESSIONS_DIR` | `./sessions` | Session transcript files |
 | `AGENTS_DIR` | `./agents` | Agent config `.md` files |
 | `PROVIDER_ENDPOINT` | `https://opencode.ai/zen/go/v1` | LLM API base URL |
 | `API_KEY_ENV` | `OPENCODE_API_KEY` | Env var that holds the provider key |
 | `DEFAULT_MODEL` | `opencode-go/qwen3.7-plus` | Default model for new agents |
-| `MAX_CONCURRENT_AGENTS` | `10` | Max parallel agent executions |
+| `MAX_CONCURRENT_AGENTS` | `10` | Process-wide cap for active parent and worker agent executions |
 | `PORT` | `3001` | Server port |
+| `HOST` | `127.0.0.1` | Server bind host; defaults to loopback rather than all interfaces |
+| `CORS_ORIGINS` | local dashboard origins | Comma-separated browser origins allowed by HTTP and WebSocket CORS |
+| `ENABLE_RUN_COMMAND` | `false` | Explicitly enable the OS-privileged shell tool |
+| `ENABLE_WEB_FETCH` | `false` | Explicitly enable the public-network fetch tool |
+| `PLUGINS_DIR` | dashboard plugin directory | Optional absolute directory containing plugin manifests |
 | `GEMINI_API_KEY` | — | Optional — enables Gemini TTS voice output |
 
 ## Architecture
@@ -202,13 +209,19 @@ tasks to specialized worker agents.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Agent identifier |
+| `description` | string | no | Short agent description shown by the dashboard |
 | `model` | string | yes | Model name |
-| `tools` | string[] | yes | List of tool names |
+| `tools` | string[] | yes | List of tool names; an empty list is valid |
 | `maxSteps` | number | yes | Max tool-call iterations |
+| `maxToolCalls` | number | no | Run-wide tool-call cap; defaults to 64 |
+| `maxToolResultChars` | number | no | Per-result model-context and transient-event cap; defaults to 100,000 characters. Durable transcripts retain the complete tool result. |
+| `maxOutputTokens` | number | no | Per-provider-call output cap; defaults to 4,096 tokens |
+| `maxTotalTokens` | number | no | Run-wide token cap; uses provider usage or a conservative fallback estimate and defaults to 100,000 tokens |
+| `runTimeoutMs` | number | no | Run deadline; defaults to 300,000 ms and aborts provider/tool work through an `AbortSignal` |
 | `capabilities` | object | no | Manual capability overrides |
 | `modelIdMapping` | string | no | Explicit models.dev ID |
 
-**Available tools:** `readFile`, `writeFile`, `editFile`, `listDirectory`, `glob`, `grep`, `runCommand`, `webFetch`.
+**Available tools:** `readFile`, `writeFile`, `editFile`, `listDirectory`, `glob`, and `grep`. The privileged `runCommand` and `webFetch` tools are disabled by default; opt in with `ENABLE_RUN_COMMAND=true` and `ENABLE_WEB_FETCH=true` after reviewing [the security boundary](docs/SECURITY.md).
 
 ## API Reference
 
@@ -216,9 +229,12 @@ tasks to specialized worker agents.
 
 ```
 POST   /api/chat                    # Send message (SSE stream)
-GET    /api/sessions                # List sessions
+GET    /api/sessions                # List bounded session metadata
+GET    /api/sessions/meta           # Metadata-list alias
+GET    /api/sessions/diagnostics    # List safe invalid-record diagnostics
 POST   /api/sessions                # Create session
 GET    /api/sessions/:id            # Get session
+PATCH  /api/sessions/:id            # Rename or clear a session title
 DELETE /api/sessions/:id            # Delete session
 GET    /api/agents                  # List agent configs
 POST   /api/agents                  # Create agent config
@@ -241,6 +257,7 @@ GET    /api/settings                # Get settings
 PUT    /api/settings                # Update settings
 POST   /api/tts                     # Text-to-speech
 GET    /api/health                  # Health check
+GET    /api/metrics                 # Active/queued execution and runtime counts
 ```
 
 ### WebSocket Events
@@ -253,11 +270,6 @@ agent:tool           # Agent called/completed a tool (live activity)
 worker:spawned       # A worker session was created
 worker:completed     # A worker posted a completion to its delegator
 session:updated      # A session's state changed (authoritative sync)
-council:created      # Council formed
-council:message      # Council message
-council:dissolved    # Council completed
-inbox:created        # Inbox item created
-inbox:updated        # Inbox item modified
 ```
 
 ## Project Structure
@@ -266,7 +278,7 @@ inbox:updated        # Inbox item modified
 
 Pure TypeScript library with no HTTP/UI dependencies:
 
-- `agent/` — Agent, Orchestrator, Worker classes
+- `agent/` — Agent, session runtime, delegation, and Worker execution
 - `capability/` — 4-tier capability registry
 - `collaboration/` — MessageBus, Council, Supervision
 - `tool/` — Tool implementations (readFile, writeFile, etc.)
@@ -297,6 +309,44 @@ Next.js frontend with persistent split layout:
 
 ## Development
 
+### Quality, tests, and Git hooks
+
+The root scripts are the supported entry points for local development and coding agents:
+
+| Command | Purpose |
+|---|---|
+| `corepack npm run quality` | Check Biome formatting, lint rules, and import organization |
+| `corepack npm run quality:fix` | Apply Biome's safe fixes |
+| `corepack npm run quality:policy` | Enforce strict TypeScript and repository-specific escape-hatch policy |
+| `corepack npm test` | Run all Vitest projects once |
+| `corepack npm run test:watch` | Run the Vitest project matrix in watch mode |
+| `corepack npm run test:ui` | Open the local Vitest UI |
+| `corepack npm run test:coverage` | Run V8 coverage and write text, HTML, and LCOV reports under `coverage/` |
+| `corepack npm run check:fast` | Run local static checks, typecheck, and tests without a production build |
+| `corepack npm run check` | Run the complete credential-free repository verification suite |
+| `corepack npm run check:ci` | Run authoritative CI checks, coverage, builds, and the production audit |
+| `corepack npm run security:audit` | Reject high/critical production advisories without an unexpired package-and-advisory exception |
+| `corepack npm run perf:report` | Report the local validation throughput benchmark without a noisy timing gate |
+| `corepack npm run check:nightly` | Run CI checks plus the informational performance report |
+
+Run the complete check before handing work off:
+
+```bash
+corepack npm run check
+```
+
+The check runs Biome, the repository policy, documentation and skill validation, typecheck, tests, builds, and diff whitespace checks. Coverage has a conservative non-regression floor; deterministic runtime budgets and security tests carry more weight than the still-low global percentage. GitHub Actions runs `check:ci` on pull requests and main, while the nightly workflow adds the benchmark report. Workflow actions are pinned to immutable commit SHAs. CI is authoritative; local hooks are early feedback.
+
+Lefthook is installed automatically by `corepack npm ci` or `corepack npm install`. The pre-commit hook applies safe Biome fixes to staged files, re-stages those fixes, and runs documentation, skill, and whitespace checks. The pre-push hook runs the full `check` suite. Repair or refresh the hooks manually with:
+
+```bash
+corepack npm run hooks:install
+```
+
+The installer removes only this repository's obsolete `core.hooksPath=hooks` setting. It preserves and skips installation when a contributor has configured a different custom hook path.
+
+Privileged tools are application-level controls, not a process sandbox. File operations resolve symlinks before authorization, subprocesses inherit only a small operating-system allowlist, and outbound fetches reject credentials, private/reserved addresses, and unsafe redirects. The server binds to loopback by default. See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat boundary and residual risks.
+
 ### Adding a New Tool
 
 1. Create tool file in `packages/core/src/tool/`
@@ -308,7 +358,8 @@ Next.js frontend with persistent split layout:
 
 1. Create renderer component in `packages/dashboard/src/components/inbox/renderers/`
 2. Export from `renderers/index.ts`
-3. Add to `InboxItemView.tsx` type dispatch
+3. Register its component key in `packages/dashboard/src/plugins/registry.ts`
+4. Add an `inboxRenderers` entry to a built-in plugin `manifest.json`; `InboxItemView.tsx` resolves through the plugin store and component registry
 
 ### Adding a New API Endpoint
 

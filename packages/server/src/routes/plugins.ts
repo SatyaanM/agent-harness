@@ -1,35 +1,49 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { getConfig, PluginIdentifierSchema } from "@agent-harness/core";
 import { Router } from "express";
-import { getConfig } from "@agent-harness/core";
+import { z } from "zod";
+import { validateRequest } from "../http/validation.js";
 import { PluginRegistry } from "../plugin/registry.js";
+import { parseServerConfig } from "../server-config.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, "../../../..");
+let cachedRegistry: PluginRegistry | undefined;
+let cachedRegistryKey: string | undefined;
 
-const pluginsDir =
-  process.env["PLUGINS_DIR"] ??
-  path.join(rootDir, "packages", "dashboard", "src", "plugins");
-
-const registry = new PluginRegistry(pluginsDir, getConfig().ROOT);
+function getRegistry(): PluginRegistry {
+  const config = getConfig();
+  const pluginsDir =
+    parseServerConfig().pluginsDir ??
+    path.join(config.ROOT, "packages", "dashboard", "src", "plugins");
+  const key = `${config.ROOT}\0${pluginsDir}`;
+  if (!cachedRegistry || cachedRegistryKey !== key) {
+    cachedRegistry = new PluginRegistry(pluginsDir, config.ROOT);
+    cachedRegistryKey = key;
+  }
+  return cachedRegistry;
+}
 
 export const pluginsRouter = Router();
 
+const PluginUpdateSchema = z
+  .object({
+    params: z.object({ name: PluginIdentifierSchema }).strict(),
+    body: z.object({ enabled: z.boolean() }).strict(),
+  })
+  .strict();
+
 pluginsRouter.get("/", (_req, res) => {
-  res.json(registry.list());
+  res.json(getRegistry().list());
 });
 
 pluginsRouter.put("/:name", (req, res) => {
-  const { enabled } = req.body as { enabled?: boolean };
-  if (typeof enabled !== "boolean") {
-    res.status(400).json({ error: "enabled must be a boolean" });
-    return;
-  }
+  const request = validateRequest(PluginUpdateSchema, { params: req.params, body: req.body }, res);
+  if (!request) return;
+  const { name } = request.params;
+  const { enabled } = request.body;
 
-  const plugin = registry.setEnabled(req.params.name, enabled);
+  const plugin = getRegistry().setEnabled(name, enabled);
   if (!plugin) {
-    res.status(404).json({ error: `Plugin "${req.params.name}" not found` });
+    res.status(404).json({ error: `Plugin "${name}" not found` });
     return;
   }
 

@@ -1,14 +1,28 @@
-import { create } from 'zustand';
-import type { DelegationEvent, DelegationCompleteEvent } from '@/components/chat/DelegationCard';
-import type { CouncilCreatedEvent, CouncilMessageEvent, CouncilDissolvedEvent } from '@/components/chat/CouncilCard';
-import type { InboxLinkEvent } from '@/components/chat/InboxLink';
+import { z } from "zod";
+import { create } from "zustand";
+import type {
+  CouncilCreatedEvent,
+  CouncilDissolvedEvent,
+  CouncilMessageEvent,
+} from "@/components/chat/CouncilCard";
+import type { DelegationCompleteEvent, DelegationEvent } from "@/components/chat/DelegationCard";
+import type { InboxLinkEvent } from "@/components/chat/InboxLink";
 
-export type ChatEvent = 
-  | DelegationEvent 
-  | DelegationCompleteEvent 
-  | CouncilCreatedEvent 
-  | CouncilMessageEvent 
-  | CouncilDissolvedEvent 
+const WorkerCompletedMetaSchema = z
+  .object({
+    kind: z.literal("worker_completed"),
+    taskId: z.string().optional(),
+    summary: z.string().optional(),
+    status: z.enum(["done", "error", "cancelled"]).optional(),
+  })
+  .passthrough();
+
+export type ChatEvent =
+  | DelegationEvent
+  | DelegationCompleteEvent
+  | CouncilCreatedEvent
+  | CouncilMessageEvent
+  | CouncilDissolvedEvent
   | InboxLinkEvent;
 
 export interface ClientToolCall {
@@ -19,7 +33,7 @@ export interface ClientToolCall {
 
 export interface Message {
   id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
   reasoning?: string;
   toolCalls?: ClientToolCall[];
@@ -31,7 +45,7 @@ export interface Message {
 export interface Session {
   sessionId: string;
   messages: Message[];
-  status: 'active' | 'idle' | 'archived';
+  status: "active" | "idle" | "archived";
   agentName: string;
   title?: string;
   createdAt: string;
@@ -41,7 +55,7 @@ interface SessionStore {
   sessions: Session[];
   activeSessionId: string | null;
   addSession: (session: Session) => void;
-  setActiveSession: (sessionId: string) => void;
+  setActiveSession: (sessionId: string | null) => void;
   setAgentName: (sessionId: string, agentName: string) => void;
   addMessage: (sessionId: string, message: Message) => void;
   updateMessage: (sessionId: string, messageId: string, content: string) => void;
@@ -52,7 +66,7 @@ interface SessionStore {
 }
 
 export interface ServerMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
   reasoning?: string;
   toolCalls?: ClientToolCall[];
@@ -83,17 +97,13 @@ export const useSessionStore = create<SessionStore>((set) => ({
 
   setAgentName: (sessionId, agentName) =>
     set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.sessionId === sessionId ? { ...s, agentName } : s
-      ),
+      sessions: state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, agentName } : s)),
     })),
 
   addMessage: (sessionId, message) =>
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.sessionId === sessionId
-          ? { ...s, messages: [...s.messages, message] }
-          : s
+        s.sessionId === sessionId ? { ...s, messages: [...s.messages, message] } : s,
       ),
     })),
 
@@ -103,11 +113,9 @@ export const useSessionStore = create<SessionStore>((set) => ({
         s.sessionId === sessionId
           ? {
               ...s,
-              messages: s.messages.map((m) =>
-                m.id === messageId ? { ...m, content } : m
-              ),
+              messages: s.messages.map((m) => (m.id === messageId ? { ...m, content } : m)),
             }
-          : s
+          : s,
       ),
     })),
 
@@ -118,8 +126,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
         return {
           sessionId: data.sessionId,
           messages,
-          status: 'active',
-          agentName: data.agentName ?? 'orchestrator',
+          status: "active",
+          agentName: data.agentName ?? "orchestrator",
           title: data.title,
           createdAt: data.createdAt ?? new Date().toISOString(),
         };
@@ -140,9 +148,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
 
   renameSession: (sessionId, title) =>
     set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.sessionId === sessionId ? { ...s, title } : s
-      ),
+      sessions: state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, title } : s)),
     })),
 
   syncFromServer: (data) =>
@@ -156,8 +162,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
             {
               sessionId: data.sessionId,
               messages,
-              status: 'active',
-              agentName: data.agentName ?? 'orchestrator',
+              status: "active",
+              agentName: data.agentName ?? "orchestrator",
               title: data.title,
               createdAt: data.createdAt ?? new Date().toISOString(),
             },
@@ -171,32 +177,37 @@ export const useSessionStore = create<SessionStore>((set) => ({
                 ...s,
                 messages,
                 agentName: data.agentName ?? s.agentName,
-                title: data.title ?? s.title,
+                title: data.title,
               }
-            : s
+            : s,
         ),
       };
     }),
 }));
 
 function serverMessageToClient(m: ServerMessage, index: number): Message {
-  const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : m.role === 'tool' ? 'tool' : 'system';
+  const role =
+    m.role === "assistant"
+      ? "assistant"
+      : m.role === "user"
+        ? "user"
+        : m.role === "tool"
+          ? "tool"
+          : "system";
 
   let event: ChatEvent | undefined;
-  const meta = m.meta as
-    | { kind?: string; taskId?: string; summary?: string; status?: string }
-    | undefined;
-  if (meta?.kind === 'worker_completed') {
+  const meta = WorkerCompletedMetaSchema.safeParse(m.meta);
+  if (meta.success) {
     event = {
-      type: 'delegation_complete',
-      taskId: meta.taskId ?? '',
-      summary: meta.summary ?? '',
+      type: "delegation_complete",
+      taskId: meta.data.taskId ?? "",
+      summary: meta.data.summary ?? "",
       status:
-        meta.status === 'error'
-          ? 'error'
-          : meta.status === 'cancelled'
-            ? 'cancelled'
-            : 'done',
+        meta.data.status === "error"
+          ? "error"
+          : meta.data.status === "cancelled"
+            ? "cancelled"
+            : "done",
       timestamp: m.createdAt ? Date.parse(m.createdAt) : Date.now(),
     };
   }
@@ -204,11 +215,11 @@ function serverMessageToClient(m: ServerMessage, index: number): Message {
   return {
     id: `srv-${index}`,
     role,
-    content: m.content ?? '',
+    content: m.content ?? "",
     ...(m.reasoning ? { reasoning: m.reasoning } : {}),
     ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
     ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
-    createdAt: m.createdAt ?? '',
+    createdAt: m.createdAt ?? "",
     ...(event ? { event } : {}),
   };
 }

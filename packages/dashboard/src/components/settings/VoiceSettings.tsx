@@ -1,20 +1,20 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { useTTSStore } from '@/stores/tts-store';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Card, CardContent } from '@/components/ui/card';
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { useTTSStore } from "@/stores/tts-store";
 
 export function VoiceSettings() {
   const {
@@ -33,29 +33,20 @@ export function VoiceSettings() {
   } = useTTSStore();
 
   const [previewText, setPreviewText] = useState(
-    "Hey there! I've finished the refactoring. All tests are passing, though there were a few hiccups along the way."
+    "Hey there! I've finished the refactoring. All tests are passing, though there were a few hiccups along the way.",
   );
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [apiKeySet, setApiKeySet] = useState(false);
 
   const handlePreview = async () => {
     setIsPreviewPlaying(true);
     try {
       await play(previewText);
     } catch (error) {
-      console.error('Preview failed:', error);
-      alert('Preview failed. Make sure GEMINI_API_KEY is configured.');
+      console.error("Preview failed:", error);
+      alert("Preview failed. Make sure GEMINI_API_KEY is configured.");
     } finally {
       setIsPreviewPlaying(false);
     }
-  };
-
-  const handleSaveApiKey = () => {
-    alert(
-      'API key saved. In production, this would be saved to .env on the server.'
-    );
-    setApiKeySet(true);
   };
 
   return (
@@ -63,22 +54,10 @@ export function VoiceSettings() {
       <Card>
         <CardContent className="space-y-4 p-4">
           <div className="space-y-2">
-            <Label htmlFor="gemini-key">Gemini API Key</Label>
-            <div className="flex gap-2">
-              <Input
-                id="gemini-key"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Enter your Gemini API key"
-                className="flex-1"
-              />
-              <Button onClick={handleSaveApiKey} disabled={apiKeySet}>
-                {apiKeySet ? 'Saved' : 'Save'}
-              </Button>
-            </div>
+            <Label>Gemini API Key</Label>
             <p className="text-xs text-muted-foreground">
-              Get your API key from{' '}
+              Voice credentials are server-managed. Set <code>GEMINI_API_KEY</code> in the server
+              environment and restart the server. Get a key from{" "}
               <a
                 href="https://aistudio.google.com/apikey"
                 target="_blank"
@@ -116,8 +95,8 @@ export function VoiceSettings() {
               rows={4}
             />
             <p className="text-xs text-muted-foreground">
-              Optional instructions to set the overall tone and style of the
-              voice. Tags in the text will override locally.
+              Optional instructions to set the overall tone and style of the voice. Tags in the text
+              will override locally.
             </p>
           </div>
 
@@ -125,15 +104,10 @@ export function VoiceSettings() {
             <div>
               <Label htmlFor="emotive-tags">Enable emotive audio tags</Label>
               <p className="text-xs text-muted-foreground">
-                Tags like [excitedly], [sighs], [whispers] add delivery nuance
-                to the spoken output.
+                Tags like [excitedly], [sighs], [whispers] add delivery nuance to the spoken output.
               </p>
             </div>
-            <Switch
-              id="emotive-tags"
-              checked={emotiveTags}
-              onCheckedChange={setEmotiveTags}
-            />
+            <Switch id="emotive-tags" checked={emotiveTags} onCheckedChange={setEmotiveTags} />
           </div>
 
           {emotiveTags && (
@@ -142,11 +116,15 @@ export function VoiceSettings() {
                 <Label>Tag Style</Label>
                 <Select
                   value={tagStyle}
-                  onValueChange={(v) =>
-                    setTagStyle(
-                      v as 'conservative' | 'balanced' | 'expressive'
-                    )
-                  }
+                  onValueChange={(value) => {
+                    if (
+                      value === "conservative" ||
+                      value === "balanced" ||
+                      value === "expressive"
+                    ) {
+                      setTagStyle(value);
+                    }
+                  }}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select tag style" />
@@ -155,12 +133,8 @@ export function VoiceSettings() {
                     <SelectItem value="conservative">
                       Conservative — Only essential tags (serious, sighs)
                     </SelectItem>
-                    <SelectItem value="balanced">
-                      Balanced — Moderate use of tags
-                    </SelectItem>
-                    <SelectItem value="expressive">
-                      Expressive — Frequent creative tags
-                    </SelectItem>
+                    <SelectItem value="balanced">Balanced — Moderate use of tags</SelectItem>
+                    <SelectItem value="expressive">Expressive — Frequent creative tags</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -192,12 +166,8 @@ export function VoiceSettings() {
               placeholder="Enter text to preview"
               className="flex-1"
             />
-            <Button
-              onClick={handlePreview}
-              disabled={isPreviewPlaying}
-              variant="secondary"
-            >
-              {isPreviewPlaying ? 'Playing...' : 'Test Voice'}
+            <Button onClick={handlePreview} disabled={isPreviewPlaying} variant="secondary">
+              {isPreviewPlaying ? "Playing..." : "Test Voice"}
             </Button>
           </div>
         </CardContent>

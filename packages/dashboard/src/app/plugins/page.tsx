@@ -1,15 +1,14 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { usePluginStore } from '@/stores/plugin-store';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import { Skeleton } from '@/components/ui/skeleton';
+import { useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { usePluginStore } from "@/stores/plugin-store";
 
 export default function PluginsPage() {
-  const { plugins, isLoading, error, fetchPlugins, setPluginEnabled } =
-    usePluginStore();
+  const { plugins, isLoading, error, fetchPlugins, setPluginEnabled } = usePluginStore();
   const [toggling, setToggling] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -32,9 +31,7 @@ export default function PluginsPage() {
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-3 border-b bg-background">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">
-          Plugins
-        </h2>
+        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">Plugins</h2>
       </div>
 
       {error && (
@@ -73,9 +70,7 @@ export default function PluginsPage() {
                     </Badge>
                   </div>
                   {plugin.description && (
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {plugin.description}
-                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{plugin.description}</p>
                   )}
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     {(plugin.provides.inboxRenderers ?? []).map((renderer) => (
@@ -85,7 +80,7 @@ export default function PluginsPage() {
                         className="text-[10px]"
                         title={`Renderer: ${renderer.label ?? renderer.component}`}
                       >
-                        {renderer.extensions.join(', ')}
+                        {renderer.extensions.join(", ")}
                       </Badge>
                     ))}
                   </div>

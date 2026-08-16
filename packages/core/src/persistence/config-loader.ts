@@ -1,9 +1,12 @@
-import fs from "node:fs";
 import path from "node:path";
-import matter from "gray-matter";
 import fg from "fast-glob";
+import matter from "gray-matter";
 import { z } from "zod";
-import type { AgentConfig, CapabilityMatrix } from "../agent/types.js";
+import { type AgentConfig, AgentConfigSchema } from "../agent/types.js";
+import { readUtf8FileBoundedSync } from "../filesystem/bounded-io.js";
+import { parseBoundary } from "../validation.js";
+
+const MAX_AGENT_CONFIG_BYTES = 2_000_000;
 
 const CapabilityMatrixSchema = z.object({
   chat: z.boolean().optional().default(true),
@@ -13,32 +16,40 @@ const CapabilityMatrixSchema = z.object({
   maxTokens: z.number().int().positive().optional().default(4096),
 });
 
-const AgentFrontmatterSchema = z.object({
-  name: z.string().min(1),
-  model: z.string().min(1),
-  tools: z.array(z.string()).min(1),
-  maxSteps: z.number().int().positive(),
-  description: z.string().optional(),
+const AgentFrontmatterSchema = AgentConfigSchema.omit({ instructions: true }).extend({
+  tools: z.array(z.string().min(1)).max(128),
   capabilities: CapabilityMatrixSchema.optional(),
-  modelIdMapping: z.string().optional(),
 });
 
 export function loadAgentConfig(filePath: string): AgentConfig {
-  const raw = fs.readFileSync(filePath, "utf-8");
+  const raw = readUtf8FileBoundedSync(filePath, MAX_AGENT_CONFIG_BYTES, "agent config file");
   const { data: frontmatter, content } = matter(raw);
 
-  const parsed = AgentFrontmatterSchema.parse(frontmatter);
+  const parsed = parseBoundary(
+    AgentFrontmatterSchema,
+    frontmatter,
+    `agent frontmatter ${filePath}`,
+  );
 
-  return {
-    name: parsed.name,
-    model: parsed.model,
-    tools: parsed.tools,
-    maxSteps: parsed.maxSteps,
-    instructions: content.trim(),
-    description: parsed.description,
-    capabilities: parsed.capabilities as CapabilityMatrix | undefined,
-    modelIdMapping: parsed.modelIdMapping,
-  };
+  return parseBoundary(
+    AgentConfigSchema,
+    {
+      name: parsed.name,
+      model: parsed.model,
+      tools: parsed.tools,
+      maxSteps: parsed.maxSteps,
+      instructions: content.trim(),
+      description: parsed.description,
+      capabilities: parsed.capabilities,
+      modelIdMapping: parsed.modelIdMapping,
+      maxToolCalls: parsed.maxToolCalls,
+      maxToolResultChars: parsed.maxToolResultChars,
+      maxOutputTokens: parsed.maxOutputTokens,
+      maxTotalTokens: parsed.maxTotalTokens,
+      runTimeoutMs: parsed.runTimeoutMs,
+    },
+    `agent configuration ${filePath}`,
+  );
 }
 
 export async function loadAllAgentConfigs(dir: string): Promise<AgentConfig[]> {

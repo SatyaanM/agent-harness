@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation Planning"
+  short_description: "Turn approved designs into executable plans"
+  default_prompt: "Use $implementation-planning to create a dependency-ordered implementation plan for this design."
