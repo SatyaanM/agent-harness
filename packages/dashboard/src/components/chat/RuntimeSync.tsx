@@ -79,6 +79,11 @@ export default function RuntimeSync() {
       }
     } catch (err) {
       logger.error("hydration failed", { ...describeError(err) });
+      // Keep `hydrated.current = false` so a hydration failure does NOT
+      // publish a partial (or empty) open set to the server — that would
+      // clobber the server-authoritative state. The next socket reconnect
+      // will retry hydration; pending sessions shown in the UI are local
+      // and will recover naturally.
     } finally {
       hydrating.current = false;
     }
