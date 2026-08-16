@@ -37,6 +37,16 @@ describe("SessionStore boundary validation", () => {
     await expect(store.load("broken")).rejects.toBeInstanceOf(BoundaryValidationError);
   });
 
+  it("rejects a transcript with unknown fields instead of silently dropping them", async () => {
+    const { dir, store } = await makeStore();
+    const session = createSessionData({ sessionId: "extra" });
+    const transcriptPath = path.join(dir, "extra.json");
+    await writeFile(transcriptPath, JSON.stringify({ ...session, unknownField: "keep-me" }));
+
+    await expect(store.load("extra")).rejects.toBeInstanceOf(BoundaryValidationError);
+    await expect(readFile(transcriptPath, "utf8")).resolves.toContain("unknownField");
+  });
+
   it("lists healthy sessions while preserving and diagnosing an invalid transcript", async () => {
     const { dir, store } = await makeStore();
     await store.save(createSessionData());

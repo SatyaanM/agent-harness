@@ -17,16 +17,18 @@ let socket: Socket | null = null;
 
 const SessionIdentifierSchema = z.string().min(1).max(128);
 export const SessionUpdatedEventSchema = SessionDataSchema;
-export const ToolEventSchema = z.object({
-  sessionId: SessionIdentifierSchema,
-  agentName: z.string().min(1).max(128),
-  tool: z.object({
-    type: z.enum(["called", "completed"]),
-    toolName: z.string().min(1).max(128),
-    args: z.unknown().optional(),
-    result: z.string().optional(),
-  }),
-});
+export const ToolEventSchema = z
+  .object({
+    sessionId: SessionIdentifierSchema,
+    agentName: z.string().min(1).max(128),
+    tool: z.object({
+      type: z.enum(["called", "completed"]),
+      toolName: z.string().min(1).max(128),
+      args: z.unknown().optional(),
+      result: z.string().optional(),
+    }),
+  })
+  .passthrough();
 export const AgentLifecycleEventSchema = z
   .object({ sessionId: SessionIdentifierSchema })
   .passthrough();

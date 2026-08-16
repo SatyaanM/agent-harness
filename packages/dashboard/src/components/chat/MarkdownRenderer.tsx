@@ -14,7 +14,10 @@ function safeHref(href?: string): string | undefined {
   if (/^(?:https?:\/\/|mailto:)/i.test(trimmed)) {
     return trimmed;
   }
-  if (trimmed.startsWith("/") || trimmed.startsWith("#")) {
+  if (trimmed.startsWith("#")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
     return trimmed;
   }
   return undefined;

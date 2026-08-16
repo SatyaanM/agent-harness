@@ -40,8 +40,11 @@ export default function RuntimeSync() {
   const sessions = useSessionStore((s) => s.sessions);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const hydrated = useRef(false);
+  const hydrating = useRef(false);
 
   const hydrateOpenSessions = useCallback(async (signal?: { cancelled: boolean }) => {
+    if (hydrating.current) return;
+    hydrating.current = true;
     try {
       const open = await fetchOpenSessions();
       const restored = (
@@ -61,6 +64,8 @@ export default function RuntimeSync() {
       hydrated.current = true;
     } catch (err) {
       logger.error("hydration failed", { ...describeError(err) });
+    } finally {
+      hydrating.current = false;
     }
   }, []);
 
