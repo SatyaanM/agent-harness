@@ -51,15 +51,18 @@ export class Worker {
 
       return workerResult;
     } catch (error) {
+      const isCancelled =
+        error instanceof AgentCancelledError ||
+        (error instanceof DOMException && error.name === "AbortError") ||
+        Boolean(this.abortSignal?.aborted);
       const workerResult: WorkerResult = {
         taskId: this.taskId,
-        status: error instanceof AgentCancelledError ? "cancelled" : "error",
-        summary:
-          error instanceof AgentCancelledError
-            ? "Cancelled by user"
-            : error instanceof Error
-              ? error.message
-              : String(error),
+        status: isCancelled ? "cancelled" : "error",
+        summary: isCancelled
+          ? "Cancelled by user"
+          : error instanceof Error
+            ? error.message
+            : String(error),
         messages: this.messages,
       };
 

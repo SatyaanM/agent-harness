@@ -59,10 +59,9 @@ export default function RuntimeSync() {
         ) {
           await updateOpenSessions(repaired);
         }
+        hydrated.current = true;
       } catch (err) {
         console.error("[RuntimeSync] hydration failed:", err);
-      } finally {
-        hydrated.current = true;
       }
     })();
     return () => {
@@ -81,6 +80,19 @@ export default function RuntimeSync() {
 
   useEffect(() => {
     const socket = connectSocket();
+
+    const onConnect = async () => {
+      if (!hydrated.current) return;
+      const currentSessions = useSessionStore.getState().sessions;
+      await Promise.all(
+        currentSessions.map(async (s) => {
+          const latest = await fetchSession(s.sessionId).catch(() => null);
+          if (latest) {
+            useSessionStore.getState().syncFromServer(latest);
+          }
+        }),
+      );
+    };
 
     const onSessionUpdated = validatedEventHandler(
       SessionUpdatedEventSchema,
@@ -131,6 +143,7 @@ export default function RuntimeSync() {
       (data) => useRosterStore.getState().setWorkerStatus(data.sessionId, data.taskId, data.status),
     );
 
+    socket.on("connect", onConnect);
     socket.on("session:updated", onSessionUpdated);
     socket.on("agent:tool", onTool);
     socket.on("agent:started", onAgentStarted);
@@ -140,6 +153,7 @@ export default function RuntimeSync() {
     socket.on("worker:completed", onWorkerCompleted);
 
     return () => {
+      socket.off("connect", onConnect);
       socket.off("session:updated", onSessionUpdated);
       socket.off("agent:tool", onTool);
       socket.off("agent:started", onAgentStarted);

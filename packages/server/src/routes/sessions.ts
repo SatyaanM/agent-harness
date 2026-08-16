@@ -143,7 +143,9 @@ sessionsRouter.post(
     let woke = false;
     if (pendingCount > 0) {
       const runtime = sessionManager.getOrCreate(sessionId);
-      await runtime.deliver();
+      runtime.deliver().catch((err) => {
+        console.error(`[sessions] Wake run failed for ${sessionId}:`, err);
+      });
       woke = true;
     }
 

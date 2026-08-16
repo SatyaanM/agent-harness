@@ -6,7 +6,7 @@ import type { PendingMessage } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { Tool, ToolRegistry } from "../tool/types.js";
-import type { AgentConfig, TaskId } from "./types.js";
+import { type AgentConfig, type TaskId, TaskIdSchema } from "./types.js";
 import { Worker } from "./worker.js";
 
 export interface DelegationDeps {
@@ -178,7 +178,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
 
 export function createReadSessionTool(sessionsDir: string): Tool {
   const parameters = z.object({
-    taskId: z.string().describe("The taskId of the worker session to read"),
+    taskId: TaskIdSchema.describe("The taskId of the worker session to read"),
   });
 
   return {

@@ -54,6 +54,10 @@ export function createApp(options?: {
   });
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (res.headersSent) {
+      _next(err);
+      return;
+    }
     if (isRecord(err) && err.type === "entity.parse.failed") {
       res.status(400).json({
         error: { code: "invalid_json", message: "Request body contains malformed JSON" },

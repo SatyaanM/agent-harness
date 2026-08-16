@@ -68,7 +68,7 @@ export function createEditFileTool(root: string): Tool<typeof parameters> {
         return `Error: oldText not found in ${filePath}`;
       }
 
-      const updated = content.replace(oldText, newText);
+      const updated = content.slice(0, index) + newText + content.slice(index + oldText.length);
       if (Buffer.byteLength(updated, "utf8") > MAX_WORKSPACE_FILE_BYTES) {
         return "Error: Edited file would exceed maximum size (10 MB).";
       }

@@ -28,6 +28,11 @@ describe("webFetch outbound policy", () => {
     "http://user:password@example.com",
     "http://127.0.0.1/admin",
     "http://[::1]/admin",
+    "http://[::127.0.0.1]/admin",
+    "http://[::169.254.169.254]/latest/meta-data",
+    "http://[::ffff:127.0.0.1]/admin",
+    "http://[fec0::1]/internal",
+    "http://[64:ff9b::192.168.1.1]/admin",
   ])("rejects a forbidden URL before fetching: %s", async (url) => {
     await expect(validateOutboundUrl(url, publicResolver)).rejects.toThrow("Refusing outbound URL");
   });

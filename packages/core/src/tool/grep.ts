@@ -138,6 +138,14 @@ export function createGrepTool(options?: { maxFiles?: number }): Tool<typeof Gre
       const searchPath = args.path ? path.resolve(root, args.path) : root;
       assertWithinRoot(searchPath, root);
 
+      try {
+        new RegExp(args.pattern, "i");
+      } catch (error) {
+        return `[error] Invalid regular expression: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+
       const results: Match[] = [];
       let bytesRead = 0;
       let filesScanned = 0;
@@ -170,6 +178,9 @@ export function createGrepTool(options?: { maxFiles?: number }): Tool<typeof Gre
         } catch (error) {
           if (error instanceof GrepRegexResourceError) {
             return `[error] Grep regular expression resource limit exceeded (${MAX_REGEX_FILE_MS}ms per file).`;
+          }
+          if (error instanceof SyntaxError) {
+            return `[error] Invalid regular expression: ${error.message}`;
           }
           throw error;
         }

@@ -41,11 +41,17 @@ export class CapabilityCache {
     this.loaded = true;
     const dir = path.dirname(this.cachePath);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(
-      this.cachePath,
-      stringifyJsonBounded(this.entries, MAX_CAPABILITY_CACHE_BYTES, "capability cache"),
-      "utf-8",
-    );
+    const temporaryPath = `${this.cachePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    try {
+      await fs.writeFile(
+        temporaryPath,
+        stringifyJsonBounded(this.entries, MAX_CAPABILITY_CACHE_BYTES, "capability cache"),
+        "utf-8",
+      );
+      await fs.rename(temporaryPath, this.cachePath);
+    } finally {
+      await fs.rm(temporaryPath, { force: true }).catch(() => null);
+    }
   }
 
   async getEntry(provider: string, model: string, sdk: string): Promise<RegistryEntry | undefined> {

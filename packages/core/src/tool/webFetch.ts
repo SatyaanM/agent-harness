@@ -68,15 +68,39 @@ function isPublicIp(address: string): boolean {
   const version = isIP(normalized);
   if (version === 4) return isPublicIpv4(normalized);
   if (version !== 6) return false;
+
+  if (normalized.startsWith("::ffff:")) {
+    const suffix = normalized.slice(7);
+    if (isIP(suffix) === 4) return isPublicIpv4(suffix);
+    const parts = suffix.split(":");
+    if (parts.length === 2) {
+      const high = Number.parseInt(parts[0], 16);
+      const low = Number.parseInt(parts[1], 16);
+      if (!Number.isNaN(high) && !Number.isNaN(low)) {
+        const first = (high >> 8) & 0xff;
+        const second = high & 0xff;
+        const third = (low >> 8) & 0xff;
+        const fourth = low & 0xff;
+        return isPublicIpv4(`${first}.${second}.${third}.${fourth}`);
+      }
+    }
+    return false;
+  }
+
+  if (normalized.startsWith("::")) {
+    return false;
+  }
+
   return !(
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized.startsWith("::ffff:") ||
     normalized.startsWith("fc") ||
     normalized.startsWith("fd") ||
     /^fe[89ab]/u.test(normalized) ||
+    /^fe[c-f]/u.test(normalized) ||
     normalized.startsWith("ff") ||
-    normalized.startsWith("2001:db8:")
+    normalized.startsWith("2001:db8:") ||
+    normalized.startsWith("64:ff9b:") ||
+    normalized.startsWith("2001:2:") ||
+    normalized.startsWith("100::")
   );
 }
 

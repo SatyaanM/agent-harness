@@ -32,6 +32,7 @@ chatRouter.post(
     };
     res.once("close", abortOnDisconnect);
 
+    sessionManager.trackSession(sessionId, controller);
     try {
       const runtime = sessionManager.getOrCreate(sessionId);
       const result = retry
@@ -48,6 +49,7 @@ chatRouter.post(
         res.write(`data: ${JSON.stringify({ type: "error", error: "Agent request failed" })}\n\n`);
       }
     } finally {
+      sessionManager.clearSession(sessionId);
       res.off("close", abortOnDisconnect);
     }
 

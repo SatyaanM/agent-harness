@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BoundaryValidationError } from "../validation.js";
 import { type SessionData, SessionStore } from "./session.js";
 
@@ -179,5 +179,87 @@ describe("SessionStore boundary validation", () => {
     expect(await store.listMeta()).not.toContainEqual(
       expect.objectContaining({ sessionId: "failed" }),
     );
+  });
+
+  it("rejects append when mailbox exceeds maximum message count", async () => {
+    const { dir, store } = await makeStore();
+    await store.save(session());
+    const validMessage = JSON.stringify({
+      taskId: "t-1",
+      from: "w",
+      agentName: "w",
+      status: "done",
+      summary: "s",
+      receivedAt: "2026-08-11T00:00:00.000Z",
+    });
+    await writeFile(
+      path.join(dir, "session-1.mailbox.jsonl"),
+      `${validMessage}\n`.repeat(10_000),
+      "utf8",
+    );
+
+    await expect(
+      store.appendMailbox("session-1", {
+        taskId: "overflow",
+        from: "w",
+        agentName: "w",
+        status: "done",
+        summary: "s",
+        receivedAt: "2026-08-11T00:00:00.000Z",
+      }),
+    ).rejects.toBeInstanceOf(BoundaryValidationError);
+  });
+
+  it("rejects append when mailbox exceeds maximum byte size", async () => {
+    const { dir, store } = await makeStore();
+    await store.save(session());
+    const largeSummary = "a".repeat(1_000_000);
+    const line = JSON.stringify({
+      taskId: "t-1",
+      from: "w",
+      agentName: "w",
+      status: "done",
+      summary: largeSummary,
+      receivedAt: "2026-08-11T00:00:00.000Z",
+    });
+    await writeFile(path.join(dir, "session-1.mailbox.jsonl"), `${line}\n`.repeat(25), "utf8");
+
+    await expect(
+      store.appendMailbox("session-1", {
+        taskId: "overflow-bytes",
+        from: "w",
+        agentName: "w",
+        status: "done",
+        summary: "s",
+        receivedAt: "2026-08-11T00:00:00.000Z",
+      }),
+    ).rejects.toBeInstanceOf(BoundaryValidationError);
+  });
+
+  it("rejects listing when session count exceeds maximum limit", async () => {
+    const { store } = await makeStore();
+    const mockEntries = Array.from({ length: 10_001 }, (_, i) => ({
+      isFile: () => true,
+      name: `session-${i}.json`,
+    }));
+    async function* gen() {
+      for (const entry of mockEntries) {
+        yield entry;
+      }
+    }
+    const mockDir = {
+      [Symbol.asyncIterator]() {
+        return gen();
+      },
+      close: async () => {},
+    };
+    const fs = await import("fs-extra");
+    vi.spyOn(fs.default, "opendir").mockImplementation(async () => mockDir);
+    const boundedIo = await import("../filesystem/bounded-io.js");
+    vi.spyOn(boundedIo, "readUtf8FileBounded").mockResolvedValue(
+      JSON.stringify(session({ sessionId: "mock" })),
+    );
+
+    await expect(store.listWithDiagnostics()).rejects.toBeInstanceOf(BoundaryValidationError);
   });
 });

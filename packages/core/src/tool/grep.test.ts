@@ -43,4 +43,14 @@ describe("grep resource limits", () => {
 
     expect(result).toContain("truncated");
   });
+
+  it("handles invalid regular expression syntax gracefully", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-grep-"));
+    tempDirs.push(root);
+    process.env.ROOT = root;
+    resetConfig();
+
+    const result = await grepTool.execute({ pattern: "[unclosed", path: "." });
+    expect(result).toContain("[error] Invalid regular expression");
+  });
 });

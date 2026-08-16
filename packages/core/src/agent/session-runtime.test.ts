@@ -383,8 +383,74 @@ describe("SessionRuntime delivery invariants", () => {
     await vi.waitFor(() => expect(limiter.snapshot().queued).toBe(1));
     expect(events).not.toContain("agent:started");
     gate.resolve();
-
     await Promise.all([occupying, run]);
     expect(events).toContain("agent:started");
+  });
+
+  it("does not abort execution if mailbox acknowledgment fails", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+    await store.save({
+      sessionId: "ack-fail",
+      taskId: "task-1",
+      prompt: "init",
+      messages: [],
+      createdAt: "2026-08-15T00:00:00.000Z",
+    });
+    await store.appendMailbox("ack-fail", {
+      taskId: "w-1",
+      from: "worker",
+      agentName: "worker",
+      status: "done",
+      summary: "worker done",
+      receivedAt: "2026-08-15T00:01:00.000Z",
+    });
+
+    vi.spyOn(SessionStore.prototype, "acknowledgeMailbox").mockRejectedValueOnce(
+      new Error("disk error on ack"),
+    );
+
+    const runtime = new SessionRuntime({
+      sessionId: "ack-fail",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("Handled completion.");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    const result = await runtime.deliver();
+    expect(result.status).toBe("success");
+    const saved = await store.load("ack-fail");
+    expect(saved?.result?.status).toBe("success");
+  });
+
+  it("does not save to disk if the session was deleted before completion", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+    let available = true;
+
+    const runtime = new SessionRuntime({
+      sessionId: "deleted-midrun",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          available = false;
+          await store.delete("deleted-midrun");
+          return stop("finished after deletion");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      isSessionAvailable: () => available,
+    });
+
+    await runtime.deliver("work");
+    expect(await store.load("deleted-midrun")).toBeNull();
   });
 });

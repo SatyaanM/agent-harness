@@ -170,12 +170,22 @@ export const useSessionStore = create<SessionStore>((set) => ({
           ],
         };
       }
+
+      let mergedMessages = messages;
+      const optimisticMessages = existing.messages.filter((m) => !m.id.startsWith("srv-"));
+      if (optimisticMessages.length > 0) {
+        const uncommitted = optimisticMessages.filter(
+          (opt) => !messages.some((srv) => srv.role === opt.role && srv.content === opt.content),
+        );
+        mergedMessages = [...messages, ...uncommitted];
+      }
+
       return {
         sessions: state.sessions.map((s) =>
           s.sessionId === data.sessionId
             ? {
                 ...s,
-                messages,
+                messages: mergedMessages,
                 agentName: data.agentName ?? s.agentName,
                 title: data.title,
               }

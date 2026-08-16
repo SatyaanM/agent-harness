@@ -47,6 +47,7 @@ export interface SessionRuntimeOptions {
   capabilityRegistry: CapabilityRegistry;
   executionLimiter?: ExecutionLimiter;
   onEvent?: (event: SessionRuntimeEvent) => void;
+  isSessionAvailable?: (sessionId: string) => boolean;
 }
 
 export class SessionRuntime {
@@ -169,11 +170,18 @@ export class SessionRuntime {
     session.mailbox = pending;
     await this.sessionStore.save(session);
     if (pending.length > 0) {
-      await this.sessionStore.acknowledgeMailbox(
-        this.options.sessionId,
-        pending.map((entry) => entry.taskId),
-      );
-      session.mailbox = [];
+      try {
+        await this.sessionStore.acknowledgeMailbox(
+          this.options.sessionId,
+          pending.map((entry) => entry.taskId),
+        );
+        session.mailbox = [];
+      } catch (ackError) {
+        console.warn(
+          `[session-runtime] Failed to acknowledge mailbox for session ${this.options.sessionId}:`,
+          ackError,
+        );
+      }
     }
 
     if (!message && deliveredSystem.length === 0) {
@@ -237,31 +245,38 @@ export class SessionRuntime {
         : await execute();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const isCancelled =
+        error instanceof AgentCancelledError ||
+        (error instanceof DOMException && error.name === "AbortError") ||
+        Boolean(signal?.aborted);
+      const isBudgetExceeded = error instanceof AgentBudgetExceededError;
+
       const partial = (latestRunMessages ?? [])
         .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
         .map((entry) => ({ ...entry, createdAt: entry.createdAt ?? new Date().toISOString() }));
       session.messages.push(...partial);
       session.result = {
-        status:
-          error instanceof AgentCancelledError
-            ? "cancelled"
-            : error instanceof AgentBudgetExceededError
-              ? "budgetExceeded"
-              : "error",
+        status: isCancelled ? "cancelled" : isBudgetExceeded ? "budgetExceeded" : "error",
         summary: errorMessage,
       };
       session.completedAt = new Date().toISOString();
-      try {
-        await this.sessionStore.save(session);
-        this.emit({ type: "session:updated", session });
-      } catch (persistenceError) {
-        const persistenceMessage =
-          persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
-        this.emit({
-          type: "agent:error",
-          agentName: agentConfig.name,
-          error: `Failed to persist partial run: ${persistenceMessage}`,
-        });
+
+      if (
+        !this.options.isSessionAvailable ||
+        this.options.isSessionAvailable(this.options.sessionId)
+      ) {
+        try {
+          await this.sessionStore.save(session);
+          this.emit({ type: "session:updated", session });
+        } catch (persistenceError) {
+          const persistenceMessage =
+            persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
+          this.emit({
+            type: "agent:error",
+            agentName: agentConfig.name,
+            error: `Failed to persist partial run: ${persistenceMessage}`,
+          });
+        }
       }
       this.emit({ type: "agent:error", agentName: agentConfig.name, error: errorMessage });
       throw error;
@@ -279,10 +294,14 @@ export class SessionRuntime {
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = new Date().toISOString();
 
-    await this.sessionStore.save(session);
-
-    this.emit({ type: "agent:completed", agentName: agentConfig.name, status: result.status });
-    this.emit({ type: "session:updated", session });
+    if (
+      !this.options.isSessionAvailable ||
+      this.options.isSessionAvailable(this.options.sessionId)
+    ) {
+      await this.sessionStore.save(session);
+      this.emit({ type: "agent:completed", agentName: agentConfig.name, status: result.status });
+      this.emit({ type: "session:updated", session });
+    }
 
     return result;
   }

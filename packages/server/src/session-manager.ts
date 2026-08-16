@@ -50,6 +50,7 @@ export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
 
 export class SessionManager {
   private runtimes = new Map<string, SessionRuntime>();
+  private sessionControllers = new Map<string, AbortController>();
   private workerControllers = new Map<
     string,
     { controller: AbortController; parentSessionId: string }
@@ -84,6 +85,7 @@ export class SessionManager {
         capabilityRegistry,
         executionLimiter,
         onEvent: (event) => this.handleRuntimeEvent(event),
+        isSessionAvailable: (id) => this.isSessionAvailable(id),
       });
       this.runtimes.set(sessionId, runtime);
     }
@@ -96,6 +98,14 @@ export class SessionManager {
 
   unload(sessionId: string): void {
     this.runtimes.delete(sessionId);
+  }
+
+  trackSession(sessionId: string, controller: AbortController): void {
+    this.sessionControllers.set(sessionId, controller);
+  }
+
+  clearSession(sessionId: string): void {
+    this.sessionControllers.delete(sessionId);
   }
 
   trackWorker(taskId: string, parentSessionId: string, controller: AbortController): void {
@@ -116,6 +126,11 @@ export class SessionManager {
 
   prepareSessionDeletion(sessionId: string): void {
     this.deletedSessions.add(sessionId);
+    const sessionController = this.sessionControllers.get(sessionId);
+    if (sessionController) {
+      sessionController.abort();
+      this.sessionControllers.delete(sessionId);
+    }
     this.unload(sessionId);
     for (const [taskId, worker] of this.workerControllers) {
       if (worker.parentSessionId !== sessionId) continue;
