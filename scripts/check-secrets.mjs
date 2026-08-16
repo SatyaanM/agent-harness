@@ -62,6 +62,7 @@ const IGNORED_DIRECTORIES = new Set([
 
 const IGNORED_FILES = new Set([
   ".env.example",
+  "check-secrets.test.mts",
   "package-lock.json",
   "security-audit-exceptions.json",
 ]);

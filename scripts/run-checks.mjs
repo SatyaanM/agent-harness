@@ -8,6 +8,7 @@ const commonChecks = [
   [corepack, ["npm", "run", "quality:policy"]],
   [corepack, ["npm", "run", "skills:validate"]],
   [corepack, ["npm", "run", "docs:check"]],
+  [corepack, ["npm", "run", "secrets:check"]],
   [corepack, ["npm", "run", "typecheck"]],
 ];
 const modeChecks = {
