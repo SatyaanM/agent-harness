@@ -57,10 +57,38 @@ function stringifyValue(value: unknown): string {
   }
 }
 
+function needsQuoting(value: string): boolean {
+  // Field values may contain spaces, tabs, newlines, quotes, or characters
+  // that break greppability when written as bare tokens. Quoting is the
+  // difference between an unambiguous record and one that parses as more
+  // tokens than were actually written.
+  if (value.length === 0) return true;
+  if (/[\s"'\\=]/u.test(value)) return true;
+  return false;
+}
+
+function quoteValue(value: string): string {
+  // Use backslash escapes for control characters and quote characters that
+  // would otherwise break simple shell-style parsing; everything else passes
+  // through inside double-quotes.
+  const escaped = value
+    .replace(/\\/gu, "\\\\")
+    .replace(/"/gu, '\\"')
+    .replace(/\n/gu, "\\n")
+    .replace(/\r/gu, "\\r")
+    .replace(/\t/gu, "\\t");
+  return `"${escaped}"`;
+}
+
 function serializeFields(fields: Record<string, unknown>): string {
   const entries = Object.entries(fields);
   if (entries.length === 0) return "";
-  return entries.map(([key, value]) => `${key}=${stringifyValue(value)}`).join(" ");
+  return entries
+    .map(([key, value]) => {
+      const stringified = stringifyValue(value);
+      return `${key}=${needsQuoting(stringified) ? quoteValue(stringified) : stringified}`;
+    })
+    .join(" ");
 }
 
 /** Default sink: one greppable line per record via the matching console method. */

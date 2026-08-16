@@ -41,6 +41,7 @@ export default function RuntimeSync() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const hydrated = useRef(false);
   const hydrating = useRef(false);
+  const pendingSync = useRef(false);
 
   const hydrateOpenSessions = useCallback(async (signal?: { cancelled: boolean }) => {
     if (hydrating.current) return;
@@ -62,6 +63,20 @@ export default function RuntimeSync() {
         await updateOpenSessions(repaired);
       }
       hydrated.current = true;
+
+      // If the registry-sync effect ran while hydration was in flight, it
+      // queued its latest snapshot. Publish it now so the server sees a state
+      // consistent with whatever the rest of the dashboard has accumulated
+      // since boot — typically the same `repaired` snapshot, but always
+      // post-hydration.
+      if (pendingSync.current) {
+        pendingSync.current = false;
+        const current = useSessionStore.getState();
+        await updateOpenSessions({
+          activeSessionId: current.activeSessionId,
+          openSessionIds: current.sessions.map((s) => s.sessionId),
+        }).catch((err: unknown) => logger.error("registry sync failed", { ...describeError(err) }));
+      }
     } catch (err) {
       logger.error("hydration failed", { ...describeError(err) });
     } finally {
@@ -81,12 +96,14 @@ export default function RuntimeSync() {
 
   // Registry sync: the dashboard is the single writer of the open set (ADR §12.1).
   useEffect(() => {
+    // Until hydration completes, the in-memory store may hold partial data
+    // (e.g. a session that streamed in over the socket before boot hydration
+    // returned). Publishing that partial state would overwrite the
+    // server-authoritative open set. Instead, queue the latest snapshot and
+    // replay it from the hydration completion site.
     if (!hydrated.current) {
-      if (sessions.length > 0 || activeSessionId !== null) {
-        hydrated.current = true;
-      } else {
-        return;
-      }
+      pendingSync.current = true;
+      return;
     }
     updateOpenSessions({
       activeSessionId,

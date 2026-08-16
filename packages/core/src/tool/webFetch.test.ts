@@ -32,7 +32,31 @@ describe("webFetch outbound policy", () => {
     "http://[::169.254.169.254]/latest/meta-data",
     "http://[::ffff:127.0.0.1]/admin",
     "http://[fec0::1]/internal",
+    // Fully-expanded IPv4-mapped IPv6 forms (canonical text for ::ffff:wxyz).
+    // The URL parser already normalizes these into the canonical ::ffff:wxyz
+    // form, but the SSRF classifier must remain robust when called directly
+    // with arbitrary textual input — e.g. from a future caller that resolves
+    // an address via a non-URL-aware path.
+    "http://[0:0:0:0:0:ffff:7f00:1]/admin",
+    "http://[0000:0000:0000:0000:0000:ffff:7f00:0001]/admin",
+    // IPv4-compatible IPv6 (deprecated RFC 4291 §2.5.5.1 form).
+    "http://[::7f00:1]/admin",
+    "http://[0:0:0:0:0:0:7f00:1]/admin",
+    // 6to4 (RFC 3056): 2002::/16 — embed 192.168.1.1 and 10.0.0.1, both private.
+    "http://[2002:c0a8:101::]/admin",
+    "http://[2002:0a00:0001::]/admin",
+    // NAT64 well-known prefix (RFC 6052): 64:ff9b::/96 — embed private IPv4.
     "http://[64:ff9b::192.168.1.1]/admin",
+    // NAT64 local prefix (RFC 8215): 64:ff9b:1::/48.
+    "http://[64:ff9b:1::192.168.1.1]/admin",
+    // Documentation prefix (RFC 3849).
+    "http://[2001:db8::1]/admin",
+    // Discard-only prefix (RFC 6666): 100::/64 — block the whole subnet.
+    "http://[100::1]/admin",
+    // Link-local (RFC 4291).
+    "http://[fe80::1]/admin",
+    // Teredo (RFC 4380): 2001::/32.
+    "http://[2001::1]/admin",
   ])("rejects a forbidden URL before fetching: %s", async (url) => {
     await expect(validateOutboundUrl(url, publicResolver)).rejects.toThrow("Refusing outbound URL");
   });

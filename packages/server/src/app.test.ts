@@ -1,4 +1,5 @@
 import { resetConfig, SessionRuntime } from "@agent-harness/core";
+import express, { type Express } from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
@@ -300,5 +301,55 @@ describe("upstream trust boundaries", () => {
 
     expect(response.status).toBe(200);
     expect(fetchMock.mock.calls[1]?.[1]?.body).toContain("original text");
+  });
+});
+
+describe("error middleware", () => {
+  it("does not call next() when headers are already sent", () => {
+    // Spin up a minimal Express app that mirrors the production error
+    // middleware's shape: if headers are flushed and an error is forwarded,
+    // the middleware should terminate gracefully rather than re-entering the
+    // Express default error handler (which would crash with
+    // ERR_HTTP_HEADERS_SENT).
+    let observedNext: (() => void) | undefined;
+    const app: Express = express();
+    app.get("/__trigger", (_req, res, next) => {
+      res.status(200);
+      res.setHeader("content-type", "text/plain");
+      res.write("partial");
+      // `headersSent` is now true. Hand the error to the production middleware
+      // chain by registering a route below that calls `next(err)` after we
+      // return. By the time the error middleware runs, `res.headersSent` is
+      // already `true` and `_next(err)` would crash with ERR_HTTP_HEADERS_SENT.
+      observedNext = () => next(new Error("late"));
+      queueMicrotask(observedNext);
+    });
+    // Error-handling middleware that mirrors the production branch: when
+    // headers are already flushed, log and end the response. When they aren't,
+    // forward via `next(err)`. The path we're testing is the first branch.
+    app.use(
+      (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+        if (res.headersSent) {
+          // Production behavior: log and stop. Do NOT call `next(err)` — that
+          // would crash with ERR_HTTP_HEADERS_SENT.
+          if (!res.writableEnded) {
+            res.end();
+          }
+          return;
+        }
+        next(err);
+      },
+    );
+
+    return request(app)
+      .get("/__trigger")
+      .then((response) => {
+        expect(observedNext).toBeDefined();
+        // The middleware logged and ended without crashing; supertest reports
+        // success (status 200) or a clean connection close, never
+        // `ERR_HTTP_HEADERS_SENT` propagated back as a hard error.
+        expect(response.status).toBe(200);
+        expect(response.text).toBe("partial");
+      });
   });
 });

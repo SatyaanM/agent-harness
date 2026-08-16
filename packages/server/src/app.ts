@@ -62,7 +62,16 @@ export function createApp(options?: {
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (res.headersSent) {
-      _next(err);
+      // Headers are already flushed, so we cannot send a structured error
+      // response. Express's default error handler will try to write one and
+      // crash with ERR_HTTP_HEADERS_SENT. Log the error and ask the runtime
+      // to drop the socket — the response is in an indeterminate state.
+      logger.error("Unhandled error after response started", {
+        ...describeError(err),
+      });
+      if (!res.writableEnded) {
+        res.end();
+      }
       return;
     }
     if (isRecord(err) && err.type === "entity.parse.failed") {

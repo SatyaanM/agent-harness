@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -41,7 +42,10 @@ export class CapabilityCache {
     this.loaded = true;
     const dir = path.dirname(this.cachePath);
     await fs.mkdir(dir, { recursive: true });
-    const temporaryPath = `${this.cachePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    // The temp filename includes `randomUUID()` rather than `Date.now()` +
+    // `Math.random()` so two writers can't accidentally pick the same path and
+    // trample each other's content during the write → rename window.
+    const temporaryPath = `${this.cachePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await fs.writeFile(
         temporaryPath,
