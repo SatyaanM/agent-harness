@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SessionData } from "@agent-harness/core";
-import { getConfig, SessionStore } from "@agent-harness/core";
+import { createLogger, describeError, getConfig, SessionStore } from "@agent-harness/core";
 import { Router } from "express";
 import { z } from "zod";
 import { hooks } from "../hooks.js";
@@ -17,6 +17,8 @@ import { sessionManager } from "../session-manager.js";
 import { emitAgentEvent } from "../ws/events.js";
 
 export const sessionsRouter = Router();
+
+const logger = createLogger("server.sessions");
 
 const SessionParamsSchema = z.object({ id: IdentifierSchema }).strict();
 const OpenSessionsUpdateSchema = z
@@ -144,7 +146,7 @@ sessionsRouter.post(
     if (pendingCount > 0) {
       const runtime = sessionManager.getOrCreate(sessionId);
       runtime.deliver().catch((err) => {
-        console.error(`[sessions] Wake run failed for ${sessionId}:`, err);
+        logger.error("Wake run failed", { sessionId, ...describeError(err) });
       });
       woke = true;
     }

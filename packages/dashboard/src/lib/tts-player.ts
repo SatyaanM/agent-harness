@@ -1,5 +1,11 @@
-import { parseJsonResponseBoundary } from "@agent-harness/core/contracts";
+import {
+  createLogger,
+  describeError,
+  parseJsonResponseBoundary,
+} from "@agent-harness/core/contracts";
 import { z } from "zod";
+
+const logger = createLogger("dashboard.tts-player");
 
 export type PlaybackState = "idle" | "playing" | "paused";
 
@@ -201,7 +207,7 @@ export function createTTSPlayer(): TTSPlayer {
         playFromQueue();
       } catch (error) {
         if (generation !== playbackGeneration) return;
-        console.error("[TTS Player] Error:", error);
+        logger.error("Error", { ...describeError(error) });
         notifyStateChange("idle");
         throw error;
       } finally {

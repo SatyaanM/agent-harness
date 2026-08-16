@@ -1,8 +1,15 @@
 "use client";
 
-import { parseBoundary, SessionDataSchema } from "@agent-harness/core/contracts";
+import {
+  createLogger,
+  describeError,
+  parseBoundary,
+  SessionDataSchema,
+} from "@agent-harness/core/contracts";
 import { io, type Socket } from "socket.io-client";
 import { z } from "zod";
+
+const logger = createLogger("dashboard.ws");
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
@@ -49,7 +56,7 @@ export function validatedEventHandler<TSchema extends z.ZodTypeAny>(
   boundary: string,
   handler: (value: z.output<TSchema>) => void,
   onInvalid: (error: unknown) => void = (error) =>
-    console.error(`[WebSocket] Rejected ${boundary}:`, error),
+    logger.error(`Rejected ${boundary}`, { ...describeError(error) }),
 ): (value: unknown) => void {
   return (value) => {
     try {

@@ -1,6 +1,9 @@
 "use client";
 
+import { createLogger, describeError } from "@agent-harness/core/contracts";
 import { Component, type ReactNode } from "react";
+
+const logger = createLogger("dashboard.error-boundary");
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -23,7 +26,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("[ErrorBoundary] Caught error:", error, errorInfo);
+    logger.error("Caught error", {
+      ...describeError(error),
+      componentStack: errorInfo.componentStack,
+    });
   }
 
   handleRetry = () => {

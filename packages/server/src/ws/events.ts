@@ -13,18 +13,25 @@ export type AgentEventType =
 export interface AgentStartedPayload {
   sessionId: string;
   agentName: string;
+  runId?: string;
+  requestId?: string;
 }
 
 export interface AgentCompletedPayload {
   sessionId: string;
   agentName: string;
   status: string;
+  runId?: string;
+  requestId?: string;
 }
 
 export interface AgentErrorPayload {
   sessionId: string;
   agentName?: string;
   error: string;
+  code?: string;
+  runId?: string;
+  requestId?: string;
 }
 
 export interface AgentToolPayload {
@@ -36,6 +43,8 @@ export interface AgentToolPayload {
     args?: unknown;
     result?: string;
   };
+  runId?: string;
+  requestId?: string;
 }
 
 export interface WorkerSpawnedPayload {

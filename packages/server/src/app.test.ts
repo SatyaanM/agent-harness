@@ -173,7 +173,12 @@ describe("upstream trust boundaries", () => {
       .send({ sessionId: "retry-session", message: "hello", retry: true });
 
     expect(res.status).toBe(200);
-    expect(retry).toHaveBeenCalledWith("hello", undefined, expect.any(AbortSignal));
+    expect(retry).toHaveBeenCalledWith(
+      "hello",
+      undefined,
+      expect.any(AbortSignal),
+      expect.any(String),
+    );
     expect(deliver).not.toHaveBeenCalled();
   });
 

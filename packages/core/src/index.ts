@@ -40,6 +40,8 @@ export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supe
 export { callSupervisor } from "./collaboration/supervision.js";
 export type { Config } from "./config.js";
 export { ConfigSchema, getConfig, getConfigRoot, resetConfig } from "./config.js";
+export type { ErrorDescriptor } from "./contracts/errors.js";
+export { describeError } from "./contracts/errors.js";
 export { parseJsonResponseBoundary, readResponseTextBounded } from "./contracts/http.js";
 export {
   MAX_INBOX_FILE_BYTES,
@@ -50,6 +52,8 @@ export {
   MAX_SESSION_RESPONSE_BYTES,
   MAX_SESSION_TRANSCRIPT_BYTES,
 } from "./contracts/limits.js";
+export type { Logger, LogLevel, LogRecord, LogSink } from "./contracts/logging.js";
+export { consoleSink, createLogger } from "./contracts/logging.js";
 export {
   readFileBounded,
   readUtf8FileBounded,

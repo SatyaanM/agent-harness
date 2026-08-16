@@ -1,5 +1,6 @@
 "use client";
 
+import { createLogger, describeError } from "@agent-harness/core/contracts";
 import { useEffect, useRef, useState } from "react";
 import { type Message, useSessionStore } from "@/stores/session-store";
 import { useTTSStore } from "@/stores/tts-store";
@@ -7,6 +8,8 @@ import { CouncilCard } from "./CouncilCard";
 import { DelegationCard } from "./DelegationCard";
 import { InboxLink } from "./InboxLink";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+
+const logger = createLogger("dashboard.chat-stream");
 
 const TAG_INDICATORS: Record<string, string> = {
   excitedly: "✨",
@@ -233,7 +236,7 @@ function AssistantMessage({ message }: { message: Message }) {
     try {
       await play(displayContent);
     } catch (error) {
-      console.error("TTS error:", error);
+      logger.error("TTS error", { ...describeError(error) });
     } finally {
       setIsPlaying(false);
     }

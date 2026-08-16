@@ -5,10 +5,12 @@ import {
   createDelegateTool,
   createEditFileTool,
   createListDirectoryTool,
+  createLogger,
   createReadFileTool,
   createReadSessionTool,
   createVercelAILLMClient,
   createWriteFileTool,
+  describeError,
   ExecutionLimiter,
   getConfig,
   globTool,
@@ -21,6 +23,8 @@ import {
 } from "@agent-harness/core";
 import { parseServerConfig } from "./server-config.js";
 import { emitAgentEvent } from "./ws/events.js";
+
+const logger = createLogger("server.session-manager");
 
 export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
   const config = getConfig();
@@ -173,7 +177,7 @@ export class SessionManager {
     if (runtime) {
       // Loaded session: wake it to process the delivered completion.
       runtime.deliver().catch((err) => {
-        console.error("[session-manager] Wake run failed:", err);
+        logger.error("Wake run failed", { sessionId: delegatingSessionId, ...describeError(err) });
       });
     }
     // Not loaded: the pending message stays durable on disk until the session is loaded.
@@ -239,10 +243,10 @@ export class SessionManager {
         onWorkerSettled: (taskId) => this.onWorkerSettled(taskId),
         isSessionAvailable: (candidateSessionId) => this.isSessionAvailable(candidateSessionId),
         onBackgroundError: (error) => {
-          console.error(
-            "[session-manager] Background worker persistence failed:",
-            error instanceof Error ? error.message : error,
-          );
+          logger.error("Background worker persistence failed", {
+            sessionId,
+            ...describeError(error),
+          });
         },
         onWorkerTool: (workerSessionId, event) => {
           const tool =

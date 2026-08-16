@@ -1,5 +1,6 @@
 "use client";
 
+import { createLogger, describeError } from "@agent-harness/core/contracts";
 import { useCallback, useEffect, useRef } from "react";
 import {
   fetchOpenSessions,
@@ -19,6 +20,8 @@ import {
 import { useRosterStore } from "@/stores/agent-roster-store";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useSessionStore } from "@/stores/session-store";
+
+const logger = createLogger("dashboard.runtime-sync");
 
 export function resolveRestoredOpenState(
   open: OpenSessionsState,
@@ -57,7 +60,7 @@ export default function RuntimeSync() {
       }
       hydrated.current = true;
     } catch (err) {
-      console.error("[RuntimeSync] hydration failed:", err);
+      logger.error("hydration failed", { ...describeError(err) });
     }
   }, []);
 
@@ -83,7 +86,7 @@ export default function RuntimeSync() {
     updateOpenSessions({
       activeSessionId,
       openSessionIds: sessions.map((s) => s.sessionId),
-    }).catch((err) => console.error("[RuntimeSync] registry sync failed:", err));
+    }).catch((err) => logger.error("registry sync failed", { ...describeError(err) }));
   }, [sessions, activeSessionId]);
 
   useEffect(() => {

@@ -1,6 +1,8 @@
 import type { TTSConfig } from "@agent-harness/core";
 import {
   createGeminiTTSProvider,
+  createLogger,
+  describeError,
   GEMINI_VOICES,
   getConfig,
   parseJsonResponseBoundary,
@@ -11,6 +13,8 @@ import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
 
 export const ttsRouter = Router();
+
+const logger = createLogger("server.tts");
 
 const TTSRequestSchema = z
   .object({
@@ -106,7 +110,9 @@ ttsRouter.post(
           }
         } catch (error) {
           if (controller.signal.aborted) throw error;
-          console.error("[tts] Optional paraphrase failed; using original text");
+          logger.warn("Optional paraphrase failed; using original text", {
+            ...describeError(error),
+          });
         }
       }
 
@@ -141,8 +147,8 @@ ttsRouter.post(
       }
 
       res.end();
-    } catch {
-      console.error("[tts] Request failed");
+    } catch (error) {
+      logger.error("Request failed", { ...describeError(error) });
       if (res.destroyed || res.writableEnded) return;
       if (res.headersSent) {
         res.end();

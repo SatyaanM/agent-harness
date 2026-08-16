@@ -13,3 +13,4 @@ Use zero-padded sequential filenames. Status values are Proposed, Accepted, Supe
 
 - [0001 - Separate development-agent tooling from product runtime capabilities](0001-development-agent-layer.md) - Accepted
 - [0002 - Parse once at trust boundaries and enforce quality in layers](0002-boundary-validation-and-quality-gates.md) - Accepted
+- [0003 - Standardize runtime correlation, structured logging, and error envelopes](0003-structured-logging-correlation-error-envelope.md) - Accepted

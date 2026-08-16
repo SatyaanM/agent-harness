@@ -1,6 +1,7 @@
 "use client";
 
 import type { Message, SessionData } from "@agent-harness/core/contracts";
+import { createLogger, describeError } from "@agent-harness/core/contracts";
 import { GripVertical, Maximize2, Minimize2, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -8,6 +9,8 @@ import { useShallow } from "zustand/react/shallow";
 import { cancelWorker, fetchSession } from "@/lib/api";
 import { useRosterStore } from "@/stores/agent-roster-store";
 import { useRuntimeStore } from "@/stores/runtime-store";
+
+const logger = createLogger("dashboard.agent-drawer");
 
 const DEFAULT_WIDTH = 360;
 const MIN_WIDTH = 280;
@@ -196,7 +199,7 @@ export default function AgentDrawer({
         })
         .catch((error: unknown) => {
           if (!controller.signal.aborted) {
-            console.error("Failed to load worker transcript", error);
+            logger.error("Failed to load worker transcript", { ...describeError(error) });
           }
         })
         .finally(() => {

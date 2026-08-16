@@ -1,4 +1,9 @@
-import { isRecord, MAX_INBOX_FILE_REQUEST_BYTES } from "@agent-harness/core";
+import {
+  createLogger,
+  describeError,
+  isRecord,
+  MAX_INBOX_FILE_REQUEST_BYTES,
+} from "@agent-harness/core";
 import cors from "cors";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
@@ -13,6 +18,8 @@ import { ttsRouter } from "./routes/tts.js";
 import { workersRouter } from "./routes/workers.js";
 import { parseServerConfig } from "./server-config.js";
 import { sessionManager } from "./session-manager.js";
+
+const logger = createLogger("server.app");
 
 export function createApp(options?: {
   allowedOrigins?: readonly string[];
@@ -70,7 +77,7 @@ export function createApp(options?: {
       });
       return;
     }
-    console.error("[Server] Unhandled error:", err instanceof Error ? err.stack : err);
+    logger.error("Unhandled error", { ...describeError(err) });
     res.status(500).json({
       error: { code: "internal_error", message: "Internal server error" },
     });
