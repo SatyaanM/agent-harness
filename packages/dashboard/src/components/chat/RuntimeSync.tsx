@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   fetchOpenSessions,
   fetchSession,
@@ -38,40 +38,48 @@ export default function RuntimeSync() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const hydrated = useRef(false);
 
+  const hydrateOpenSessions = useCallback(async (signal?: { cancelled: boolean }) => {
+    try {
+      const open = await fetchOpenSessions();
+      const restored = (
+        await Promise.all(open.openSessionIds.map((id) => fetchSession(id).catch(() => null)))
+      ).filter((s): s is NonNullable<typeof s> => s !== null);
+      if (signal?.cancelled) return;
+
+      useSessionStore.getState().hydrate(restored);
+      const repaired = resolveRestoredOpenState(open, restored);
+      useSessionStore.getState().setActiveSession(repaired.activeSessionId);
+      if (
+        repaired.activeSessionId !== open.activeSessionId ||
+        repaired.openSessionIds.length !== open.openSessionIds.length
+      ) {
+        await updateOpenSessions(repaired);
+      }
+      hydrated.current = true;
+    } catch (err) {
+      console.error("[RuntimeSync] hydration failed:", err);
+    }
+  }, []);
+
   // Boot hydration: restore the recorded open set as tabs, history only
   // (ADR §12.3 — no runtime loads, no token spend).
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const open = await fetchOpenSessions();
-        const restored = (
-          await Promise.all(open.openSessionIds.map((id) => fetchSession(id).catch(() => null)))
-        ).filter((s): s is NonNullable<typeof s> => s !== null);
-        if (cancelled) return;
-
-        useSessionStore.getState().hydrate(restored);
-        const repaired = resolveRestoredOpenState(open, restored);
-        useSessionStore.getState().setActiveSession(repaired.activeSessionId);
-        if (
-          repaired.activeSessionId !== open.activeSessionId ||
-          repaired.openSessionIds.length !== open.openSessionIds.length
-        ) {
-          await updateOpenSessions(repaired);
-        }
-        hydrated.current = true;
-      } catch (err) {
-        console.error("[RuntimeSync] hydration failed:", err);
-      }
-    })();
+    const signal = { cancelled: false };
+    void hydrateOpenSessions(signal);
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
     };
-  }, []);
+  }, [hydrateOpenSessions]);
 
   // Registry sync: the dashboard is the single writer of the open set (ADR §12.1).
   useEffect(() => {
-    if (!hydrated.current) return;
+    if (!hydrated.current) {
+      if (sessions.length > 0 || activeSessionId !== null) {
+        hydrated.current = true;
+      } else {
+        return;
+      }
+    }
     updateOpenSessions({
       activeSessionId,
       openSessionIds: sessions.map((s) => s.sessionId),
@@ -82,7 +90,10 @@ export default function RuntimeSync() {
     const socket = connectSocket();
 
     const onConnect = async () => {
-      if (!hydrated.current) return;
+      if (!hydrated.current) {
+        await hydrateOpenSessions();
+        return;
+      }
       const currentSessions = useSessionStore.getState().sessions;
       await Promise.all(
         currentSessions.map(async (s) => {
@@ -162,7 +173,7 @@ export default function RuntimeSync() {
       socket.off("worker:spawned", onWorkerSpawned);
       socket.off("worker:completed", onWorkerCompleted);
     };
-  }, []);
+  }, [hydrateOpenSessions]);
 
   return null;
 }

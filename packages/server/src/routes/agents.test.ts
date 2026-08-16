@@ -214,4 +214,27 @@ Updated instructions.
     const getRes = await request(app).get("/api/agents/to-delete");
     expect(getRes.status).toBe(404);
   });
+
+  it("atomically handles concurrent creations of the same agent name with one 201 and one 409", async () => {
+    const { app } = await appFixture();
+    const [res1, res2] = await Promise.all([
+      request(app).post("/api/agents").send({
+        name: "concurrent-agent",
+        model: "test-model",
+        tools: [],
+        maxSteps: 10,
+        instructions: "A",
+      }),
+      request(app).post("/api/agents").send({
+        name: "concurrent-agent",
+        model: "test-model",
+        tools: [],
+        maxSteps: 10,
+        instructions: "B",
+      }),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    expect(statuses).toEqual([201, 409]);
+  });
 });

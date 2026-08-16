@@ -76,12 +76,26 @@ export class SessionRuntime {
     this.options.onEvent?.({ sessionId: this.options.sessionId, ...event });
   }
 
+  private isAvailable(): boolean {
+    return (
+      !this.options.isSessionAvailable || this.options.isSessionAvailable(this.options.sessionId)
+    );
+  }
+
   private async runOnce(
     message?: string,
     agentName?: string,
     signal?: AbortSignal,
     replayExistingUser = false,
   ): Promise<AgentResult> {
+    if (!this.isAvailable()) {
+      return {
+        status: "cancelled",
+        summary: "Session is no longer available",
+        messages: [],
+      };
+    }
+
     const now = new Date().toISOString();
 
     let session = await this.sessionStore.load(this.options.sessionId);
@@ -168,8 +182,17 @@ export class SessionRuntime {
         : []),
     ];
     session.mailbox = pending;
+
+    if (!this.isAvailable()) {
+      return {
+        status: "cancelled",
+        summary: "Session is no longer available",
+        messages: [...session.messages],
+      };
+    }
+
     await this.sessionStore.save(session);
-    if (pending.length > 0) {
+    if (pending.length > 0 && this.isAvailable()) {
       try {
         await this.sessionStore.acknowledgeMailbox(
           this.options.sessionId,
@@ -261,10 +284,7 @@ export class SessionRuntime {
       };
       session.completedAt = new Date().toISOString();
 
-      if (
-        !this.options.isSessionAvailable ||
-        this.options.isSessionAvailable(this.options.sessionId)
-      ) {
+      if (this.isAvailable()) {
         try {
           await this.sessionStore.save(session);
           this.emit({ type: "session:updated", session });
@@ -294,10 +314,7 @@ export class SessionRuntime {
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = new Date().toISOString();
 
-    if (
-      !this.options.isSessionAvailable ||
-      this.options.isSessionAvailable(this.options.sessionId)
-    ) {
+    if (this.isAvailable()) {
       await this.sessionStore.save(session);
       this.emit({ type: "agent:completed", agentName: agentConfig.name, status: result.status });
       this.emit({ type: "session:updated", session });

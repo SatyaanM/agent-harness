@@ -49,7 +49,7 @@ chatRouter.post(
         res.write(`data: ${JSON.stringify({ type: "error", error: "Agent request failed" })}\n\n`);
       }
     } finally {
-      sessionManager.clearSession(sessionId);
+      sessionManager.clearSession(sessionId, controller);
       res.off("close", abortOnDisconnect);
     }
 

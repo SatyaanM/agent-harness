@@ -159,4 +159,59 @@ describe("RuntimeSync component lifecycle", () => {
       expect(useSessionStore.getState().sessions[0]?.messages.length).toBe(2);
     });
   });
+
+  it("retries hydration upon socket reconnect if initial boot hydration failed", async () => {
+    vi.mocked(api.fetchOpenSessions).mockRejectedValueOnce(new Error("network failure"));
+
+    render(<RuntimeSync />);
+
+    await waitFor(() => {
+      expect(api.fetchOpenSessions).toHaveBeenCalledTimes(1);
+    });
+
+    vi.mocked(api.fetchOpenSessions).mockResolvedValueOnce({
+      activeSessionId: "session-1",
+      openSessionIds: ["session-1"],
+    });
+    vi.mocked(api.fetchSession).mockResolvedValueOnce({
+      sessionId: "session-1",
+      taskId: "task-1",
+      prompt: "hello",
+      messages: [{ role: "user", content: "hello" }],
+      agentName: "orchestrator",
+      createdAt: "2026-08-15T00:00:00.000Z",
+    });
+
+    mockSocket.emit("connect");
+
+    await waitFor(() => {
+      expect(api.fetchOpenSessions).toHaveBeenCalledTimes(2);
+      expect(useSessionStore.getState().sessions.length).toBe(1);
+    });
+  });
+
+  it("enables open session persistence when user creates a session after initial hydration failure", async () => {
+    vi.mocked(api.fetchOpenSessions).mockRejectedValueOnce(new Error("network failure"));
+
+    render(<RuntimeSync />);
+
+    await waitFor(() => {
+      expect(api.fetchOpenSessions).toHaveBeenCalled();
+    });
+
+    useSessionStore.getState().addSession({
+      sessionId: "new-user-session",
+      messages: [],
+      status: "active",
+      agentName: "orchestrator",
+      createdAt: "2026-08-15T00:00:00.000Z",
+    });
+
+    await waitFor(() => {
+      expect(api.updateOpenSessions).toHaveBeenCalledWith({
+        activeSessionId: "new-user-session",
+        openSessionIds: ["new-user-session"],
+      });
+    });
+  });
 });

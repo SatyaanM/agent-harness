@@ -6,6 +6,7 @@ import {
   AgentConfigSchema,
   BoundaryValidationError,
   getConfig,
+  isRecord,
   loadAgentConfig,
   loadAllAgentConfigs,
   readUtf8FileBounded,
@@ -120,31 +121,42 @@ agentsRouter.post(
     if (!body) return;
 
     const filePath = path.join(config.AGENTS_DIR, `${body.name}.md`);
-    const stat = await fs.stat(filePath).catch(() => null);
-    if (stat) {
-      res.status(409).json({ error: "Agent already exists" });
-      return;
-    }
-
     await fs.mkdir(config.AGENTS_DIR, { recursive: true });
-    const agentConfig = await writeAgentConfig(filePath, {
-      name: body.name,
-      model: body.model,
-      tools: body.tools ?? [],
-      maxSteps: body.maxSteps ?? 10,
-      instructions: body.instructions ?? "",
-      ...(body.description !== undefined ? { description: body.description } : {}),
-      ...(body.capabilities !== undefined ? { capabilities: body.capabilities } : {}),
-      ...(body.modelIdMapping !== undefined ? { modelIdMapping: body.modelIdMapping } : {}),
-      ...(body.maxToolCalls !== undefined ? { maxToolCalls: body.maxToolCalls } : {}),
-      ...(body.maxToolResultChars !== undefined
-        ? { maxToolResultChars: body.maxToolResultChars }
-        : {}),
-      ...(body.maxOutputTokens !== undefined ? { maxOutputTokens: body.maxOutputTokens } : {}),
-      ...(body.maxTotalTokens !== undefined ? { maxTotalTokens: body.maxTotalTokens } : {}),
-      ...(body.runTimeoutMs !== undefined ? { runTimeoutMs: body.runTimeoutMs } : {}),
-    });
-    res.status(201).json(agentConfig);
+
+    try {
+      const agentConfig = await writeAgentConfig(
+        filePath,
+        {
+          name: body.name,
+          model: body.model,
+          tools: body.tools ?? [],
+          maxSteps: body.maxSteps ?? 10,
+          instructions: body.instructions ?? "",
+          ...(body.description !== undefined ? { description: body.description } : {}),
+          ...(body.capabilities !== undefined ? { capabilities: body.capabilities } : {}),
+          ...(body.modelIdMapping !== undefined ? { modelIdMapping: body.modelIdMapping } : {}),
+          ...(body.maxToolCalls !== undefined ? { maxToolCalls: body.maxToolCalls } : {}),
+          ...(body.maxToolResultChars !== undefined
+            ? { maxToolResultChars: body.maxToolResultChars }
+            : {}),
+          ...(body.maxOutputTokens !== undefined ? { maxOutputTokens: body.maxOutputTokens } : {}),
+          ...(body.maxTotalTokens !== undefined ? { maxTotalTokens: body.maxTotalTokens } : {}),
+          ...(body.runTimeoutMs !== undefined ? { runTimeoutMs: body.runTimeoutMs } : {}),
+        },
+        true,
+      );
+      res.status(201).json(agentConfig);
+    } catch (error) {
+      if (
+        isRecord(error) &&
+        (error.code === "EEXIST" ||
+          (typeof error.message === "string" && error.message.includes("EEXIST")))
+      ) {
+        res.status(409).json({ error: "Agent already exists" });
+        return;
+      }
+      throw error;
+    }
   }),
 );
 
@@ -221,8 +233,25 @@ function buildAgentMarkdown(config: Partial<z.infer<typeof AgentConfigSchema>>):
   return stringify("", frontmatter) + (config.instructions ?? "");
 }
 
-async function writeAgentConfig(filePath: string, config: AgentConfig): Promise<AgentConfig> {
+async function writeAgentConfig(
+  filePath: string,
+  config: AgentConfig,
+  exclusive = false,
+): Promise<AgentConfig> {
   const content = buildAgentMarkdown(config);
+  if (exclusive) {
+    const handle = await fs.open(filePath, "wx");
+    try {
+      await handle.writeFile(content, "utf-8");
+      await handle.close();
+      return loadAgentConfig(filePath);
+    } catch (error) {
+      await handle.close().catch(() => null);
+      await fs.unlink(filePath).catch(() => null);
+      throw error;
+    }
+  }
+
   const temporaryFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await fs.writeFile(temporaryFile, content, "utf-8");

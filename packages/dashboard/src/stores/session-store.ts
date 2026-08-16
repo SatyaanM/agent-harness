@@ -171,14 +171,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
         };
       }
 
-      let mergedMessages = messages;
-      const optimisticMessages = existing.messages.filter((m) => !m.id.startsWith("srv-"));
-      if (optimisticMessages.length > 0) {
-        const uncommitted = optimisticMessages.filter(
-          (opt) => !messages.some((srv) => srv.role === opt.role && srv.content === opt.content),
-        );
-        mergedMessages = [...messages, ...uncommitted];
-      }
+      const mergedMessages = reconcileOptimisticMessages(existing.messages, messages);
 
       return {
         sessions: state.sessions.map((s) =>
@@ -194,6 +187,43 @@ export const useSessionStore = create<SessionStore>((set) => ({
       };
     }),
 }));
+
+export function reconcileOptimisticMessages(
+  existingMessages: Message[],
+  serverMessages: Message[],
+): Message[] {
+  const optimistic = existingMessages.filter((m) => !m.id.startsWith("srv-"));
+  if (optimistic.length === 0) return serverMessages;
+
+  const serverUserCounts = new Map<string, number>();
+  for (const msg of serverMessages) {
+    if (msg.role === "user") {
+      serverUserCounts.set(msg.content, (serverUserCounts.get(msg.content) ?? 0) + 1);
+    }
+  }
+
+  const uncommitted: Message[] = [];
+  const committedUserCounts = new Map<string, number>();
+  let currentTurnIsCommitted = false;
+
+  for (const opt of optimistic) {
+    if (opt.role === "user") {
+      const serverCount = serverUserCounts.get(opt.content) ?? 0;
+      const alreadyCommitted = committedUserCounts.get(opt.content) ?? 0;
+      if (alreadyCommitted < serverCount) {
+        committedUserCounts.set(opt.content, alreadyCommitted + 1);
+        currentTurnIsCommitted = true;
+      } else {
+        currentTurnIsCommitted = false;
+        uncommitted.push(opt);
+      }
+    } else if (!currentTurnIsCommitted) {
+      uncommitted.push(opt);
+    }
+  }
+
+  return [...serverMessages, ...uncommitted];
+}
 
 function serverMessageToClient(m: ServerMessage, index: number): Message {
   const role =

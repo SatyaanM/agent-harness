@@ -453,4 +453,27 @@ describe("SessionRuntime delivery invariants", () => {
     await runtime.deliver("work");
     expect(await store.load("deleted-midrun")).toBeNull();
   });
+
+  it("does not write initial transcript or resurrect deleted session when isSessionAvailable is false upfront", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+
+    const runtime = new SessionRuntime({
+      sessionId: "already-deleted",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("should not run");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      isSessionAvailable: () => false,
+    });
+
+    const result = await runtime.deliver("work");
+    expect(result.status).toBe("cancelled");
+    expect(await store.load("already-deleted")).toBeNull();
+  });
 });
