@@ -110,7 +110,16 @@ export class SessionRuntime {
     this.logger = createLogger("core.session-runtime").child({ sessionId: options.sessionId });
   }
 
-  /** Serialized delivery: only one run happens at a time per session. */
+  /**
+   * Serialized delivery: only one run happens at a time per session.
+   *
+   * IMPORTANT: `onEvent` callbacks MUST NOT synchronously `await` `deliver()`
+   * from the same runtime. Re-entrancy through the same promise chain is
+   * safe in principle (no stack overflow — `Promise.then` is async), but the
+   * awaited run will queue behind the currently-executing callback and the
+   * caller will hang. If you need to trigger a follow-up run from an event
+   * callback, fire it without awaiting or schedule it on `queueMicrotask`.
+   */
   deliver(
     message?: string,
     agentName?: string,

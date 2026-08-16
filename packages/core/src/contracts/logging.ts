@@ -39,14 +39,25 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
   error: 40,
 };
 
+/**
+ * Maximum number of characters retained from an `Error.stack` when serializing
+ * one into a log record. Long stack frames from third-party SDKs can otherwise
+ * dominate log volume; the marker is a clear visual signal of truncation.
+ */
+const STACK_CAP = 4_096;
+const STACK_TRUNCATED = "...[truncated]";
+
 function isLogLevel(value: string): value is LogLevel {
   return value === "debug" || value === "info" || value === "warn" || value === "error";
 }
 
 function stringifyValue(value: unknown): string {
   if (value instanceof Error) {
-    const stack = value.stack ? ` (${value.stack})` : "";
-    return `${value.name}: ${value.message}${stack}`;
+    const rawStack = typeof value.stack === "string" ? value.stack : "";
+    const stack =
+      rawStack.length > STACK_CAP ? `${rawStack.slice(0, STACK_CAP)}${STACK_TRUNCATED}` : rawStack;
+    const stackSuffix = stack.length > 0 ? ` (${stack})` : "";
+    return `${value.name}: ${value.message}${stackSuffix}`;
   }
   if (typeof value === "string") return value;
   try {
@@ -91,7 +102,14 @@ function serializeFields(fields: Record<string, unknown>): string {
     .join(" ");
 }
 
-/** Default sink: one greppable line per record via the matching console method. */
+/**
+ * Default sink: one greppable line per record via the matching console method.
+ *
+ * Logged `Error` instances come with their full stack trace — long stacks (or
+ * noisy frames from third-party SDKs) can balloon log lines. `STACK_CAP`
+ * bounds the stack length and appends a clear truncation marker so operators
+ * can spot it without parsing overflow.
+ */
 export function consoleSink(record: LogRecord): void {
   const fields = serializeFields(record.fields);
   const suffix = fields.length > 0 ? ` ${fields}` : "";

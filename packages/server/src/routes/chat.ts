@@ -36,6 +36,18 @@ chatRouter.post(
     };
     res.once("close", abortOnDisconnect);
 
+    // Skip tracking entirely when the session was already deleted. Otherwise
+    // the controller lingers in the map (its set has been cleared) and would
+    // be GC'd only by the next prepareSessionDeletion — a tiny leak with no
+    // correctness impact, but easy to avoid.
+    if (!sessionManager.isSessionAvailable(sessionId)) {
+      res.write(
+        `data: ${JSON.stringify({ type: "error", error: "Session is no longer available" })}\n\n`,
+      );
+      res.end();
+      return;
+    }
+
     sessionManager.trackSession(sessionId, controller);
     const requestId = randomUUID();
     try {

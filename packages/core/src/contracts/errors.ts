@@ -5,6 +5,18 @@ import { isRecord } from "./validation.js";
  * into a machine-readable envelope before logging or emitting it across a
  * boundary (WebSocket, HTTP, worker result). It never leaks stack traces into
  * the descriptor; callers that need the stack read it from the original error.
+ *
+ * The `code` field is intended as a STABLE MACHINE-READABLE IDENTIFIER for the
+ * failure category:
+ *  - If `error.code` (Node-style string) is present, it is preferred.
+ *  - Otherwise `error.name` is used as a best-effort fallback so built-in
+ *    errors (`Error`, `TypeError`, ...) and project error classes
+ *    (`AgentCancelledError`, `AgentBudgetExceededError`, ...) still surface
+ *    a meaningful token. Consumers that rely on a strict allowlist of codes
+ *    SHOULD map the descriptor through their own classifier rather than
+ *    branching on `code === "<classname>"` directly.
+ *  - For non-`Error` throw values (`throw "boom"`, `throw { code: 'X' }`),
+ *    `code` is `"unknown_error"` or the stringified object's `code`.
  */
 export interface ErrorDescriptor {
   /** Error class or category name (e.g. "AgentCancelledError"). */

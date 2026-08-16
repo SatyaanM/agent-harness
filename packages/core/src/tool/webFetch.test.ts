@@ -58,6 +58,11 @@ describe("webFetch outbound policy", () => {
     // an address via a non-URL-aware path.
     "http://[0:0:0:0:0:ffff:7f00:1]/admin",
     "http://[0000:0000:0000:0000:0000:ffff:7f00:0001]/admin",
+    // Fully-expanded IPv4-mapped IPv6 with an embedded PRIVATE IPv4. The
+    // reviewer-flagged SSRF bypass relied on these forms slipping past the
+    // prefix matcher.
+    "http://[0:0:0:0:0:ffff:c0a8:101]/admin",
+    "http://[0:0:0:0:0:ffff:0a00:0001]/admin",
     // IPv4-compatible IPv6 (deprecated RFC 4291 §2.5.5.1 form).
     "http://[::7f00:1]/admin",
     "http://[0:0:0:0:0:0:7f00:1]/admin",

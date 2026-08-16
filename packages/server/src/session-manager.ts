@@ -142,6 +142,9 @@ export class SessionManager {
   private static readonly MAX_DELETED_SESSIONS = 5000;
 
   prepareSessionDeletion(sessionId: string): void {
+    // FIFO eviction: `Set` preserves insertion order, so `keys().next().value`
+    // returns the oldest entry. This caps the set's memory under steady-state
+    // server churn while never evicting a freshly-deleted session mid-flight.
     if (this.deletedSessions.size >= SessionManager.MAX_DELETED_SESSIONS) {
       const oldest = this.deletedSessions.keys().next().value;
       if (oldest !== undefined) {
