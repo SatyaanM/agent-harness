@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useRosterStore } from "@/stores/agent-roster-store";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useSessionStore } from "@/stores/session-store";
+import { createTestSession } from "@/test-helpers/session-fixtures";
 import AgentColumn from "./AgentColumn";
 
 vi.mock("./AgentDrawer", () => ({ default: () => null }));
@@ -16,15 +17,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverMock);
   useSessionStore.setState({
     activeSessionId: "session-1",
-    sessions: [
-      {
-        sessionId: "session-1",
-        messages: [],
-        status: "active",
-        agentName: "orchestrator",
-        createdAt: "2026-08-15T00:00:00.000Z",
-      },
-    ],
+    sessions: [createTestSession({ sessionId: "session-1" })],
   });
   useRosterStore.setState({
     bySession: {

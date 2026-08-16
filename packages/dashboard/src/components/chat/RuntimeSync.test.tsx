@@ -4,6 +4,7 @@ import * as api from "@/lib/api";
 import { useRosterStore } from "@/stores/agent-roster-store";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useSessionStore } from "@/stores/session-store";
+import { createTestServerSession, createTestSession } from "@/test-helpers/session-fixtures";
 import RuntimeSync, { resolveRestoredOpenState } from "./RuntimeSync";
 
 const { mockSocket, clearListeners } = vi.hoisted(() => {
@@ -96,14 +97,10 @@ describe("RuntimeSync component lifecycle", () => {
     });
     vi.mocked(api.fetchSession).mockImplementation(async (id: string) => {
       if (id === "session-1") {
-        return {
+        return createTestServerSession({
           sessionId: "session-1",
-          taskId: "task-1",
-          prompt: "hello",
           messages: [{ role: "user", content: "hello" }],
-          agentName: "orchestrator",
-          createdAt: "2026-08-15T00:00:00.000Z",
-        };
+        });
       }
       throw new Error("404 Not found");
     });
@@ -126,14 +123,12 @@ describe("RuntimeSync component lifecycle", () => {
       activeSessionId: "session-1",
       openSessionIds: ["session-1"],
     });
-    vi.mocked(api.fetchSession).mockResolvedValue({
-      sessionId: "session-1",
-      taskId: "task-1",
-      prompt: "hello",
-      messages: [{ role: "user", content: "hello" }],
-      agentName: "orchestrator",
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    vi.mocked(api.fetchSession).mockResolvedValue(
+      createTestServerSession({
+        sessionId: "session-1",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    );
 
     render(<RuntimeSync />);
 
@@ -141,17 +136,15 @@ describe("RuntimeSync component lifecycle", () => {
       expect(useSessionStore.getState().sessions.length).toBe(1);
     });
 
-    vi.mocked(api.fetchSession).mockResolvedValueOnce({
-      sessionId: "session-1",
-      taskId: "task-1",
-      prompt: "hello",
-      messages: [
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "reconnected response" },
-      ],
-      agentName: "orchestrator",
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    vi.mocked(api.fetchSession).mockResolvedValueOnce(
+      createTestServerSession({
+        sessionId: "session-1",
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "assistant", content: "reconnected response" },
+        ],
+      }),
+    );
 
     mockSocket.emit("connect");
 
@@ -173,14 +166,12 @@ describe("RuntimeSync component lifecycle", () => {
       activeSessionId: "session-1",
       openSessionIds: ["session-1"],
     });
-    vi.mocked(api.fetchSession).mockResolvedValueOnce({
-      sessionId: "session-1",
-      taskId: "task-1",
-      prompt: "hello",
-      messages: [{ role: "user", content: "hello" }],
-      agentName: "orchestrator",
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    vi.mocked(api.fetchSession).mockResolvedValueOnce(
+      createTestServerSession({
+        sessionId: "session-1",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    );
 
     mockSocket.emit("connect");
 
@@ -199,13 +190,11 @@ describe("RuntimeSync component lifecycle", () => {
       expect(api.fetchOpenSessions).toHaveBeenCalled();
     });
 
-    useSessionStore.getState().addSession({
-      sessionId: "new-user-session",
-      messages: [],
-      status: "active",
-      agentName: "orchestrator",
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    useSessionStore.getState().addSession(
+      createTestSession({
+        sessionId: "new-user-session",
+      }),
+    );
 
     await waitFor(() => {
       expect(api.updateOpenSessions).toHaveBeenCalledWith({

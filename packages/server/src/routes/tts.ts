@@ -191,7 +191,11 @@ Keep it under 5 sentences. Do not add greetings or closings.`);
       balanced: "Use a moderate variety of tags",
       expressive: "Use creative and frequent tags. Be inventive to make delivery lively",
     };
-    parts.push(styleMap[options.tagStyle] || styleMap.balanced);
+    const styleInstruction =
+      (options.tagStyle && styleMap[options.tagStyle]) ||
+      styleMap.balanced ||
+      "Use a moderate variety of tags";
+    parts.push(styleInstruction);
   }
 
   if (options.customTagInstructions) {

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resetConfig, SessionRuntime, SessionStore } from "@agent-harness/core";
+import { createSessionData, resetConfig, SessionRuntime, SessionStore } from "@agent-harness/core";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -30,13 +30,14 @@ afterEach(async () => {
 describe("session collection and durable diagnostics", () => {
   it("returns bounded metadata from the collection endpoint and diagnoses invalid records", async () => {
     const { app, root, store } = await fixture();
-    await store.save({
-      sessionId: "healthy",
-      taskId: "task-1",
-      prompt: "hello",
-      messages: [{ role: "user", content: "hello" }],
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "healthy",
+        prompt: "hello",
+        messages: [{ role: "user", content: "hello" }],
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
     const invalidPath = path.join(root, "sessions", "broken.json");
     await writeFile(invalidPath, "{invalid-json}", "utf8");
 
@@ -140,13 +141,13 @@ describe("session collection and durable diagnostics", () => {
 
   it("vetoes deletion before durable state or runtime lifecycle changes", async () => {
     const { app, store } = await fixture();
-    await store.save({
-      sessionId: "kept",
-      taskId: "task-1",
-      prompt: "keep",
-      messages: [],
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "kept",
+        prompt: "keep",
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
     vi.spyOn(hooks, "runBefore").mockRejectedValueOnce(new Error("veto"));
     const prepare = vi.spyOn(sessionManager, "prepareSessionDeletion");
 
@@ -164,13 +165,13 @@ describe("session collection and durable diagnostics", () => {
       summary: "done",
       messages: [],
     });
-    await store.save({
-      sessionId: "with-mailbox",
-      taskId: "task-1",
-      prompt: "init",
-      messages: [],
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "with-mailbox",
+        prompt: "init",
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
     await store.appendMailbox("with-mailbox", {
       taskId: "w-1",
       from: "worker",
@@ -179,13 +180,14 @@ describe("session collection and durable diagnostics", () => {
       summary: "res",
       receivedAt: "2026-08-15T00:00:00.000Z",
     });
-    await store.save({
-      sessionId: "idle",
-      taskId: "task-2",
-      prompt: "idle",
-      messages: [],
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "idle",
+        taskId: "task-2",
+        prompt: "idle",
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
 
     const wakeRes = await request(app).post("/api/sessions/with-mailbox/open");
     expect(wakeRes.status).toBe(200);

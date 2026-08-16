@@ -73,9 +73,11 @@ function isPublicIp(address: string): boolean {
     const suffix = normalized.slice(7);
     if (isIP(suffix) === 4) return isPublicIpv4(suffix);
     const parts = suffix.split(":");
-    if (parts.length === 2) {
-      const high = Number.parseInt(parts[0], 16);
-      const low = Number.parseInt(parts[1], 16);
+    const part0 = parts[0];
+    const part1 = parts[1];
+    if (parts.length === 2 && part0 !== undefined && part1 !== undefined) {
+      const high = Number.parseInt(part0, 16);
+      const low = Number.parseInt(part1, 16);
       if (!Number.isNaN(high) && !Number.isNaN(low)) {
         const first = (high >> 8) & 0xff;
         const second = high & 0xff;

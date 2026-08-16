@@ -2,12 +2,16 @@ import path from "node:path";
 import fs from "fs-extra";
 import { MAX_SESSION_MAILBOX_BYTES, MAX_SESSION_TRANSCRIPT_BYTES } from "../contracts/limits.js";
 import {
+  createSessionData,
   type PendingMessage,
   PendingMessageSchema,
   type SessionData,
   SessionDataSchema,
   SessionIdSchema,
 } from "../contracts/session.js";
+
+export { createSessionData };
+
 import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded-io.js";
 import { BoundaryValidationError, parseBoundary, parseJsonBoundary } from "../validation.js";
 import { getSessionIndex, type SessionMeta } from "./session-index.js";
@@ -117,6 +121,7 @@ class TranscriptState {
         this.queue = [];
         try {
           const last = batch[batch.length - 1];
+          if (!last) continue;
           if (last.kind === "delete") {
             await fs.remove(this.filePath);
           } else {

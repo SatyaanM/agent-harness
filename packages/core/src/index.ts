@@ -68,7 +68,12 @@ export { createVercelAILLMClient } from "./llm/vercel-ai.js";
 export { CapabilityCache } from "./persistence/capability-cache.js";
 export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
 export type { PendingMessage, SessionData } from "./persistence/session.js";
-export { PendingMessageSchema, SessionDataSchema, SessionStore } from "./persistence/session.js";
+export {
+  createSessionData,
+  PendingMessageSchema,
+  SessionDataSchema,
+  SessionStore,
+} from "./persistence/session.js";
 export type { SessionMeta } from "./persistence/session-index.js";
 export type {
   InboxRendererManifest,

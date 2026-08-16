@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BoundaryValidationError } from "../validation.js";
-import { type SessionData, SessionStore } from "./session.js";
+import { createSessionData, SessionStore } from "./session.js";
 
 const tempDirs: string[] = [];
 
@@ -13,17 +13,6 @@ async function makeStore(): Promise<{ dir: string; store: SessionStore }> {
   return { dir, store: new SessionStore(dir) };
 }
 
-function session(overrides: Partial<SessionData> = {}): SessionData {
-  return {
-    sessionId: "session-1",
-    taskId: "task-1",
-    prompt: "hello",
-    messages: [{ role: "user", content: "hello" }],
-    createdAt: "2026-08-11T00:00:00.000Z",
-    ...overrides,
-  };
-}
-
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -31,7 +20,7 @@ afterEach(async () => {
 describe("SessionStore boundary validation", () => {
   it("round-trips a valid session", async () => {
     const { store } = await makeStore();
-    await store.save(session());
+    await store.save(createSessionData());
 
     await expect(store.load("session-1")).resolves.toEqual(
       expect.objectContaining({ sessionId: "session-1", mailbox: [] }),
@@ -50,7 +39,7 @@ describe("SessionStore boundary validation", () => {
 
   it("lists healthy sessions while preserving and diagnosing an invalid transcript", async () => {
     const { dir, store } = await makeStore();
-    await store.save(session());
+    await store.save(createSessionData());
     const invalidPath = path.join(dir, "broken.json");
     await writeFile(invalidPath, '{"secret": TOP_SECRET}', "utf8");
 
@@ -67,7 +56,7 @@ describe("SessionStore boundary validation", () => {
 
   it("keeps a valid transcript listable while diagnosing an invalid mailbox", async () => {
     const { dir, store } = await makeStore();
-    await store.save(session());
+    await store.save(createSessionData());
     const mailboxPath = path.join(dir, "session-1.mailbox.jsonl");
     await writeFile(mailboxPath, '{"secret": TOP_SECRET}\n', "utf8");
 
@@ -90,7 +79,7 @@ describe("SessionStore boundary validation", () => {
 
   it("preserves and rejects a corrupt mailbox line instead of silently dropping it", async () => {
     const { dir, store } = await makeStore();
-    await store.save(session());
+    await store.save(createSessionData());
     const mailboxPath = path.join(dir, "session-1.mailbox.jsonl");
     await writeFile(mailboxPath, "{corrupt-json}\n", "utf8");
 
@@ -100,7 +89,7 @@ describe("SessionStore boundary validation", () => {
 
   it("preserves concurrent mailbox appends in submission order until acknowledgement", async () => {
     const { store } = await makeStore();
-    await store.save(session());
+    await store.save(createSessionData());
     const pending = ["task-1", "task-2", "task-3"].map((taskId, index) => ({
       taskId,
       from: `worker-${index + 1}`,
@@ -122,7 +111,7 @@ describe("SessionStore boundary validation", () => {
 
   it("acknowledges only materialized mailbox messages and preserves concurrent appends", async () => {
     const { store } = await makeStore();
-    await store.save(session());
+    await store.save(createSessionData());
     const first = {
       taskId: "task-1",
       from: "worker-1",
@@ -154,7 +143,7 @@ describe("SessionStore boundary validation", () => {
     const { store } = await makeStore();
     const saves = Array.from({ length: 20 }, (_value, index) =>
       store.save(
-        session({
+        createSessionData({
           prompt: `version-${index}`,
           messages: [{ role: "user", content: `version-${index}` }],
         }),
@@ -173,7 +162,7 @@ describe("SessionStore boundary validation", () => {
     await mkdir(path.join(dir, "failed.json.tmp"));
 
     await expect(
-      store.save(session({ sessionId: "failed", taskId: "failed-task" })),
+      store.save(createSessionData({ sessionId: "failed", taskId: "failed-task" })),
     ).rejects.toThrow();
 
     expect(await store.listMeta()).not.toContainEqual(
@@ -183,7 +172,7 @@ describe("SessionStore boundary validation", () => {
 
   it("rejects append when mailbox exceeds maximum message count", async () => {
     const { dir, store } = await makeStore();
-    await store.save(session());
+    await store.save(createSessionData());
     const validMessage = JSON.stringify({
       taskId: "t-1",
       from: "w",
@@ -212,7 +201,7 @@ describe("SessionStore boundary validation", () => {
 
   it("rejects append when mailbox exceeds maximum byte size", async () => {
     const { dir, store } = await makeStore();
-    await store.save(session());
+    await store.save(createSessionData());
     const largeSummary = "a".repeat(1_000_000);
     const line = JSON.stringify({
       taskId: "t-1",
@@ -257,7 +246,7 @@ describe("SessionStore boundary validation", () => {
     vi.spyOn(fs.default, "opendir").mockImplementation(async () => mockDir);
     const boundedIo = await import("../filesystem/bounded-io.js");
     vi.spyOn(boundedIo, "readUtf8FileBounded").mockResolvedValue(
-      JSON.stringify(session({ sessionId: "mock" })),
+      JSON.stringify(createSessionData({ sessionId: "mock" })),
     );
 
     await expect(store.listWithDiagnostics()).rejects.toBeInstanceOf(BoundaryValidationError);

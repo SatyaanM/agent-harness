@@ -190,7 +190,8 @@ function convertMessages(messages: Message[]) {
 
 function findToolName(toolCallId: string, messages: Message[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const tc = messages[i].toolCalls?.find((c) => c.toolCallId === toolCallId);
+    const msg = messages[i];
+    const tc = msg?.toolCalls?.find((c) => c.toolCallId === toolCallId);
     if (tc) return tc.toolName;
   }
   return undefined;

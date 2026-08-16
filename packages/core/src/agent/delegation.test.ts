@@ -6,7 +6,7 @@ import { z } from "zod";
 import { CapabilityRegistry } from "../capability/registry.js";
 import { messageBus } from "../collaboration/message-bus.js";
 import type { LLMChatParams, LLMClient } from "../llm/client.js";
-import { type PendingMessage, SessionStore } from "../persistence/session.js";
+import { createSessionData, type PendingMessage, SessionStore } from "../persistence/session.js";
 import { ToolRegistry } from "../tool/registry.js";
 import { createDelegateTool } from "./delegation.js";
 import type { AgentConfig } from "./types.js";
@@ -22,14 +22,16 @@ describe("delegation controls", () => {
     const sessionsDir = await mkdtemp(path.join(tmpdir(), "agent-harness-delegation-"));
     tempDirs.push(sessionsDir);
     const store = new SessionStore(sessionsDir);
-    await store.save({
-      sessionId: "parent-session",
-      taskId: "parent-task",
-      prompt: "parent",
-      agentName: "orchestrator",
-      messages: [],
-      createdAt: "2026-08-11T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "parent-session",
+        taskId: "parent-task",
+        prompt: "parent",
+        agentName: "orchestrator",
+        messages: [],
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }),
+    );
     const parentConfig: AgentConfig = {
       name: "orchestrator",
       model: "fake-model",
@@ -89,14 +91,16 @@ describe("delegation controls", () => {
     const sessionsDir = await mkdtemp(path.join(tmpdir(), "agent-harness-delegation-"));
     tempDirs.push(sessionsDir);
     const store = new SessionStore(sessionsDir);
-    await store.save({
-      sessionId: "deleted-parent",
-      taskId: "parent-task",
-      prompt: "parent",
-      agentName: "orchestrator",
-      messages: [],
-      createdAt: "2026-08-11T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "deleted-parent",
+        taskId: "parent-task",
+        prompt: "parent",
+        agentName: "orchestrator",
+        messages: [],
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }),
+    );
     let release: (() => void) | undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
