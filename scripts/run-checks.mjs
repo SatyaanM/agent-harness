@@ -1,10 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
 
 const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
-const nextEnvPath = path.join(process.cwd(), "packages", "dashboard", "next-env.d.ts");
-const originalNextEnv = existsSync(nextEnvPath) ? readFileSync(nextEnvPath) : undefined;
 
 const mode = process.argv[2] ?? "default";
 const commonChecks = [
@@ -40,15 +36,6 @@ if (!(mode in modeChecks)) {
 
 const checks = [...commonChecks, ...modeChecks[mode], ["git", ["diff", "--check"]]];
 
-function restoreNextEnv() {
-  if (!originalNextEnv || !existsSync(nextEnvPath)) return;
-
-  const current = readFileSync(nextEnvPath);
-  if (!current.equals(originalNextEnv)) {
-    writeFileSync(nextEnvPath, originalNextEnv);
-  }
-}
-
 function run(command, args) {
   const useCommandShell = process.platform === "win32" && command === corepack;
   const executable = useCommandShell ? process.env.ComSpec || "cmd.exe" : command;
@@ -64,8 +51,6 @@ function run(command, args) {
 let exitCode = 0;
 
 for (const [command, args] of checks) {
-  if (command === "git") restoreNextEnv();
-
   const result = run(command, args);
 
   if (result.error) {
@@ -80,5 +65,4 @@ for (const [command, args] of checks) {
   }
 }
 
-restoreNextEnv();
 process.exitCode = exitCode;

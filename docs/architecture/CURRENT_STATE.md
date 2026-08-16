@@ -7,7 +7,7 @@ read_when:
 
 # Current architecture
 
-This document describes source inspected through 2026-08-15. It treats code and passing tests as implementation evidence. `README.md`, `docs/ARCHITECTURE_DECISIONS.md`, and feature specs still contain intent that is not wired into the current application; those claims are called out rather than silently promoted to current behavior.
+This document describes behavior verified against source and tests. It treats code and passing checks as implementation evidence. `README.md`, `docs/ARCHITECTURE_DECISIONS.md`, and feature specifications may also contain target intent; those claims are called out rather than silently promoted to current behavior.
 
 ## Executed application path
 
@@ -113,7 +113,7 @@ The single-writer and atomicity guarantees in `SessionStore` coordinate callers 
 
 ## Verification reality
 
-The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. As of the 2026-08-15 final hardening pass, the matrix discovers 50 test files and 201 tests. Production and test sources are both typechecked under strict mode. Coverage includes:
+The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. Production and test sources are both typechecked under strict mode. Coverage includes:
 
 - malformed persisted configuration, read-only root ownership, and quarantine-on-repair behavior;
 - valid and invalid session transcript/mailbox records, including byte preservation, content-free diagnostics, and healthy-record listing;
@@ -128,11 +128,11 @@ The root Vitest project matrix includes core, server, dashboard, and repository-
 
 [`packages/core/test/integration.ts`](../../packages/core/test/integration.ts) remains a manual console script, not part of the configured Vitest suite. Provider routing and broad end-to-end dashboard resynchronization remain less covered than focused boundary and projection behavior; those gaps remain visible rather than being hidden by the global percentage.
 
-`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. The initial 2026-08-11 baseline was 3.91% statements, 1.45% branches, 1.45% functions, and 4.26% lines. The 2026-08-15 final hardening pass measures 40.83% statements, 32.74% branches, 35.07% functions, and 43.23% lines. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules now have focused tests, while the low UI and adapter totals are not presented as broad product protection.
+`corepack npm run test:coverage` uses the V8 provider across the same projects and writes text, HTML, and LCOV output. Conservative global thresholds of 24/18/19/26 prevent regression; critical modules have focused tests, while the lower UI and adapter totals are not presented as broad product protection. Current measurements belong in CI or the pull request that changes them rather than in this durable architecture map.
 
 `corepack npm run quality:policy` resolves every repository TypeScript configuration and rejects disabled strictness, individually weakened strict options, TypeScript suppression directives, explicit `any`, type and non-null assertions other than `as const`, unwrapped async Express routes, direct Express request-data use outside `validateRequest`, raw boundary JSON parsing, unbounded HTTP JSON parsing, mutable GitHub Action tags, and Node/runtime imports from the browser-safe core contracts surface. Core session/config/cache data, server request bodies/params/query, plugin state, provider responses, dashboard HTTP/chat-stream/WebSocket responses, and local TTS settings now have explicit schemas. Dashboard code consumes those schemas through `@agent-harness/core/contracts`, which cannot import the Node-backed core runtime.
 
-Privileged operations are default-off or application-bounded: shell and network tools require explicit environment opt-in; enabled file/shell/network operations have symlink-aware authorization, byte/time/entry limits, credential-minimized subprocesses, time-bounded regex evaluation, and validated-address connection pinning with redirect revalidation. The server is loopback-only by default, uses an origin allowlist and stable error envelopes, and enforces deterministic execution/resource budgets. `corepack npm run security:audit` currently reports zero production vulnerabilities and fails future high/critical findings unless an explicit exception identifies the affected package and advisory with a reason and future expiry. The informational 50,000-iteration agent-config validation sample completed in 75.85 ms (about 659,173 operations/second) on the local 2026-08-11 run; it is not a portable timing gate. These controls do not claim process isolation; residual risks are documented in [`docs/SECURITY.md`](../SECURITY.md).
+Privileged operations are default-off or application-bounded: shell and network tools require explicit environment opt-in; enabled file/shell/network operations have symlink-aware authorization, byte/time/entry limits, credential-minimized subprocesses, time-bounded regex evaluation, and validated-address connection pinning with redirect revalidation. The server is loopback-only by default, uses an origin allowlist and stable error envelopes, and enforces deterministic execution/resource budgets. `corepack npm run security:audit` rejects high or critical production findings unless an explicit exception identifies the affected package and advisory with a reason and future expiry. Performance reporting remains informational rather than a portable timing gate. These controls do not claim process isolation; residual risks are documented in [`docs/SECURITY.md`](../SECURITY.md).
 
 ## Immediate architecture risks
 

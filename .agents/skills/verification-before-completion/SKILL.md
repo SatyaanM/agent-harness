@@ -16,7 +16,7 @@ Do not claim a check passed from an earlier run if relevant files changed afterw
 
 ## Handle failures honestly
 
-If a check fails, determine whether the change caused it. Fix in-scope failures, record reproducible unrelated failures without masking them, and re-run affected checks after corrections. Restore generated residue such as an unrelated `packages/dashboard/next-env.d.ts` rewrite.
+If a check fails, determine whether the change caused it. Fix in-scope failures, record reproducible unrelated failures without masking them, and re-run affected checks after corrections. Keep ignored build output and generated type files out of the diff; do not force-add them.
 
 ## Report evidence
 

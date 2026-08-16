@@ -45,4 +45,4 @@ corepack npm run build
 git diff --check
 ```
 
-Use `corepack npm run check` for the complete credential-free handoff suite and `corepack npm run test:coverage` when test scope or coverage changes. Run focused package tests while iterating, then proportional root checks before completion. A Next.js build may rewrite `packages/dashboard/next-env.d.ts`; do not retain generated residue unrelated to the task.
+Use `corepack npm run check` for the complete credential-free handoff suite and `corepack npm run test:coverage` when test scope or coverage changes. Run focused package tests while iterating, then proportional root checks before completion. Next.js-generated type files and build output are ignored and must not be force-added.

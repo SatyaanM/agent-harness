@@ -20,4 +20,4 @@ description: Research and deliberately adapt a small concept from external code,
 
 ## Record and verify
 
-Update `THIRD_PARTY_NOTICES.md` and the relevant `docs/research/upstreams/` note with provenance, license uncertainty, adopted concept, deferrals, and local mapping. Verify the adapted behavior with repository tests and ensure documentation does not imply endorsement or upstream compatibility.
+Update `THIRD_PARTY_NOTICES.md` with provenance, license uncertainty, the adopted concept, local destination, and modifications. Verify the adapted behavior with repository tests and ensure documentation does not imply endorsement or upstream compatibility. Research-only sources that did not inform repository content do not need a durable catalog entry.

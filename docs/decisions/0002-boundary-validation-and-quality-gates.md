@@ -40,4 +40,4 @@ Repository enforcement is layered: fast staged checks, a credential-free full lo
 
 ## Evidence and supersession
 
-This decision implements the accepted [`quality-hardening` specification](../../specs/quality-hardening/README.md) and reinforces, without superseding, the package, persistence, delivery, and transcript invariants in [`ARCHITECTURE_DECISIONS.md`](../ARCHITECTURE_DECISIONS.md).
+This decision reinforces, without superseding, the package, persistence, delivery, and transcript invariants in [`ARCHITECTURE_DECISIONS.md`](../ARCHITECTURE_DECISIONS.md). Its enforcement is implemented by the root quality scripts, CI workflows, boundary schemas, and focused failure-path tests.

@@ -11,4 +11,4 @@ Create one kebab-case directory per substantial initiative. Keep its spec, plan,
 
 Use the templates in `docs/templates/`. Record status and owners only when they are meaningful. Keep current behavior, desired behavior, and open questions distinct. Plans should remain updateable evidence, not a diary.
 
-When work completes, preserve useful design and acceptance history, mark the initiative complete, and move lasting decisions or current-state facts into the appropriate `docs/` location. Do not store product runtime skills here; `.agents/skills/` contains repository-development workflows.
+When work completes, move lasting decisions or current-state facts into the appropriate `docs/` location, then remove the completed initiative directory. Git history preserves execution detail without keeping stale plans in the active documentation index. Do not store product runtime skills here; `.agents/skills/` contains repository-development workflows.

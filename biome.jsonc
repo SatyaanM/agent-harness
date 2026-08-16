@@ -8,11 +8,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": [
-      "**",
-      "!packages/dashboard/next-env.d.ts",
-      "!packages/dashboard/public/pdf.worker.min.mjs"
-    ]
+    "includes": ["**", "!packages/dashboard/public/pdf.worker.min.mjs"]
   },
   "formatter": {
     "enabled": true,

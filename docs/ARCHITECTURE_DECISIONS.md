@@ -197,7 +197,7 @@ These ideas require separate specifications and decisions after the identity/rec
 - the current server has no prompt-template, branching, compaction, context-file, or plugin-watcher implementation;
 - provider routing currently uses one configured endpoint and a model-name protocol allowlist, not a provider registry.
 
-See [`architecture/TARGET_DIRECTION.md`](architecture/TARGET_DIRECTION.md) and [`roadmap/NEXT_RUNTIME_PHASE.md`](roadmap/NEXT_RUNTIME_PHASE.md) for the bounded order of future design work.
+See [`architecture/TARGET_DIRECTION.md`](architecture/TARGET_DIRECTION.md) for directional constraints and [`architecture/RUNTIME_ONTOLOGY.md`](architecture/RUNTIME_ONTOLOGY.md) for the vocabulary that future identity and recovery designs should use.
 
 ---
 
