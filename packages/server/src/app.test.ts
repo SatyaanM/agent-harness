@@ -246,6 +246,62 @@ describe("upstream trust boundaries", () => {
     await expect(completion).resolves.toBe("rejected");
   });
 
+  it("aborts an in-flight run when the session is deleted server-side", async () => {
+    // End-to-end wiring test: real `trackSession`, real `AbortController`,
+    // real `runtime.deliver`, mocked only at the LLM call layer (so the
+    // test doesn't need network access). Regression: if `routes/chat.ts`
+    // ever drops the `trackSession(sessionId, controller)` call or forgets
+    // to wire `controller.signal` into `runtime.deliver`, the SSE stream
+    // would silently emit a `done` event with no error. We assert the
+    // AbortSignal observed inside the (mocked) deliver call actually
+    // flipped to `aborted: true`, AND that the route's catch-block surfaces
+    // it as an SSE `error` event rather than a `done`.
+    const sessionId = "abort-on-delete-session-unique";
+    let observedSignal: AbortSignal | undefined;
+    const deliverSpy = vi
+      .spyOn(SessionRuntime.prototype, "deliver")
+      .mockImplementation(async (_message, _agentName, signal) => {
+        observedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("session deleted")), {
+            once: true,
+          });
+        });
+      });
+
+    expect(vi.isMockFunction(SessionRuntime.prototype.deliver)).toBe(true);
+
+    const app = createApp();
+    // `request(...)` returns a supertest Test; attach `.then` so the actual
+    // HTTP exchange kicks off synchronously and the mock can intercept.
+    const requestPromise = request(app)
+      .post("/api/chat")
+      .send({ sessionId, message: "hello" })
+      .then((r) => r);
+
+    await vi.waitFor(() => expect(observedSignal).toBeDefined(), {
+      timeout: 2_000,
+    });
+
+    sessionManager.prepareSessionDeletion(sessionId);
+
+    await vi.waitFor(() => expect(observedSignal?.aborted).toBe(true), {
+      timeout: 2_000,
+    });
+
+    const response = await Promise.race([
+      requestPromise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("chat request hung")), 2_000),
+      ),
+    ]);
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("Agent request failed");
+    expect(response.text).toContain('"type":"error"');
+
+    deliverSpy.mockRestore();
+  });
+
   it("includes the configured persona in the TTS narration prompt", async () => {
     process.env.GEMINI_API_KEY = "test-key";
     process.env.OPENCODE_API_KEY = "paraphrase-key";
