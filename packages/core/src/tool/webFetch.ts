@@ -198,9 +198,12 @@ function isPublicIpv6(hextets: readonly number[]): boolean {
     return isPublicIpv4(embeddedIpv4(hextets));
   }
 
-  // 6to4 (RFC 3056): 2002::/16 — the embedded IPv4 lives in hextets 2-3.
+  // 6to4 (RFC 3056): 2002::/16 — the embedded IPv4 lives in hextets 1-2.
+  // Format: `2002:WWXX:YYZZ::/48` where WWXX:YYZZ is the 32-bit IPv4.
   if (hasIpv6Prefix(hextets, [0x2002, 0, 0, 0, 0, 0, 0, 0], 16)) {
-    return isPublicIpv4(embeddedIpv4([0, 0, ...hextets.slice(2, 4), 0, 0]));
+    const hi = hextets[1] ?? 0;
+    const lo = hextets[2] ?? 0;
+    return isPublicIpv4(`${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`);
   }
 
   // NAT64 well-known prefix (RFC 6052): 64:ff9b::/96. Hextets 0-5 must match

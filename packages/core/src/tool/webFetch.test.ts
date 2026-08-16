@@ -23,6 +23,25 @@ describe("webFetch outbound policy", () => {
     );
   });
 
+  it("accepts a 6to4 address whose embedded IPv4 is public", async () => {
+    // Regression: previously the 6to4 branch read the wrong hextet positions
+    // and read 0.0.0.0 from the trailing zeros, blocking ALL 6to4 addresses
+    // indiscriminately. RFC 3056 says decision should reduce to the IPv4 in
+    // hextets 2-3 — so a public address there must remain public.
+    await expect(
+      validateOutboundUrl("http://[2002:0808:0808::]/admin", publicResolver),
+    ).resolves.toEqual(new URL("http://[2002:0808:0808::]/admin"));
+  });
+
+  it("accepts a NAT64 well-known prefix whose embedded IPv4 is public", async () => {
+    // The well-known NAT64 prefix maps an IPv4 inside NAT64 into the IPv6
+    // space; a public embedded address must remain reachable when the
+    // synthesised IPv4 is itself a public address.
+    await expect(
+      validateOutboundUrl("http://[64:ff9b::8.8.8.8]/admin", publicResolver),
+    ).resolves.toEqual(new URL("http://[64:ff9b::808:808]/admin"));
+  });
+
   it.each([
     "file:///etc/passwd",
     "http://user:password@example.com",
