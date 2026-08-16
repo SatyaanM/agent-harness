@@ -49,4 +49,16 @@ describe("SessionManager lifecycle ownership", () => {
     expect(c1.signal.aborted).toBe(false);
     expect(c2.signal.aborted).toBe(true);
   });
+
+  it("bounds deletedSessions set to prevent unbounded memory growth", () => {
+    const manager = new SessionManager();
+    for (let i = 0; i < 5005; i++) {
+      manager.prepareSessionDeletion(`session-${i}`);
+    }
+
+    // Earliest deleted sessions should be evicted after exceeding capacity
+    expect(manager.isSessionAvailable("session-0")).toBe(true);
+    // Recent deleted sessions should remain marked unavailable
+    expect(manager.isSessionAvailable("session-5004")).toBe(false);
+  });
 });

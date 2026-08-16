@@ -135,7 +135,15 @@ export class SessionManager {
     this.deletedSessions.delete(sessionId);
   }
 
+  private static readonly MAX_DELETED_SESSIONS = 5000;
+
   prepareSessionDeletion(sessionId: string): void {
+    if (this.deletedSessions.size >= SessionManager.MAX_DELETED_SESSIONS) {
+      const oldest = this.deletedSessions.keys().next().value;
+      if (oldest !== undefined) {
+        this.deletedSessions.delete(oldest);
+      }
+    }
     this.deletedSessions.add(sessionId);
     const controllers = this.sessionControllers.get(sessionId);
     if (controllers) {
