@@ -80,9 +80,18 @@ try {
 
 const elapsedMs = Math.round(performance.now() - startTime);
 
+const isErrTTY = Boolean(process.stderr.isTTY);
+const isOutTTY = Boolean(process.stdout.isTTY);
+
 if (hasErrors) {
-  console.error(`\x1b[31mStaged gates failed in ${elapsedMs}ms.\x1b[0m`);
+  const msg = isErrTTY
+    ? `\x1b[31mStaged gates failed in ${elapsedMs}ms.\x1b[0m`
+    : `Staged gates failed in ${elapsedMs}ms.`;
+  console.error(msg);
   process.exitCode = 1;
 } else {
-  console.log(`\x1b[32mStaged gates passed in ${elapsedMs}ms.\x1b[0m`);
+  const msg = isOutTTY
+    ? `\x1b[32mStaged gates passed in ${elapsedMs}ms.\x1b[0m`
+    : `Staged gates passed in ${elapsedMs}ms.`;
+  console.log(msg);
 }

@@ -57,7 +57,7 @@ describe("dashboard API boundary", () => {
     await expect(fetchOpenSessions()).rejects.toBeInstanceOf(BoundaryValidationError);
   });
 
-  it("accepts a valid session response larger than the generic API budget", async () => {
+  it("accepts a valid session response larger than the generic API budget @slow", async () => {
     const content = "x".repeat(950_000);
     const session = {
       sessionId: "large-session",
@@ -77,7 +77,7 @@ describe("dashboard API boundary", () => {
     });
   });
 
-  it("accepts a valid session whose separate mailbox pushes the response over 25 MB", async () => {
+  it("accepts a valid session whose separate mailbox pushes the response over 25 MB @slow", async () => {
     const content = "x".repeat(950_000);
     const session = {
       sessionId: "mailbox-heavy-session",
@@ -123,7 +123,7 @@ describe("dashboard API boundary", () => {
     ]);
   });
 
-  it("accepts base64 expansion from a valid eight-megabyte inbox binary", async () => {
+  it("accepts base64 expansion from a valid eight-megabyte inbox binary @slow", async () => {
     const content = `data:image/png;base64,${"A".repeat(10_666_668)}`;
     vi.stubGlobal(
       "fetch",

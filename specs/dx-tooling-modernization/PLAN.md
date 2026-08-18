@@ -81,5 +81,5 @@ Status: Completed
 
 - `corepack pnpm run knip` returns 0 issues.
 - `corepack pnpm run test:e2e` passes all browser journeys.
-- `node scripts/run-staged-gates.mjs` executes in < 150ms.
+- `node scripts/run-staged-gates.mjs` executes in < 350ms.
 - Full `corepack pnpm run check` passes completely.

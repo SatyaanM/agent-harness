@@ -7,21 +7,27 @@ import { z } from "zod";
 const SeveritySchema = z.enum(["info", "low", "moderate", "high", "critical"]);
 const AuditAdvisorySchema = z
   .object({
-    source: z.union([z.string(), z.number()]),
+    source: z.union([z.string(), z.number()]).optional(),
+    id: z.union([z.string(), z.number()]).optional(),
+    module_name: z.string().optional(),
     severity: SeveritySchema.optional(),
     url: z.string().optional(),
   })
   .passthrough();
 const AuditReportSchema = z
   .object({
-    vulnerabilities: z.record(
-      z
-        .object({
-          severity: SeveritySchema,
-          via: z.array(z.union([z.string(), AuditAdvisorySchema])).optional(),
-        })
-        .passthrough(),
-    ),
+    vulnerabilities: z
+      .record(
+        z
+          .object({
+            severity: SeveritySchema,
+            via: z.array(z.union([z.string(), AuditAdvisorySchema])).optional(),
+          })
+          .passthrough(),
+      )
+      .optional()
+      .default({}),
+    advisories: z.record(AuditAdvisorySchema).optional().default({}),
   })
   .passthrough();
 const ExceptionFileSchema = z
@@ -51,7 +57,21 @@ export function evaluateSecurityAudit(rawAudit, rawExceptions, now = new Date())
       .filter((exception) => Date.parse(exception.expires) > now.getTime())
       .map((exception) => `${exception.package}\u0000${exception.advisory}`),
   );
-  const unaccepted = Object.entries(audit.vulnerabilities)
+
+  const vulnerabilities = { ...audit.vulnerabilities };
+  if (audit.advisories && Object.keys(audit.advisories).length > 0) {
+    for (const [id, adv] of Object.entries(audit.advisories)) {
+      const pkg = adv.module_name || id;
+      if (!vulnerabilities[pkg]) {
+        vulnerabilities[pkg] = {
+          severity: adv.severity || "high",
+          via: [{ source: adv.id ?? id, url: adv.url, severity: adv.severity }],
+        };
+      }
+    }
+  }
+
+  const unaccepted = Object.entries(vulnerabilities)
     .filter(([packageName, vulnerability]) => {
       if (vulnerability.severity !== "high" && vulnerability.severity !== "critical") {
         return false;
@@ -78,13 +98,13 @@ function advisoryIdentifierGroups(via) {
   return via.flatMap((entry) => {
     if (typeof entry === "string") return [[entry]];
     if (entry.severity && entry.severity !== "high" && entry.severity !== "critical") return [];
-    return [[String(entry.source), ...(entry.url ? [entry.url] : [])]];
+    return [[String(entry.source ?? entry.id ?? ""), ...(entry.url ? [entry.url] : [])]];
   });
 }
 
 function runAudit() {
   const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
-  const args = ["npm", "audit", "--omit=dev", "--json"];
+  const args = ["pnpm", "audit", "--prod", "--json"];
   if (process.platform !== "win32") {
     return spawnSync(corepack, args, { cwd: process.cwd(), encoding: "utf8" });
   }

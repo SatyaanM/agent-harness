@@ -1,9 +1,15 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
+import { readFileSync } from "node:fs";
 
 const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
-const pkgJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-const pkgManager = pkgJson.packageManager?.startsWith("pnpm") ? "pnpm" : "npm";
+const pkgJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const rawManager = pkgJson.packageManager?.split("@")[0];
+if (rawManager !== "pnpm") {
+  throw new Error(
+    `Unsupported packageManager in package.json: "${pkgJson.packageManager}". Only pnpm is supported.`,
+  );
+}
+const pkgManager = "pnpm";
 
 const mode = process.argv[2] ?? "default";
 const commonChecks = [

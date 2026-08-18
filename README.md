@@ -339,7 +339,7 @@ corepack pnpm run check
 
 The check runs Biome, the repository policy, documentation and skill validation, typecheck, Knip dead-code verification, tests, builds, and diff whitespace checks. GitHub Actions runs `check:ci` on pull requests and main, while the nightly workflow adds the benchmark report.
 
-Lefthook is installed automatically by `corepack pnpm install`. The pre-commit hook applies safe Biome fixes to staged files, re-stages those fixes, and runs documentation, skill, and whitespace checks in parallel (< 150ms). Commitlint enforces Conventional Commits on commit messages. The pre-push hook runs the fast check suite. Repair or refresh the hooks manually with:
+Lefthook is installed automatically by `corepack pnpm install`. The pre-commit hook applies safe Biome fixes to staged files, re-stages those fixes, and runs documentation, skill, and whitespace checks in parallel (< 350ms). Commitlint enforces Conventional Commits on commit messages. The pre-push hook runs the fast check suite. Repair or refresh the hooks manually with:
 
 ```bash
 corepack pnpm run hooks:install

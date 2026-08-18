@@ -5,7 +5,7 @@ pre-commit:
   commands:
     biome:
       glob: "*.{js,ts,tsx,json,jsonc,css}"
-      run: npx @biomejs/biome check --write --staged --no-errors-on-unmatched {staged_files}
+      run: corepack pnpm exec biome check --write --staged --no-errors-on-unmatched {staged_files}
       stage_fixed: true
     staged-gates:
       run: node scripts/run-staged-gates.mjs
@@ -13,7 +13,7 @@ pre-commit:
 commit-msg:
   commands:
     conventional-commits:
-      run: npx --no-install commitlint --edit {1}
+      run: corepack pnpm exec commitlint --edit {1}
 
 pre-push:
   commands:

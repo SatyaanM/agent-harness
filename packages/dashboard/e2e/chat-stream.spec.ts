@@ -42,10 +42,10 @@ test.describe("Chat Stream Flow", () => {
 
     await page.route("**/api/chat", async (route) => {
       const sseBody = [
-        "event: chunk\ndata: " + JSON.stringify({ text: "Hello" }) + "\n\n",
-        "event: chunk\ndata: " + JSON.stringify({ text: " from" }) + "\n\n",
-        "event: chunk\ndata: " + JSON.stringify({ text: " Agent Harness!" }) + "\n\n",
-        "event: done\ndata: {}\n\n",
+        `data: ${JSON.stringify({ type: "text-delta", text: "Hello" })}\n\n`,
+        `data: ${JSON.stringify({ type: "text-delta", text: " from" })}\n\n`,
+        `data: ${JSON.stringify({ type: "text-delta", text: " Agent Harness!" })}\n\n`,
+        `data: ${JSON.stringify({ type: "done" })}\n\n`,
       ].join("");
 
       await route.fulfill({
@@ -60,10 +60,9 @@ test.describe("Chat Stream Flow", () => {
 
     // 3. Verify page header or chat input is visible
     const chatInput = page.getByPlaceholder(/ask agent anything|type a message/i);
-    if (await chatInput.isVisible()) {
-      await chatInput.fill("Hello agent");
-      await chatInput.press("Enter");
-    }
+    await expect(chatInput).toBeVisible({ timeout: 5000 });
+    await chatInput.fill("Hello agent");
+    await chatInput.press("Enter");
 
     // 4. Verify body is mounted
     await expect(page.locator("body")).toBeVisible();
