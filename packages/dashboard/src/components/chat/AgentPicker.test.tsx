@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentsStore } from "@/stores/agents-store";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useSessionStore } from "@/stores/session-store";
+import { createTestSession } from "@/test-helpers/session-fixtures";
 import AgentPicker from "./AgentPicker";
 
 vi.mock("@/lib/api", () => ({ fetchAgents: vi.fn() }));
@@ -33,15 +34,7 @@ describe("AgentPicker", () => {
     });
     useSessionStore.setState({
       activeSessionId: "session-a",
-      sessions: [
-        {
-          sessionId: "session-a",
-          messages: [],
-          status: "active",
-          agentName: "orchestrator",
-          createdAt: "2026-08-15T00:00:00.000Z",
-        },
-      ],
+      sessions: [createTestSession({ sessionId: "session-a" })],
     });
     useRuntimeStore.setState({ activity: {}, running: {} });
   });

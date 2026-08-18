@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { Config } from "../config.js";
 import { createVercelAILLMClient } from "./vercel-ai.js";
 
@@ -20,7 +21,10 @@ const mocks = vi.hoisted(() => ({
   model: { modelId: "test-model" },
 }));
 
-vi.mock("ai", () => ({ generateText: mocks.generateText }));
+vi.mock("ai", () => ({
+  generateText: mocks.generateText,
+  tool: (definition: unknown) => definition,
+}));
 vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ chat: () => mocks.model }),
 }));
@@ -102,5 +106,53 @@ describe("Vercel AI adapter", () => {
     });
 
     expect(result.finishReason).toBe("length");
+  });
+
+  it("passes system instructions and tool parameters correctly to generateText", async () => {
+    mocks.generateText.mockResolvedValueOnce({
+      text: "calling tool",
+      finishReason: "tool-calls",
+      toolCalls: [
+        {
+          toolCallId: "call-1",
+          toolName: "testTool",
+          input: { query: "hello" },
+        },
+      ],
+      usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 },
+    });
+    const client = createVercelAILLMClient(config);
+
+    const result = await client.chat({
+      system: "You are a helpful assistant.",
+      messages: [{ role: "user", content: "search for me" }],
+      tools: [
+        {
+          name: "testTool",
+          description: "Search tool",
+          parameters: z.object({ query: z.string() }),
+        },
+      ],
+      model: "test-model",
+    });
+
+    expect(mocks.generateText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        system: "You are a helpful assistant.",
+        tools: {
+          testTool: expect.objectContaining({
+            description: "Search tool",
+          }),
+        },
+      }),
+    );
+
+    expect(result.toolCalls).toEqual([
+      {
+        toolCallId: "call-1",
+        toolName: "testTool",
+        args: { query: "hello" },
+      },
+    ]);
   });
 });

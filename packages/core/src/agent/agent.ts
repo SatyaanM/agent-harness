@@ -1,4 +1,6 @@
 import type { CapabilityRegistry } from "../capability/registry.js";
+import { describeError } from "../contracts/errors.js";
+import { createLogger, type Logger } from "../contracts/logging.js";
 import {
   type LLMClient,
   type LLMResponse,
@@ -39,6 +41,7 @@ export class Agent {
     private readonly llmClient: LLMClient,
     _capabilityRegistry: CapabilityRegistry,
     private readonly onEvent?: AgentEventCallback,
+    private readonly logger: Logger = createLogger("core.agent"),
   ) {
     this.config = parseBoundary(AgentConfigSchema, config, "agent configuration");
   }
@@ -204,7 +207,10 @@ export class Agent {
           } catch (error) {
             if (signal.aborted) throw new AgentCancelledError();
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`[Agent] Tool "${toolCall.toolName}" failed:`, error);
+            this.logger.error(`Tool "${toolCall.toolName}" failed`, {
+              toolName: toolCall.toolName,
+              ...describeError(error),
+            });
             this.messages.push({
               role: "tool",
               content: `Error: ${errorMessage}`,

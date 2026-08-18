@@ -18,6 +18,7 @@ const STRICT_OPTIONS = [
   "alwaysStrict",
   "noImplicitAny",
   "noImplicitThis",
+  "noUncheckedIndexedAccess",
   "strictBindCallApply",
   "strictBuiltinIteratorReturn",
   "strictFunctionTypes",
@@ -287,6 +288,117 @@ function checkSourceFile(rootDir, filePath) {
           line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
           rule: "boundaries/browser-safe-contracts",
           message: "Core contracts must not import Node built-ins or core runtime modules.",
+        });
+      }
+    }
+
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      const specifier = node.moduleSpecifier.text;
+      if (
+        relative.startsWith("packages/core/src/") &&
+        !relative.includes(".test.") &&
+        !relative.includes(".spec.")
+      ) {
+        if (
+          specifier === "express" ||
+          specifier === "socket.io" ||
+          specifier === "react" ||
+          specifier === "next" ||
+          specifier.startsWith("@agent-harness/server") ||
+          specifier.startsWith("@agent-harness/dashboard")
+        ) {
+          diagnostics.push({
+            file: relative,
+            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+            rule: "boundaries/core-isolation",
+            message: "Core must not import UI, server frameworks, or adapter packages.",
+          });
+        }
+      }
+
+      if (
+        relative.startsWith("packages/dashboard/src/") &&
+        !relative.includes(".test.") &&
+        !relative.includes(".spec.")
+      ) {
+        if (
+          specifier === "@agent-harness/core" ||
+          (specifier.startsWith("@agent-harness/core/") &&
+            !specifier.startsWith("@agent-harness/core/contracts"))
+        ) {
+          diagnostics.push({
+            file: relative,
+            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+            rule: "boundaries/dashboard-contracts-only",
+            message:
+              "Dashboard must only import from @agent-harness/core/contracts, not core runtime.",
+          });
+        }
+        if (
+          specifier === "express" ||
+          specifier === "socket.io" ||
+          specifier.startsWith("@agent-harness/server")
+        ) {
+          diagnostics.push({
+            file: relative,
+            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+            rule: "boundaries/dashboard-isolation",
+            message: "Dashboard must not import server modules or packages.",
+          });
+        }
+      }
+
+      if (
+        relative.startsWith("packages/server/src/") &&
+        !relative.includes(".test.") &&
+        !relative.includes(".spec.")
+      ) {
+        if (specifier.startsWith("@agent-harness/dashboard")) {
+          diagnostics.push({
+            file: relative,
+            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+            rule: "boundaries/server-isolation",
+            message: "Server must not import dashboard modules or packages.",
+          });
+        }
+      }
+    }
+
+    if (
+      relative.startsWith("packages/core/src/") &&
+      !relative.includes(".test.") &&
+      !relative.includes(".spec.") &&
+      !relative.startsWith("packages/core/src/persistence/") &&
+      !relative.startsWith("packages/core/src/tool/") &&
+      relative !== "packages/core/src/presentation/inbox.ts" &&
+      relative !== "packages/core/src/filesystem/bounded-io.ts"
+    ) {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        ["fs", "fsExtra", "promises"].includes(node.expression.expression.text) &&
+        [
+          "writeFile",
+          "writeFileSync",
+          "outputFile",
+          "outputFileSync",
+          "rm",
+          "rmSync",
+          "remove",
+          "removeSync",
+        ].includes(node.expression.name.text)
+      ) {
+        diagnostics.push({
+          file: relative,
+          line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+          rule: "persistence/single-writer-only",
+          message:
+            "Direct filesystem write operations in core must be owned by SessionStore, BoundedIO, InboxManager, or workspace tools.",
         });
       }
     }

@@ -1,5 +1,6 @@
 import { BoundaryValidationError } from "@agent-harness/core/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTestServerSession, createTestSessionMeta } from "../test-helpers/session-fixtures";
 import {
   fetchAgentSource,
   fetchInboxFile,
@@ -29,14 +30,12 @@ describe("chat stream boundary", () => {
 describe("dashboard API boundary", () => {
   it("forwards cancellation to session requests", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json({
-        sessionId: "worker",
-        messages: [],
-        agentName: "worker",
-        taskId: "task",
-        prompt: "work",
-        createdAt: "2026-08-15T00:00:00.000Z",
-      }),
+      Response.json(
+        createTestServerSession({
+          sessionId: "worker",
+          agentName: "worker",
+        }),
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
@@ -110,13 +109,10 @@ describe("dashboard API boundary", () => {
       "fetch",
       vi.fn(async () =>
         Response.json([
-          {
+          createTestSessionMeta({
             sessionId: "one",
-            prompt: "hello",
-            createdAt: "2026-08-15T00:00:00.000Z",
-            updatedAt: "2026-08-15T00:00:00.000Z",
             messageCount: 2,
-          },
+          }),
         ]),
       ),
     );

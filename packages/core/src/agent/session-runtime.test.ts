@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { CapabilityRegistry } from "../capability/registry.js";
 import type { LLMChatParams, LLMClient, LLMResponse } from "../llm/client.js";
-import { SessionStore } from "../persistence/session.js";
+import { createSessionData, SessionStore } from "../persistence/session.js";
 import { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import { ToolRegistry } from "../tool/registry.js";
 import { SessionRuntime } from "./session-runtime.js";
@@ -124,14 +124,16 @@ describe("SessionRuntime delivery invariants", () => {
   it("drains worker completions together and removes delegate from a wake run", async () => {
     const sessionsDir = await makeDirectory();
     const store = new SessionStore(sessionsDir);
-    await store.save({
-      sessionId: "wake",
-      taskId: "parent-task",
-      prompt: "original",
-      agentName: "orchestrator",
-      messages: [{ role: "user", content: "original" }],
-      createdAt: "2026-08-11T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "wake",
+        taskId: "parent-task",
+        prompt: "original",
+        agentName: "orchestrator",
+        messages: [{ role: "user", content: "original" }],
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }),
+    );
     await Promise.all([
       store.appendMailbox("wake", {
         taskId: "worker-1",
@@ -194,14 +196,16 @@ describe("SessionRuntime delivery invariants", () => {
   it("persists the same delivery and prompt order that the model receives", async () => {
     const sessionsDir = await makeDirectory();
     const store = new SessionStore(sessionsDir);
-    await store.save({
-      sessionId: "ordered",
-      taskId: "parent-task",
-      prompt: "old prompt",
-      agentName: "orchestrator",
-      messages: [{ role: "user", content: "old prompt" }],
-      createdAt: "2026-08-11T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "ordered",
+        taskId: "parent-task",
+        prompt: "old prompt",
+        agentName: "orchestrator",
+        messages: [{ role: "user", content: "old prompt" }],
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }),
+    );
     await store.appendMailbox("ordered", {
       taskId: "worker-order",
       from: "worker-session",
@@ -241,14 +245,16 @@ describe("SessionRuntime delivery invariants", () => {
       content: "already materialized",
       meta: { kind: "worker_completed", taskId: "worker-recovery" },
     };
-    await store.save({
-      sessionId: "recovery",
-      taskId: "parent-task",
-      prompt: "old prompt",
-      agentName: "orchestrator",
-      messages: [{ role: "user", content: "old prompt" }, materialized],
-      createdAt: "2026-08-11T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "recovery",
+        taskId: "parent-task",
+        prompt: "old prompt",
+        agentName: "orchestrator",
+        messages: [{ role: "user", content: "old prompt" }, materialized],
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }),
+    );
     await store.appendMailbox("recovery", {
       taskId: "worker-recovery",
       from: "worker-session",
@@ -383,8 +389,99 @@ describe("SessionRuntime delivery invariants", () => {
     await vi.waitFor(() => expect(limiter.snapshot().queued).toBe(1));
     expect(events).not.toContain("agent:started");
     gate.resolve();
-
     await Promise.all([occupying, run]);
     expect(events).toContain("agent:started");
+  });
+
+  it("does not abort execution if mailbox acknowledgment fails", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+    await store.save(
+      createSessionData({
+        sessionId: "ack-fail",
+        taskId: "task-1",
+        prompt: "init",
+        messages: [],
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
+    await store.appendMailbox("ack-fail", {
+      taskId: "w-1",
+      from: "worker",
+      agentName: "worker",
+      status: "done",
+      summary: "worker done",
+      receivedAt: "2026-08-15T00:01:00.000Z",
+    });
+
+    vi.spyOn(SessionStore.prototype, "acknowledgeMailbox").mockRejectedValueOnce(
+      new Error("disk error on ack"),
+    );
+
+    const runtime = new SessionRuntime({
+      sessionId: "ack-fail",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("Handled completion.");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    const result = await runtime.deliver();
+    expect(result.status).toBe("success");
+    const saved = await store.load("ack-fail");
+    expect(saved?.result?.status).toBe("success");
+  });
+
+  it("does not save to disk if the session was deleted before completion", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+    let available = true;
+
+    const runtime = new SessionRuntime({
+      sessionId: "deleted-midrun",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          available = false;
+          await store.delete("deleted-midrun");
+          return stop("finished after deletion");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      isSessionAvailable: () => available,
+    });
+
+    await runtime.deliver("work");
+    expect(await store.load("deleted-midrun")).toBeNull();
+  });
+
+  it("does not write initial transcript or resurrect deleted session when isSessionAvailable is false upfront", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+
+    const runtime = new SessionRuntime({
+      sessionId: "already-deleted",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("should not run");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      isSessionAvailable: () => false,
+    });
+
+    const result = await runtime.deliver("work");
+    expect(result.status).toBe("cancelled");
+    expect(await store.load("already-deleted")).toBeNull();
   });
 });

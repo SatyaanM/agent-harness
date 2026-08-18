@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type { CapabilityRegistry } from "../capability/registry.js";
+import { describeError } from "../contracts/errors.js";
+import { createLogger, type Logger } from "../contracts/logging.js";
 import type { LLMClient } from "../llm/client.js";
 import type { SessionData } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
@@ -16,27 +18,75 @@ import {
 } from "./types.js";
 
 export type SessionRuntimeEvent =
-  | { sessionId: string; type: "agent:started"; agentName: string }
-  | { sessionId: string; type: "agent:completed"; agentName: string; status: string }
-  | { sessionId: string; type: "agent:error"; agentName?: string; error: string }
+  | {
+      sessionId: string;
+      type: "agent:started";
+      agentName: string;
+      runId: string;
+      requestId?: string;
+    }
+  | {
+      sessionId: string;
+      type: "agent:completed";
+      agentName: string;
+      status: string;
+      runId: string;
+      requestId?: string;
+    }
+  | {
+      sessionId: string;
+      type: "agent:error";
+      agentName?: string;
+      error: string;
+      code?: string;
+      runId: string;
+      requestId?: string;
+    }
   | {
       sessionId: string;
       type: "agent:tool";
       agentName: string;
       tool: { type: "called" | "completed"; toolName: string; args?: unknown; result?: string };
+      runId: string;
+      requestId?: string;
     }
   | { sessionId: string; type: "session:updated"; session: SessionData };
 
 export type SessionRuntimeEventWithoutSession =
-  | { type: "agent:started"; agentName: string }
-  | { type: "agent:completed"; agentName: string; status: string }
-  | { type: "agent:error"; agentName?: string; error: string }
+  | {
+      type: "agent:started";
+      agentName: string;
+      runId: string;
+      requestId?: string;
+    }
+  | {
+      type: "agent:completed";
+      agentName: string;
+      status: string;
+      runId: string;
+      requestId?: string;
+    }
+  | {
+      type: "agent:error";
+      agentName?: string;
+      error: string;
+      code?: string;
+      runId: string;
+      requestId?: string;
+    }
   | {
       type: "agent:tool";
       agentName: string;
       tool: { type: "called" | "completed"; toolName: string; args?: unknown; result?: string };
+      runId: string;
+      requestId?: string;
     }
   | { type: "session:updated"; session: SessionData };
+
+export interface RunCorrelation {
+  runId: string;
+  requestId?: string;
+}
 
 export interface SessionRuntimeOptions {
   sessionId: string;
@@ -47,26 +97,48 @@ export interface SessionRuntimeOptions {
   capabilityRegistry: CapabilityRegistry;
   executionLimiter?: ExecutionLimiter;
   onEvent?: (event: SessionRuntimeEvent) => void;
+  isSessionAvailable?: (sessionId: string) => boolean;
 }
 
 export class SessionRuntime {
   private queue: Promise<unknown> = Promise.resolve();
   private readonly sessionStore: SessionStore;
+  private readonly logger: Logger;
 
   constructor(private readonly options: SessionRuntimeOptions) {
     this.sessionStore = new SessionStore(options.sessionsDir);
+    this.logger = createLogger("core.session-runtime").child({ sessionId: options.sessionId });
   }
 
-  /** Serialized delivery: only one run happens at a time per session. */
-  deliver(message?: string, agentName?: string, signal?: AbortSignal): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName, signal, false));
+  /**
+   * Serialized delivery: only one run happens at a time per session.
+   *
+   * IMPORTANT: `onEvent` callbacks MUST NOT synchronously `await` `deliver()`
+   * from the same runtime. Re-entrancy through the same promise chain is
+   * safe in principle (no stack overflow — `Promise.then` is async), but the
+   * awaited run will queue behind the currently-executing callback and the
+   * caller will hang. If you need to trigger a follow-up run from an event
+   * callback, fire it without awaiting or schedule it on `queueMicrotask`.
+   */
+  deliver(
+    message?: string,
+    agentName?: string,
+    signal?: AbortSignal,
+    requestId?: string,
+  ): Promise<AgentResult> {
+    const run = this.queue.then(() => this.runOnce(message, agentName, signal, false, requestId));
     this.queue = run.catch(() => undefined);
     return run;
   }
 
   /** Replay a user delivery already present in the durable transcript. */
-  retry(message: string, agentName?: string, signal?: AbortSignal): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName, signal, true));
+  retry(
+    message: string,
+    agentName?: string,
+    signal?: AbortSignal,
+    requestId?: string,
+  ): Promise<AgentResult> {
+    const run = this.queue.then(() => this.runOnce(message, agentName, signal, true, requestId));
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -75,12 +147,33 @@ export class SessionRuntime {
     this.options.onEvent?.({ sessionId: this.options.sessionId, ...event });
   }
 
+  private isAvailable(): boolean {
+    return (
+      !this.options.isSessionAvailable || this.options.isSessionAvailable(this.options.sessionId)
+    );
+  }
+
   private async runOnce(
     message?: string,
     agentName?: string,
     signal?: AbortSignal,
     replayExistingUser = false,
+    requestId?: string,
   ): Promise<AgentResult> {
+    if (!this.isAvailable()) {
+      return {
+        status: "cancelled",
+        summary: "Session is no longer available",
+        messages: [],
+      };
+    }
+
+    // A fresh run identity per execution attempt. It is ephemeral correlation
+    // context for logs and WebSocket events, not a durable transcript field.
+    const runId = uuidv4();
+    const correlation: RunCorrelation = { runId, requestId };
+    const logger = this.logger.child({ runId, ...(requestId ? { requestId } : {}) });
+
     const now = new Date().toISOString();
 
     let session = await this.sessionStore.load(this.options.sessionId);
@@ -167,13 +260,26 @@ export class SessionRuntime {
         : []),
     ];
     session.mailbox = pending;
+
+    if (!this.isAvailable()) {
+      return {
+        status: "cancelled",
+        summary: "Session is no longer available",
+        messages: [...session.messages],
+      };
+    }
+
     await this.sessionStore.save(session);
-    if (pending.length > 0) {
-      await this.sessionStore.acknowledgeMailbox(
-        this.options.sessionId,
-        pending.map((entry) => entry.taskId),
-      );
-      session.mailbox = [];
+    if (pending.length > 0 && this.isAvailable()) {
+      try {
+        await this.sessionStore.acknowledgeMailbox(
+          this.options.sessionId,
+          pending.map((entry) => entry.taskId),
+        );
+        session.mailbox = [];
+      } catch (ackError) {
+        logger.warn("Failed to acknowledge mailbox", { ...describeError(ackError) });
+      }
     }
 
     if (!message && deliveredSystem.length === 0) {
@@ -222,14 +328,16 @@ export class SessionRuntime {
             args: isCalled ? e.args : undefined,
             result: isCalled ? undefined : e.result,
           },
+          ...correlation,
         });
       },
+      logger,
     );
 
     let result: AgentResult;
     try {
       const execute = () => {
-        this.emit({ type: "agent:started", agentName: agentConfig.name });
+        this.emit({ type: "agent:started", agentName: agentConfig.name, ...correlation });
         return agent.run(message, [...baseHistory, ...deliveredSystem], signal);
       };
       result = this.options.executionLimiter
@@ -237,33 +345,48 @@ export class SessionRuntime {
         : await execute();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorCode = describeError(error).code;
+      const isCancelled =
+        error instanceof AgentCancelledError ||
+        (error instanceof DOMException && error.name === "AbortError") ||
+        Boolean(signal?.aborted);
+      const isBudgetExceeded = error instanceof AgentBudgetExceededError;
+
+      logger.error("Agent run failed", { code: errorCode, cancelled: isCancelled });
+
       const partial = (latestRunMessages ?? [])
         .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
         .map((entry) => ({ ...entry, createdAt: entry.createdAt ?? new Date().toISOString() }));
       session.messages.push(...partial);
       session.result = {
-        status:
-          error instanceof AgentCancelledError
-            ? "cancelled"
-            : error instanceof AgentBudgetExceededError
-              ? "budgetExceeded"
-              : "error",
+        status: isCancelled ? "cancelled" : isBudgetExceeded ? "budgetExceeded" : "error",
         summary: errorMessage,
       };
       session.completedAt = new Date().toISOString();
-      try {
-        await this.sessionStore.save(session);
-        this.emit({ type: "session:updated", session });
-      } catch (persistenceError) {
-        const persistenceMessage =
-          persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
-        this.emit({
-          type: "agent:error",
-          agentName: agentConfig.name,
-          error: `Failed to persist partial run: ${persistenceMessage}`,
-        });
+
+      if (this.isAvailable()) {
+        try {
+          await this.sessionStore.save(session);
+          this.emit({ type: "session:updated", session });
+        } catch (persistenceError) {
+          const persistenceMessage =
+            persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
+          this.emit({
+            type: "agent:error",
+            agentName: agentConfig.name,
+            error: `Failed to persist partial run: ${persistenceMessage}`,
+            code: describeError(persistenceError).code,
+            ...correlation,
+          });
+        }
       }
-      this.emit({ type: "agent:error", agentName: agentConfig.name, error: errorMessage });
+      this.emit({
+        type: "agent:error",
+        agentName: agentConfig.name,
+        error: errorMessage,
+        code: errorCode,
+        ...correlation,
+      });
       throw error;
     }
 
@@ -279,10 +402,16 @@ export class SessionRuntime {
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = new Date().toISOString();
 
-    await this.sessionStore.save(session);
-
-    this.emit({ type: "agent:completed", agentName: agentConfig.name, status: result.status });
-    this.emit({ type: "session:updated", session });
+    if (this.isAvailable()) {
+      await this.sessionStore.save(session);
+      this.emit({
+        type: "agent:completed",
+        agentName: agentConfig.name,
+        status: result.status,
+        ...correlation,
+      });
+      this.emit({ type: "session:updated", session });
+    }
 
     return result;
   }

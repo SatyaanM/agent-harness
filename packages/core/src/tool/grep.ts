@@ -19,6 +19,7 @@ const MAX_GREP_RESULTS = 500;
 const MAX_GREP_TOTAL_BYTES = 50_000_000;
 const MAX_RESULT_LINE_CHARS = 10_000;
 const MAX_REGEX_FILE_MS = 250;
+const GREP_FLAGS = "i";
 
 const GrepParams = z
   .object({
@@ -44,7 +45,7 @@ const RegexMatchesSchema = z
   .max(MAX_GREP_RESULTS);
 
 const regexSearchScript = new Script(`
-  const regex = new RegExp(pattern, "i");
+  const regex = new RegExp(pattern, ${JSON.stringify(GREP_FLAGS)});
   const matches = [];
   for (let index = 0; index < lines.length && matches.length < matchLimit; index += 1) {
     if (regex.test(lines[index])) {
@@ -138,6 +139,14 @@ export function createGrepTool(options?: { maxFiles?: number }): Tool<typeof Gre
       const searchPath = args.path ? path.resolve(root, args.path) : root;
       assertWithinRoot(searchPath, root);
 
+      try {
+        new RegExp(args.pattern, GREP_FLAGS);
+      } catch (error) {
+        return `[error] Invalid regular expression: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+
       const results: Match[] = [];
       let bytesRead = 0;
       let filesScanned = 0;
@@ -170,6 +179,9 @@ export function createGrepTool(options?: { maxFiles?: number }): Tool<typeof Gre
         } catch (error) {
           if (error instanceof GrepRegexResourceError) {
             return `[error] Grep regular expression resource limit exceeded (${MAX_REGEX_FILE_MS}ms per file).`;
+          }
+          if (error instanceof SyntaxError) {
+            return `[error] Invalid regular expression: ${error.message}`;
           }
           throw error;
         }

@@ -12,6 +12,8 @@ pre-commit:
       run: corepack npm run docs:check
     skills:
       run: corepack npm run skills:validate
+    secrets:
+      run: node scripts/check-secrets.mjs --staged
     whitespace:
       run: git diff --cached --check
 

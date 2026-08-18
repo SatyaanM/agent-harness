@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -41,11 +42,20 @@ export class CapabilityCache {
     this.loaded = true;
     const dir = path.dirname(this.cachePath);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(
-      this.cachePath,
-      stringifyJsonBounded(this.entries, MAX_CAPABILITY_CACHE_BYTES, "capability cache"),
-      "utf-8",
-    );
+    // The temp filename includes `randomUUID()` rather than `Date.now()` +
+    // `Math.random()` so two writers can't accidentally pick the same path and
+    // trample each other's content during the write → rename window.
+    const temporaryPath = `${this.cachePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(
+        temporaryPath,
+        stringifyJsonBounded(this.entries, MAX_CAPABILITY_CACHE_BYTES, "capability cache"),
+        "utf-8",
+      );
+      await fs.rename(temporaryPath, this.cachePath);
+    } finally {
+      await fs.rm(temporaryPath, { force: true }).catch(() => null);
+    }
   }
 
   async getEntry(provider: string, model: string, sdk: string): Promise<RegistryEntry | undefined> {

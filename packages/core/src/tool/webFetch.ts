@@ -63,21 +63,189 @@ function isPublicIpv4(address: string): boolean {
   );
 }
 
+interface Ipv6Parts {
+  hextets: number[];
+}
+
+/**
+ * Expand any IPv6 text representation to 8 16-bit hextets.
+ *
+ * `node:net`'s `isIP` accepts many textual forms (e.g. `::1`, `0:0:0:0:0:ffff:7f00:1`,
+ * `::ffff:127.0.0.1`, `::7f00:1`, `2002:c0a8:101::`, `64:ff9b::192.168.1.1`),
+ * but each of those addresses can be expressed in multiple textual forms that map
+ * to the same bytes. A prefix-based filter is only safe when every form of an
+ * address is recognized. Expanding first lets the filter reason about bits
+ * instead of strings.
+ */
+function expandIpv6(address: string): Ipv6Parts | null {
+  // Normalize embedded IPv4 first: when the last 32 bits are dotted-quad, the
+  // text allows either `::a.b.c.d`, `::ffff:a.b.c.d`, `::w.xy:z` or even a
+  // leading `0:0:0:0:0:0:w.x.y.z`. Convert those to 32-bit integers so the
+  // generic hextet parser below sees only hex pairs.
+  const ipv4Tail = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u;
+  const match = address.match(ipv4Tail);
+  let normalized = address;
+  if (match) {
+    // Capture groups 1..4 are each a string when the regex matches; coerce
+    // the `string | undefined` shape to plain strings via `??` once and then
+    // map them to integers below.
+    const firstDigit = match[1] ?? "";
+    const secondDigit = match[2] ?? "";
+    const thirdDigit = match[3] ?? "";
+    const fourthDigit = match[4] ?? "";
+    const octets: Array<number | null> = [firstDigit, secondDigit, thirdDigit, fourthDigit].map(
+      (digit) => {
+        const value = Number.parseInt(digit, 10);
+        return Number.isNaN(value) || value < 0 || value > 255 ? null : value;
+      },
+    );
+    if (octets.some((value) => value === null)) return null;
+    const a = octets[0] ?? 0;
+    const b = octets[1] ?? 0;
+    const c = octets[2] ?? 0;
+    const d = octets[3] ?? 0;
+    const hex = `${(((a << 8) | b) >>> 0).toString(16)}:${(((c << 8) | d) >>> 0).toString(16)}`;
+    normalized = `${address.slice(0, match.index)}${hex}`;
+  }
+
+  if (normalized.includes(":")) {
+    // Strip optional zone id (RFC 4007 / RFC 6874) like `fe80::1%eth0`.
+    const zoneIdx = normalized.indexOf("%");
+    if (zoneIdx >= 0) normalized = normalized.slice(0, zoneIdx);
+  }
+
+  // Collapse `::` into a single zero-run marker.
+  const doubleColonIdx = normalized.indexOf("::");
+  let groups: string[];
+  if (doubleColonIdx >= 0) {
+    const head = doubleColonIdx === 0 ? "" : normalized.slice(0, doubleColonIdx);
+    const tail = normalized.endsWith("::") ? "" : normalized.slice(doubleColonIdx + 2);
+    const headGroups = head === "" ? [] : head.split(":");
+    const tailGroups = tail === "" ? [] : tail.split(":");
+    const missing = 8 - headGroups.length - tailGroups.length;
+    if (missing < 0) return null;
+    groups = [...headGroups, ...Array(missing).fill("0"), ...tailGroups];
+  } else {
+    groups = normalized.split(":");
+  }
+
+  if (groups.length !== 8) return null;
+  const hextets: number[] = [];
+  for (const group of groups) {
+    if (group.length === 0 || group.length > 4) return null;
+    const parsed = Number.parseInt(group, 16);
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 0xffff) return null;
+    hextets.push(parsed);
+  }
+  return { hextets };
+}
+
+/**
+ * Compare the first `prefixBits` bits of two 128-bit addresses (split across
+ * 8 16-bit hextets). `prefixBits` MAY be any value from 0..128 — partial-byte
+ * prefixes are compared on the high bits of the boundary hextet.
+ */
+function hasIpv6Prefix(
+  hextets: readonly number[],
+  prefixHextets: readonly number[],
+  prefixBits: number,
+): boolean {
+  if (prefixBits > 128 || prefixBits < 0) return false;
+  const fullHextets = Math.floor(prefixBits / 16);
+  for (let index = 0; index < fullHextets; index += 1) {
+    if (hextets[index] !== prefixHextets[index]) return false;
+  }
+  const remBits = prefixBits - fullHextets * 16;
+  if (remBits === 0) return true;
+  const mask = ((0xffff << (16 - remBits)) & 0xffff) >>> 0;
+  const hextet = hextets[fullHextets];
+  const prefixHextet = prefixHextets[fullHextets];
+  if (hextet === undefined || prefixHextet === undefined) return false;
+  return (hextet & mask) === (prefixHextet & mask);
+}
+
+function embeddedIpv4(hextets: readonly number[]): string {
+  const last = hextets[hextets.length - 2] ?? 0;
+  const final = hextets[hextets.length - 1] ?? 0;
+  return `${(last >> 8) & 0xff}.${last & 0xff}.${(final >> 8) & 0xff}.${final & 0xff}`;
+}
+
+function isPublicIpv6(hextets: readonly number[]): boolean {
+  // Unspecified `::` (all zero) — RFC 4291 §2.5.2.
+  if (hextets.every((value) => value === 0)) return false;
+  // Loopback `::1` — RFC 4291 §2.5.3.
+  if (hextets.slice(0, 7).every((value) => value === 0) && hextets[7] === 1) {
+    return false;
+  }
+
+  // IPv4-compatible IPv6 (deprecated RFC 4291 §2.5.5.1 form): `::w.x.y.z` with
+  // hextets 0-5 zero and a non-zero IPv4 in hextets 6-7. Decision reduces to
+  // the embedded IPv4.
+  if (hextets.slice(0, 6).every((value) => value === 0)) {
+    return isPublicIpv4(embeddedIpv4(hextets));
+  }
+
+  // RFC 4291 §2.5.5.2 IPv4-mapped `::ffff:w.x.y.z` — hextets 0-4 zero and
+  // hextet 5 = 0xffff. Decision reduces to the embedded IPv4.
+  if (
+    hextets[0] === 0 &&
+    hextets[1] === 0 &&
+    hextets[2] === 0 &&
+    hextets[3] === 0 &&
+    hextets[4] === 0 &&
+    hextets[5] === 0xffff
+  ) {
+    return isPublicIpv4(embeddedIpv4(hextets));
+  }
+
+  // 6to4 (RFC 3056): 2002::/16 — the embedded IPv4 lives in hextets 1-2.
+  // Format: `2002:WWXX:YYZZ::/48` where WWXX:YYZZ is the 32-bit IPv4.
+  if (hasIpv6Prefix(hextets, [0x2002, 0, 0, 0, 0, 0, 0, 0], 16)) {
+    const hi = hextets[1] ?? 0;
+    const lo = hextets[2] ?? 0;
+    return isPublicIpv4(`${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`);
+  }
+
+  // NAT64 well-known prefix (RFC 6052): 64:ff9b::/96. Hextets 0-5 must match
+  // and the embedded IPv4 lives in hextets 6-7.
+  if (hasIpv6Prefix(hextets, [0x0064, 0xff9b, 0, 0, 0, 0, 0, 0], 96)) {
+    return isPublicIpv4(embeddedIpv4(hextets));
+  }
+
+  // 64:ff9b:1::/48 — RFC 8215 / local NAT64 prefix. Same handling.
+  if (hasIpv6Prefix(hextets, [0x0064, 0xff9b, 0x0001, 0, 0, 0, 0, 0], 48)) {
+    return isPublicIpv4(embeddedIpv4(hextets));
+  }
+
+  // Unique-local (RFC 4193): fc00::/7.
+  if (hasIpv6Prefix(hextets, [0xfc00, 0, 0, 0, 0, 0, 0, 0], 7)) return false;
+  // Link-local (RFC 4291): fe80::/10.
+  if (hasIpv6Prefix(hextets, [0xfe80, 0, 0, 0, 0, 0, 0, 0], 10)) return false;
+  // Site-local, deprecated (RFC 3513, obsoleted by RFC 3879 but still recognized
+  // by some stacks): fec0::/10.
+  if (hasIpv6Prefix(hextets, [0xfec0, 0, 0, 0, 0, 0, 0, 0], 10)) return false;
+  // Multicast (RFC 4291): ff00::/8.
+  if (hasIpv6Prefix(hextets, [0xff00, 0, 0, 0, 0, 0, 0, 0], 8)) return false;
+  // Discard prefix (RFC 6666): 100::/64.
+  if (hasIpv6Prefix(hextets, [0x0100, 0, 0, 0, 0, 0, 0, 0], 64)) return false;
+  // Documentation (RFC 3849): 2001:db8::/32.
+  if (hasIpv6Prefix(hextets, [0x2001, 0x0db8, 0, 0, 0, 0, 0, 0], 32)) return false;
+  // Teredo client (RFC 4380): 2001::/32. Block the full /32 — only the
+  // server-side subset is normally reachable and conservative blocking costs
+  // nothing.
+  if (hasIpv6Prefix(hextets, [0x2001, 0, 0, 0, 0, 0, 0, 0], 32)) return false;
+
+  return true;
+}
+
 function isPublicIp(address: string): boolean {
   const normalized = address.toLowerCase();
   const version = isIP(normalized);
   if (version === 4) return isPublicIpv4(normalized);
   if (version !== 6) return false;
-  return !(
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized.startsWith("::ffff:") ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    /^fe[89ab]/u.test(normalized) ||
-    normalized.startsWith("ff") ||
-    normalized.startsWith("2001:db8:")
-  );
+  const parts = expandIpv6(normalized);
+  if (!parts) return false;
+  return isPublicIpv6(parts.hextets);
 }
 
 function refused(reason: string): Error {

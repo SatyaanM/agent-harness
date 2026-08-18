@@ -1,10 +1,14 @@
 import path from "node:path";
 import fs from "fs-extra";
 import { z } from "zod";
+import { describeError } from "../contracts/errors.js";
+import { createLogger } from "../contracts/logging.js";
 import { SessionIdSchema } from "../contracts/session.js";
 import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded-io.js";
 import { parseJsonBoundary } from "../validation.js";
 import type { SessionData } from "./session.js";
+
+const logger = createLogger("core.session-index");
 
 /**
  * Lightweight metadata index for sessions (ADR §12 / session-resumption design).
@@ -169,9 +173,9 @@ export class IndexHandle {
 
   private markDirty(): void {
     this.dirty = true;
-    void this.flush().catch(() => {
+    void this.flush().catch((error: unknown) => {
       this.dirty = true;
-      console.error("[session-index] Failed to persist derived metadata index");
+      logger.error("Failed to persist derived metadata index", { ...describeError(error) });
     });
   }
 

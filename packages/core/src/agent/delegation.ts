@@ -1,12 +1,14 @@
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import type { CapabilityRegistry } from "../capability/registry.js";
+import { describeError } from "../contracts/errors.js";
+import { createLogger } from "../contracts/logging.js";
 import type { LLMClient } from "../llm/client.js";
 import type { PendingMessage } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { Tool, ToolRegistry } from "../tool/types.js";
-import type { AgentConfig, TaskId } from "./types.js";
+import { type AgentConfig, type TaskId, TaskIdSchema } from "./types.js";
 import { Worker } from "./worker.js";
 
 export interface DelegationDeps {
@@ -36,11 +38,12 @@ export interface DelegationDeps {
 }
 
 export function createDelegateTool(deps: DelegationDeps): Tool {
+  const logger = createLogger("core.delegation").child({ sessionId: deps.sessionId });
   const reportBackgroundError = (error: unknown) => {
     try {
       deps.onBackgroundError?.(error);
     } catch (reportingError) {
-      console.error("[delegation] Background error observer failed", reportingError);
+      logger.error("Background error observer failed", { ...describeError(reportingError) });
     }
   };
 
@@ -178,7 +181,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
 
 export function createReadSessionTool(sessionsDir: string): Tool {
   const parameters = z.object({
-    taskId: z.string().describe("The taskId of the worker session to read"),
+    taskId: TaskIdSchema.describe("The taskId of the worker session to read"),
   });
 
   return {

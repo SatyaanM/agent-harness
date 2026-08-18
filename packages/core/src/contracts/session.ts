@@ -45,3 +45,15 @@ export const SessionDataSchema = z
   })
   .strict();
 export type SessionData = z.infer<typeof SessionDataSchema>;
+
+export function createSessionData(overrides: Partial<SessionData> = {}): SessionData {
+  return {
+    sessionId: overrides.sessionId ?? "session-1",
+    taskId: overrides.taskId ?? "task-1",
+    prompt: overrides.prompt ?? "test prompt",
+    agentName: overrides.agentName ?? "orchestrator",
+    messages: overrides.messages ?? [],
+    createdAt: overrides.createdAt ?? new Date().toISOString(),
+    ...overrides,
+  };
+}

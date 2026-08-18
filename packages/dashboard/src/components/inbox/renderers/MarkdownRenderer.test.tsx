@@ -21,4 +21,10 @@ describe("MarkdownRenderer security", () => {
 
     expect(screen.getByText("run").closest("a")).not.toHaveAttribute("href");
   });
+
+  it("does not expose protocol-relative URLs", () => {
+    render(<MarkdownRenderer content="[evil](//evil.example.com)" />);
+
+    expect(screen.getByText("evil").closest("a")).not.toHaveAttribute("href");
+  });
 });

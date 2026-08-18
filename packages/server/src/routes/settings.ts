@@ -5,6 +5,8 @@ import type { Config } from "@agent-harness/core";
 import {
   BoundaryValidationError,
   ConfigSchema,
+  createLogger,
+  describeError,
   getConfig,
   getConfigRoot,
   parseBoundary,
@@ -16,6 +18,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
+
+const logger = createLogger("server.settings");
 
 type PersistedSettingKey = Exclude<keyof Config, "ROOT">;
 
@@ -85,8 +89,8 @@ settingsRouter.get(
         2_000_000,
       );
       res.json(data);
-    } catch {
-      console.error("[settings] Failed to fetch models");
+    } catch (error) {
+      logger.error("Failed to fetch models", { ...describeError(error) });
       res.status(502).json({ error: "Failed to fetch models" });
     }
   }),
@@ -119,8 +123,8 @@ settingsRouter.put("/", (req, res) => {
     savePersistedSettings(parsed);
     resetConfig();
     res.json(parsed);
-  } catch {
-    console.error("[settings] Failed to save settings");
+  } catch (error) {
+    logger.error("Failed to save settings", { ...describeError(error) });
     res.status(500).json({ error: "Failed to save settings" });
   }
 });

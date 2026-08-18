@@ -73,7 +73,8 @@ function extractTags(text: string): string[] {
   const tags: string[] = [];
   let match = TAG_REGEX.exec(text);
   while (match !== null) {
-    tags.push(match[1]);
+    const tag = match[1];
+    if (tag !== undefined) tags.push(tag);
     match = TAG_REGEX.exec(text);
   }
   return tags;

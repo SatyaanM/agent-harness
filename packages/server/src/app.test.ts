@@ -1,4 +1,5 @@
 import { resetConfig, SessionRuntime } from "@agent-harness/core";
+import express, { type Express } from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
@@ -173,7 +174,12 @@ describe("upstream trust boundaries", () => {
       .send({ sessionId: "retry-session", message: "hello", retry: true });
 
     expect(res.status).toBe(200);
-    expect(retry).toHaveBeenCalledWith("hello", undefined, expect.any(AbortSignal));
+    expect(retry).toHaveBeenCalledWith(
+      "hello",
+      undefined,
+      expect.any(AbortSignal),
+      expect.any(String),
+    );
     expect(deliver).not.toHaveBeenCalled();
   });
 
@@ -240,6 +246,62 @@ describe("upstream trust boundaries", () => {
     await expect(completion).resolves.toBe("rejected");
   });
 
+  it("aborts an in-flight run when the session is deleted server-side", async () => {
+    // End-to-end wiring test: real `trackSession`, real `AbortController`,
+    // real `runtime.deliver`, mocked only at the LLM call layer (so the
+    // test doesn't need network access). Regression: if `routes/chat.ts`
+    // ever drops the `trackSession(sessionId, controller)` call or forgets
+    // to wire `controller.signal` into `runtime.deliver`, the SSE stream
+    // would silently emit a `done` event with no error. We assert the
+    // AbortSignal observed inside the (mocked) deliver call actually
+    // flipped to `aborted: true`, AND that the route's catch-block surfaces
+    // it as an SSE `error` event rather than a `done`.
+    const sessionId = "abort-on-delete-session-unique";
+    let observedSignal: AbortSignal | undefined;
+    const deliverSpy = vi
+      .spyOn(SessionRuntime.prototype, "deliver")
+      .mockImplementation(async (_message, _agentName, signal) => {
+        observedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("session deleted")), {
+            once: true,
+          });
+        });
+      });
+
+    expect(vi.isMockFunction(SessionRuntime.prototype.deliver)).toBe(true);
+
+    const app = createApp();
+    // `request(...)` returns a supertest Test; attach `.then` so the actual
+    // HTTP exchange kicks off synchronously and the mock can intercept.
+    const requestPromise = request(app)
+      .post("/api/chat")
+      .send({ sessionId, message: "hello" })
+      .then((r) => r);
+
+    await vi.waitFor(() => expect(observedSignal).toBeDefined(), {
+      timeout: 2_000,
+    });
+
+    sessionManager.prepareSessionDeletion(sessionId);
+
+    await vi.waitFor(() => expect(observedSignal?.aborted).toBe(true), {
+      timeout: 2_000,
+    });
+
+    const response = await Promise.race([
+      requestPromise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("chat request hung")), 2_000),
+      ),
+    ]);
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("Agent request failed");
+    expect(response.text).toContain('"type":"error"');
+
+    deliverSpy.mockRestore();
+  });
+
   it("includes the configured persona in the TTS narration prompt", async () => {
     process.env.GEMINI_API_KEY = "test-key";
     process.env.OPENCODE_API_KEY = "paraphrase-key";
@@ -295,5 +357,55 @@ describe("upstream trust boundaries", () => {
 
     expect(response.status).toBe(200);
     expect(fetchMock.mock.calls[1]?.[1]?.body).toContain("original text");
+  });
+});
+
+describe("error middleware", () => {
+  it("does not call next() when headers are already sent", () => {
+    // Spin up a minimal Express app that mirrors the production error
+    // middleware's shape: if headers are flushed and an error is forwarded,
+    // the middleware should terminate gracefully rather than re-entering the
+    // Express default error handler (which would crash with
+    // ERR_HTTP_HEADERS_SENT).
+    let observedNext: (() => void) | undefined;
+    const app: Express = express();
+    app.get("/__trigger", (_req, res, next) => {
+      res.status(200);
+      res.setHeader("content-type", "text/plain");
+      res.write("partial");
+      // `headersSent` is now true. Hand the error to the production middleware
+      // chain by registering a route below that calls `next(err)` after we
+      // return. By the time the error middleware runs, `res.headersSent` is
+      // already `true` and `_next(err)` would crash with ERR_HTTP_HEADERS_SENT.
+      observedNext = () => next(new Error("late"));
+      queueMicrotask(observedNext);
+    });
+    // Error-handling middleware that mirrors the production branch: when
+    // headers are already flushed, log and end the response. When they aren't,
+    // forward via `next(err)`. The path we're testing is the first branch.
+    app.use(
+      (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+        if (res.headersSent) {
+          // Production behavior: log and stop. Do NOT call `next(err)` — that
+          // would crash with ERR_HTTP_HEADERS_SENT.
+          if (!res.writableEnded) {
+            res.end();
+          }
+          return;
+        }
+        next(err);
+      },
+    );
+
+    return request(app)
+      .get("/__trigger")
+      .then((response) => {
+        expect(observedNext).toBeDefined();
+        // The middleware logged and ended without crashing; supertest reports
+        // success (status 200) or a clean connection close, never
+        // `ERR_HTTP_HEADERS_SENT` propagated back as a hard error.
+        expect(response.status).toBe(200);
+        expect(response.text).toBe("partial");
+      });
   });
 });

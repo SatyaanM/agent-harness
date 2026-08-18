@@ -62,6 +62,10 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 - [`plugins/registry.ts`](../../packages/dashboard/src/plugins/registry.ts) statically imports a fixed set of built-in renderer components, while [`InboxItemView`](../../packages/dashboard/src/components/inbox/InboxItemView.tsx) selects among them using manifest metadata.
 - [`lib/api.ts`](../../packages/dashboard/src/lib/api.ts) is the REST adapter and applies endpoint-specific response budgets for durable sessions and inbox files, including JSON/base64 expansion. [`lib/ws.ts`](../../packages/dashboard/src/lib/ws.ts) is the Socket.IO adapter.
 
+## Observability and correlation
+
+A shared structured logger (`core/contracts/logging.ts`) and error normalizer (`core/contracts/errors.ts`) are used by core, server, and dashboard (ADR 0003). `SessionRuntime.runOnce` generates an ephemeral `runId` per execution attempt, and the chat route generates an optional `requestId` at the HTTP edge. Both are threaded into logs via child loggers and onto `agent:started`/`agent:completed`/`agent:error`/`agent:tool` WebSocket events (`runId`/`requestId`, plus `code` on errors). They are correlation context, not durable transcript fields. `/api/health` and `/api/metrics` remain the exposure points for process health and limiter state; metrics histograms, distributed tracing, and an administrative audit trail (which requires an authenticated actor) are not implemented.
+
 ## Implemented lifecycle
 
 1. The dashboard creates or selects a top-level session and sends `{sessionId, message, agentName}` to `/api/chat`.

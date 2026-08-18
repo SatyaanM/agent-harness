@@ -5,10 +5,12 @@ import {
   createDelegateTool,
   createEditFileTool,
   createListDirectoryTool,
+  createLogger,
   createReadFileTool,
   createReadSessionTool,
   createVercelAILLMClient,
   createWriteFileTool,
+  describeError,
   ExecutionLimiter,
   getConfig,
   globTool,
@@ -21,6 +23,8 @@ import {
 } from "@agent-harness/core";
 import { parseServerConfig } from "./server-config.js";
 import { emitAgentEvent } from "./ws/events.js";
+
+const logger = createLogger("server.session-manager");
 
 export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
   const config = getConfig();
@@ -50,6 +54,7 @@ export function resolveAgentConfig(agentName: string | undefined): AgentConfig {
 
 export class SessionManager {
   private runtimes = new Map<string, SessionRuntime>();
+  private sessionControllers = new Map<string, Set<AbortController>>();
   private workerControllers = new Map<
     string,
     { controller: AbortController; parentSessionId: string }
@@ -84,6 +89,7 @@ export class SessionManager {
         capabilityRegistry,
         executionLimiter,
         onEvent: (event) => this.handleRuntimeEvent(event),
+        isSessionAvailable: (id) => this.isSessionAvailable(id),
       });
       this.runtimes.set(sessionId, runtime);
     }
@@ -96,6 +102,25 @@ export class SessionManager {
 
   unload(sessionId: string): void {
     this.runtimes.delete(sessionId);
+  }
+
+  trackSession(sessionId: string, controller: AbortController): void {
+    let controllers = this.sessionControllers.get(sessionId);
+    if (!controllers) {
+      controllers = new Set();
+      this.sessionControllers.set(sessionId, controllers);
+    }
+    controllers.add(controller);
+  }
+
+  clearSession(sessionId: string, controller: AbortController): void {
+    const controllers = this.sessionControllers.get(sessionId);
+    if (controllers) {
+      controllers.delete(controller);
+      if (controllers.size === 0) {
+        this.sessionControllers.delete(sessionId);
+      }
+    }
   }
 
   trackWorker(taskId: string, parentSessionId: string, controller: AbortController): void {
@@ -114,8 +139,26 @@ export class SessionManager {
     this.deletedSessions.delete(sessionId);
   }
 
+  private static readonly MAX_DELETED_SESSIONS = 5000;
+
   prepareSessionDeletion(sessionId: string): void {
+    // FIFO eviction: `Set` preserves insertion order, so `keys().next().value`
+    // returns the oldest entry. This caps the set's memory under steady-state
+    // server churn while never evicting a freshly-deleted session mid-flight.
+    if (this.deletedSessions.size >= SessionManager.MAX_DELETED_SESSIONS) {
+      const oldest = this.deletedSessions.keys().next().value;
+      if (oldest !== undefined) {
+        this.deletedSessions.delete(oldest);
+      }
+    }
     this.deletedSessions.add(sessionId);
+    const controllers = this.sessionControllers.get(sessionId);
+    if (controllers) {
+      for (const controller of controllers) {
+        controller.abort();
+      }
+      this.sessionControllers.delete(sessionId);
+    }
     this.unload(sessionId);
     for (const [taskId, worker] of this.workerControllers) {
       if (worker.parentSessionId !== sessionId) continue;
@@ -137,7 +180,7 @@ export class SessionManager {
     if (runtime) {
       // Loaded session: wake it to process the delivered completion.
       runtime.deliver().catch((err) => {
-        console.error("[session-manager] Wake run failed:", err);
+        logger.error("Wake run failed", { sessionId: delegatingSessionId, ...describeError(err) });
       });
     }
     // Not loaded: the pending message stays durable on disk until the session is loaded.
@@ -203,10 +246,10 @@ export class SessionManager {
         onWorkerSettled: (taskId) => this.onWorkerSettled(taskId),
         isSessionAvailable: (candidateSessionId) => this.isSessionAvailable(candidateSessionId),
         onBackgroundError: (error) => {
-          console.error(
-            "[session-manager] Background worker persistence failed:",
-            error instanceof Error ? error.message : error,
-          );
+          logger.error("Background worker persistence failed", {
+            sessionId,
+            ...describeError(error),
+          });
         },
         onWorkerTool: (workerSessionId, event) => {
           const tool =

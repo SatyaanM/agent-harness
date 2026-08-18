@@ -1,4 +1,9 @@
-import { isRecord, MAX_INBOX_FILE_REQUEST_BYTES } from "@agent-harness/core";
+import {
+  createLogger,
+  describeError,
+  isRecord,
+  MAX_INBOX_FILE_REQUEST_BYTES,
+} from "@agent-harness/core";
 import cors from "cors";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
@@ -13,6 +18,8 @@ import { ttsRouter } from "./routes/tts.js";
 import { workersRouter } from "./routes/workers.js";
 import { parseServerConfig } from "./server-config.js";
 import { sessionManager } from "./session-manager.js";
+
+const logger = createLogger("server.app");
 
 export function createApp(options?: {
   allowedOrigins?: readonly string[];
@@ -54,6 +61,19 @@ export function createApp(options?: {
   });
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (res.headersSent) {
+      // Headers are already flushed, so we cannot send a structured error
+      // response. Express's default error handler will try to write one and
+      // crash with ERR_HTTP_HEADERS_SENT. Log the error and ask the runtime
+      // to drop the socket — the response is in an indeterminate state.
+      logger.error("Unhandled error after response started", {
+        ...describeError(err),
+      });
+      if (!res.writableEnded) {
+        res.end();
+      }
+      return;
+    }
     if (isRecord(err) && err.type === "entity.parse.failed") {
       res.status(400).json({
         error: { code: "invalid_json", message: "Request body contains malformed JSON" },
@@ -66,7 +86,7 @@ export function createApp(options?: {
       });
       return;
     }
-    console.error("[Server] Unhandled error:", err instanceof Error ? err.stack : err);
+    logger.error("Unhandled error", { ...describeError(err) });
     res.status(500).json({
       error: { code: "internal_error", message: "Internal server error" },
     });

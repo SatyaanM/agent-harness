@@ -1,4 +1,6 @@
-import type { SessionData } from "@agent-harness/core";
+import { createLogger, describeError, type SessionData } from "@agent-harness/core";
+
+const logger = createLogger("server.hooks");
 
 /**
  * Lifecycle hooks (ADR §13).
@@ -119,7 +121,7 @@ export class HookBus {
     try {
       await handler(payload);
     } catch (err) {
-      console.error(`[hooks] ${event} observer failed:`, err);
+      logger.error(`${event} observer failed`, { ...describeError(err) });
     }
   }
 }

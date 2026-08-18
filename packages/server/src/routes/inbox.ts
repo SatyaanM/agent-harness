@@ -340,7 +340,7 @@ router.post(
     if (!(await authorizeExisting(target, rootResolved, res))) return;
     const stat = await fs.stat(target);
     if (process.platform === "win32") {
-      const args = stat.isDirectory() ? [target] : ["/select,", target];
+      const args = stat.isDirectory() ? [target] : [`/select,${target}`];
       const { spawn } = await import("node:child_process");
       const child = spawn("explorer.exe", args, { detached: true });
       child.unref();

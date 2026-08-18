@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resetConfig, SessionStore } from "@agent-harness/core";
+import { createSessionData, resetConfig, SessionRuntime, SessionStore } from "@agent-harness/core";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -30,13 +30,14 @@ afterEach(async () => {
 describe("session collection and durable diagnostics", () => {
   it("returns bounded metadata from the collection endpoint and diagnoses invalid records", async () => {
     const { app, root, store } = await fixture();
-    await store.save({
-      sessionId: "healthy",
-      taskId: "task-1",
-      prompt: "hello",
-      messages: [{ role: "user", content: "hello" }],
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "healthy",
+        prompt: "hello",
+        messages: [{ role: "user", content: "hello" }],
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
     const invalidPath = path.join(root, "sessions", "broken.json");
     await writeFile(invalidPath, "{invalid-json}", "utf8");
 
@@ -140,13 +141,13 @@ describe("session collection and durable diagnostics", () => {
 
   it("vetoes deletion before durable state or runtime lifecycle changes", async () => {
     const { app, store } = await fixture();
-    await store.save({
-      sessionId: "kept",
-      taskId: "task-1",
-      prompt: "keep",
-      messages: [],
-      createdAt: "2026-08-15T00:00:00.000Z",
-    });
+    await store.save(
+      createSessionData({
+        sessionId: "kept",
+        prompt: "keep",
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
     vi.spyOn(hooks, "runBefore").mockRejectedValueOnce(new Error("veto"));
     const prepare = vi.spyOn(sessionManager, "prepareSessionDeletion");
 
@@ -155,5 +156,98 @@ describe("session collection and durable diagnostics", () => {
     expect(response.status).toBe(500);
     await expect(store.load("kept")).resolves.not.toBeNull();
     expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("handles conditional mailbox wake in POST /api/sessions/:id/open", async () => {
+    const { app, store } = await fixture();
+    const deliverSpy = vi.spyOn(SessionRuntime.prototype, "deliver").mockResolvedValue({
+      status: "success",
+      summary: "done",
+      messages: [],
+    });
+    await store.save(
+      createSessionData({
+        sessionId: "with-mailbox",
+        prompt: "init",
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
+    await store.appendMailbox("with-mailbox", {
+      taskId: "w-1",
+      from: "worker",
+      agentName: "worker",
+      status: "done",
+      summary: "res",
+      receivedAt: "2026-08-15T00:00:00.000Z",
+    });
+    await store.save(
+      createSessionData({
+        sessionId: "idle",
+        taskId: "task-2",
+        prompt: "idle",
+        createdAt: "2026-08-15T00:00:00.000Z",
+      }),
+    );
+
+    const wakeRes = await request(app).post("/api/sessions/with-mailbox/open");
+    expect(wakeRes.status).toBe(200);
+    expect(wakeRes.body).toEqual({ woke: true, pendingCount: 1 });
+    expect(deliverSpy).toHaveBeenCalled();
+
+    const idleRes = await request(app).post("/api/sessions/idle/open");
+    expect(idleRes.status).toBe(200);
+    expect(idleRes.body).toEqual({ woke: false, pendingCount: 0 });
+
+    const missingRes = await request(app).post("/api/sessions/nonexistent/open");
+    expect(missingRes.status).toBe(404);
+  });
+
+  it("handles session CRUD endpoints and lifecycle hooks", async () => {
+    const { app, store } = await fixture();
+    const createdHook = vi.fn();
+    const renamedHook = vi.fn();
+    const deletedHook = vi.fn();
+    hooks.on("session.created", createdHook);
+    hooks.on("session.renamed", renamedHook);
+    hooks.on("session.deleted", deletedHook);
+
+    // POST /api/sessions
+    const createRes = await request(app).post("/api/sessions").send({
+      prompt: "New Session",
+      agentName: "orchestrator",
+    });
+    expect(createRes.status).toBe(201);
+    expect(createRes.body).toMatchObject({
+      prompt: "New Session",
+      agentName: "orchestrator",
+    });
+    const sessionId = createRes.body.sessionId;
+    expect(sessionId).toBeDefined();
+    expect(createdHook).toHaveBeenCalledWith(expect.objectContaining({ sessionId }));
+
+    // GET /api/sessions/:id
+    const getRes = await request(app).get(`/api/sessions/${sessionId}`);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.sessionId).toBe(sessionId);
+
+    const getMissing = await request(app).get("/api/sessions/missing-id");
+    expect(getMissing.status).toBe(404);
+
+    // PATCH /api/sessions/:id (renaming)
+    const patchRes = await request(app)
+      .patch(`/api/sessions/${sessionId}`)
+      .send({ title: "  Renamed Title  " });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.title).toBe("Renamed Title");
+    expect(renamedHook).toHaveBeenCalledWith({
+      sessionId,
+      title: "Renamed Title",
+    });
+
+    // DELETE /api/sessions/:id
+    const deleteRes = await request(app).delete(`/api/sessions/${sessionId}`);
+    expect(deleteRes.status).toBe(204);
+    expect(deletedHook).toHaveBeenCalledWith({ sessionId });
+    await expect(store.load(sessionId)).resolves.toBeNull();
   });
 });

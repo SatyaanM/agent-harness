@@ -8,6 +8,21 @@ interface MarkdownRendererProps {
   className?: string;
 }
 
+function safeHref(href?: string): string | undefined {
+  if (!href) return undefined;
+  const trimmed = href.trim();
+  if (/^(?:https?:\/\/|mailto:)/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("#")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+    return trimmed;
+  }
+  return undefined;
+}
+
 export function MarkdownRenderer({ content, className = "" }: MarkdownRendererProps) {
   return (
     <div className={`markdown-body min-w-0 break-words ${className}`}>
@@ -45,9 +60,13 @@ export function MarkdownRenderer({ content, className = "" }: MarkdownRendererPr
             );
           },
           a({ children, href, ...props }) {
+            const safe = safeHref(href);
+            if (!safe) {
+              return <span className="text-gray-700">{children}</span>;
+            }
             return (
               <a
-                href={href}
+                href={safe}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-600 underline hover:text-blue-800"

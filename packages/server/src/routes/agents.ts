@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentConfig,
   AgentConfigSchema,
   BoundaryValidationError,
   getConfig,
+  isRecord,
   loadAgentConfig,
   loadAllAgentConfigs,
-  readUtf8FileBoundedSync,
+  readUtf8FileBounded,
 } from "@agent-harness/core";
 import { Router } from "express";
 import matter from "gray-matter";
@@ -40,11 +41,13 @@ agentsRouter.get(
     const params = validateRequest(AgentParamsSchema, req.params, res);
     if (!params) return;
     const filePath = path.join(getConfig().AGENTS_DIR, `${params.name}.md`);
-    if (!fs.existsSync(filePath)) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat?.isFile()) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    res.json({ source: readUtf8FileBoundedSync(filePath, 2_000_000, "agent source") });
+    const source = await readUtf8FileBounded(filePath, 2_000_000, "agent source");
+    res.json({ source });
   }),
 );
 
@@ -56,13 +59,14 @@ agentsRouter.put(
     const body = validateRequest(AgentSourceSchema, req.body, res);
     if (!body) return;
     const filePath = path.join(getConfig().AGENTS_DIR, `${params.name}.md`);
-    if (!fs.existsSync(filePath)) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat?.isFile()) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
     const temporaryFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      fs.writeFileSync(temporaryFile, body.source, "utf-8");
+      await fs.writeFile(temporaryFile, body.source, "utf-8");
       const parsed = loadAgentConfig(temporaryFile);
       if (parsed.name !== params.name) {
         res.status(400).json({
@@ -73,7 +77,7 @@ agentsRouter.put(
         });
         return;
       }
-      fs.renameSync(temporaryFile, filePath);
+      await fs.rename(temporaryFile, filePath);
       res.json(parsed);
     } catch (error) {
       if (
@@ -87,9 +91,7 @@ agentsRouter.put(
       }
       throw error;
     } finally {
-      try {
-        fs.rmSync(temporaryFile, { force: true });
-      } catch {}
+      await fs.rm(temporaryFile, { force: true }).catch(() => null);
     }
   }),
 );
@@ -101,7 +103,8 @@ agentsRouter.get(
     if (!params) return;
     const config = getConfig();
     const filePath = path.join(config.AGENTS_DIR, `${params.name}.md`);
-    if (!fs.existsSync(filePath)) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat?.isFile()) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
@@ -118,30 +121,42 @@ agentsRouter.post(
     if (!body) return;
 
     const filePath = path.join(config.AGENTS_DIR, `${body.name}.md`);
-    if (fs.existsSync(filePath)) {
-      res.status(409).json({ error: "Agent already exists" });
-      return;
-    }
+    await fs.mkdir(config.AGENTS_DIR, { recursive: true });
 
-    fs.mkdirSync(config.AGENTS_DIR, { recursive: true });
-    const agentConfig = writeAgentConfig(filePath, {
-      name: body.name,
-      model: body.model,
-      tools: body.tools ?? [],
-      maxSteps: body.maxSteps ?? 10,
-      instructions: body.instructions ?? "",
-      ...(body.description !== undefined ? { description: body.description } : {}),
-      ...(body.capabilities !== undefined ? { capabilities: body.capabilities } : {}),
-      ...(body.modelIdMapping !== undefined ? { modelIdMapping: body.modelIdMapping } : {}),
-      ...(body.maxToolCalls !== undefined ? { maxToolCalls: body.maxToolCalls } : {}),
-      ...(body.maxToolResultChars !== undefined
-        ? { maxToolResultChars: body.maxToolResultChars }
-        : {}),
-      ...(body.maxOutputTokens !== undefined ? { maxOutputTokens: body.maxOutputTokens } : {}),
-      ...(body.maxTotalTokens !== undefined ? { maxTotalTokens: body.maxTotalTokens } : {}),
-      ...(body.runTimeoutMs !== undefined ? { runTimeoutMs: body.runTimeoutMs } : {}),
-    });
-    res.status(201).json(agentConfig);
+    try {
+      const agentConfig = await writeAgentConfig(
+        filePath,
+        {
+          name: body.name,
+          model: body.model,
+          tools: body.tools ?? [],
+          maxSteps: body.maxSteps ?? 10,
+          instructions: body.instructions ?? "",
+          ...(body.description !== undefined ? { description: body.description } : {}),
+          ...(body.capabilities !== undefined ? { capabilities: body.capabilities } : {}),
+          ...(body.modelIdMapping !== undefined ? { modelIdMapping: body.modelIdMapping } : {}),
+          ...(body.maxToolCalls !== undefined ? { maxToolCalls: body.maxToolCalls } : {}),
+          ...(body.maxToolResultChars !== undefined
+            ? { maxToolResultChars: body.maxToolResultChars }
+            : {}),
+          ...(body.maxOutputTokens !== undefined ? { maxOutputTokens: body.maxOutputTokens } : {}),
+          ...(body.maxTotalTokens !== undefined ? { maxTotalTokens: body.maxTotalTokens } : {}),
+          ...(body.runTimeoutMs !== undefined ? { runTimeoutMs: body.runTimeoutMs } : {}),
+        },
+        true,
+      );
+      res.status(201).json(agentConfig);
+    } catch (error) {
+      if (
+        isRecord(error) &&
+        (error.code === "EEXIST" ||
+          (typeof error.message === "string" && error.message.includes("EEXIST")))
+      ) {
+        res.status(409).json({ error: "Agent already exists" });
+        return;
+      }
+      throw error;
+    }
   }),
 );
 
@@ -154,13 +169,14 @@ agentsRouter.put(
     if (!body) return;
     const config = getConfig();
     const filePath = path.join(config.AGENTS_DIR, `${params.name}.md`);
-    if (!fs.existsSync(filePath)) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat?.isFile()) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
 
     const existing = loadAgentConfig(filePath);
-    const agentConfig = writeAgentConfig(filePath, {
+    const agentConfig = await writeAgentConfig(filePath, {
       ...existing,
       ...body,
       name: params.name,
@@ -176,11 +192,12 @@ agentsRouter.delete(
     if (!params) return;
     const config = getConfig();
     const filePath = path.join(config.AGENTS_DIR, `${params.name}.md`);
-    if (!fs.existsSync(filePath)) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat?.isFile()) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    fs.unlinkSync(filePath);
+    await fs.unlink(filePath);
     res.status(204).end();
   }),
 );
@@ -216,18 +233,33 @@ function buildAgentMarkdown(config: Partial<z.infer<typeof AgentConfigSchema>>):
   return stringify("", frontmatter) + (config.instructions ?? "");
 }
 
-function writeAgentConfig(filePath: string, config: AgentConfig): AgentConfig {
+async function writeAgentConfig(
+  filePath: string,
+  config: AgentConfig,
+  exclusive = false,
+): Promise<AgentConfig> {
   const content = buildAgentMarkdown(config);
+  if (exclusive) {
+    const handle = await fs.open(filePath, "wx");
+    try {
+      await handle.writeFile(content, "utf-8");
+      await handle.close();
+      return loadAgentConfig(filePath);
+    } catch (error) {
+      await handle.close().catch(() => null);
+      await fs.unlink(filePath).catch(() => null);
+      throw error;
+    }
+  }
+
   const temporaryFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporaryFile, content, "utf-8");
+    await fs.writeFile(temporaryFile, content, "utf-8");
     const parsed = loadAgentConfig(temporaryFile);
-    fs.renameSync(temporaryFile, filePath);
+    await fs.rename(temporaryFile, filePath);
     return parsed;
   } catch (error) {
-    try {
-      fs.rmSync(temporaryFile, { force: true });
-    } catch {}
+    await fs.rm(temporaryFile, { force: true }).catch(() => null);
     throw error;
   }
 }

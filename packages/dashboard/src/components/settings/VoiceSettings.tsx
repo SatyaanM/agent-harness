@@ -1,5 +1,6 @@
 "use client";
 
+import { createLogger, describeError } from "@agent-harness/core/contracts";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,6 +16,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useTTSStore } from "@/stores/tts-store";
+
+const logger = createLogger("dashboard.voice-settings");
 
 export function VoiceSettings() {
   const {
@@ -42,7 +45,7 @@ export function VoiceSettings() {
     try {
       await play(previewText);
     } catch (error) {
-      console.error("Preview failed:", error);
+      logger.error("Preview failed", { ...describeError(error) });
       alert("Preview failed. Make sure GEMINI_API_KEY is configured.");
     } finally {
       setIsPreviewPlaying(false);

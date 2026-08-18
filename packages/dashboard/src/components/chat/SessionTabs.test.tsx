@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionStore } from "@/stores/session-store";
+import { createTestSession } from "@/test-helpers/session-fixtures";
 import SessionTabs from "./SessionTabs";
 
 vi.mock("@/lib/api", () => ({
@@ -16,22 +17,15 @@ describe("SessionTabs", () => {
     useSessionStore.setState({
       activeSessionId: "session-a",
       sessions: [
-        {
+        createTestSession({
           sessionId: "session-a",
-          messages: [],
-          status: "active",
-          agentName: "orchestrator",
           title: "First session",
-          createdAt: "2026-08-15T00:00:00.000Z",
-        },
-        {
+        }),
+        createTestSession({
           sessionId: "session-b",
-          messages: [],
-          status: "active",
           agentName: "worker",
           title: "Second session",
-          createdAt: "2026-08-15T00:00:00.000Z",
-        },
+        }),
       ],
     });
   });

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { createLogger, describeError } from "@agent-harness/core/contracts";
+import { useCallback, useEffect, useRef } from "react";
 import {
   fetchOpenSessions,
   fetchSession,
@@ -20,6 +21,8 @@ import { useRosterStore } from "@/stores/agent-roster-store";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useSessionStore } from "@/stores/session-store";
 
+const logger = createLogger("dashboard.runtime-sync");
+
 export function resolveRestoredOpenState(
   open: OpenSessionsState,
   restored: Array<{ sessionId: string }>,
@@ -37,50 +40,100 @@ export default function RuntimeSync() {
   const sessions = useSessionStore((s) => s.sessions);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const hydrated = useRef(false);
+  const hydrating = useRef(false);
+  const pendingSync = useRef(false);
+
+  const hydrateOpenSessions = useCallback(async (signal?: { cancelled: boolean }) => {
+    if (hydrating.current) return;
+    hydrating.current = true;
+    try {
+      const open = await fetchOpenSessions();
+      const restored = (
+        await Promise.all(open.openSessionIds.map((id) => fetchSession(id).catch(() => null)))
+      ).filter((s): s is NonNullable<typeof s> => s !== null);
+      if (signal?.cancelled) return;
+
+      useSessionStore.getState().hydrate(restored);
+      const repaired = resolveRestoredOpenState(open, restored);
+      useSessionStore.getState().setActiveSession(repaired.activeSessionId);
+      if (
+        repaired.activeSessionId !== open.activeSessionId ||
+        repaired.openSessionIds.length !== open.openSessionIds.length
+      ) {
+        await updateOpenSessions(repaired);
+      }
+      hydrated.current = true;
+
+      // If the registry-sync effect ran while hydration was in flight, it
+      // queued its latest snapshot. Publish it now so the server sees a state
+      // consistent with whatever the rest of the dashboard has accumulated
+      // since boot — typically the same `repaired` snapshot, but always
+      // post-hydration.
+      if (pendingSync.current) {
+        pendingSync.current = false;
+        const current = useSessionStore.getState();
+        await updateOpenSessions({
+          activeSessionId: current.activeSessionId,
+          openSessionIds: current.sessions.map((s) => s.sessionId),
+        }).catch((err: unknown) => logger.error("registry sync failed", { ...describeError(err) }));
+      }
+    } catch (err) {
+      logger.error("hydration failed", { ...describeError(err) });
+      // Keep `hydrated.current = false` so a hydration failure does NOT
+      // publish a partial (or empty) open set to the server — that would
+      // clobber the server-authoritative state. The next socket reconnect
+      // will retry hydration; pending sessions shown in the UI are local
+      // and will recover naturally.
+    } finally {
+      hydrating.current = false;
+    }
+  }, []);
 
   // Boot hydration: restore the recorded open set as tabs, history only
   // (ADR §12.3 — no runtime loads, no token spend).
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const open = await fetchOpenSessions();
-        const restored = (
-          await Promise.all(open.openSessionIds.map((id) => fetchSession(id).catch(() => null)))
-        ).filter((s): s is NonNullable<typeof s> => s !== null);
-        if (cancelled) return;
-
-        useSessionStore.getState().hydrate(restored);
-        const repaired = resolveRestoredOpenState(open, restored);
-        useSessionStore.getState().setActiveSession(repaired.activeSessionId);
-        if (
-          repaired.activeSessionId !== open.activeSessionId ||
-          repaired.openSessionIds.length !== open.openSessionIds.length
-        ) {
-          await updateOpenSessions(repaired);
-        }
-      } catch (err) {
-        console.error("[RuntimeSync] hydration failed:", err);
-      } finally {
-        hydrated.current = true;
-      }
-    })();
+    const signal = { cancelled: false };
+    void hydrateOpenSessions(signal);
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
     };
-  }, []);
+  }, [hydrateOpenSessions]);
 
   // Registry sync: the dashboard is the single writer of the open set (ADR §12.1).
   useEffect(() => {
-    if (!hydrated.current) return;
+    // Until hydration completes, the in-memory store may hold partial data
+    // (e.g. a session that streamed in over the socket before boot hydration
+    // returned). Publishing that partial state would overwrite the
+    // server-authoritative open set. Instead, queue the latest snapshot and
+    // replay it from the hydration completion site.
+    if (!hydrated.current) {
+      pendingSync.current = true;
+      return;
+    }
     updateOpenSessions({
       activeSessionId,
       openSessionIds: sessions.map((s) => s.sessionId),
-    }).catch((err) => console.error("[RuntimeSync] registry sync failed:", err));
+    }).catch((err) => logger.error("registry sync failed", { ...describeError(err) }));
   }, [sessions, activeSessionId]);
 
   useEffect(() => {
     const socket = connectSocket();
+
+    const onConnect = async () => {
+      if (!hydrated.current) {
+        await hydrateOpenSessions();
+        return;
+      }
+      const currentSessions = useSessionStore.getState().sessions;
+      await Promise.all(
+        currentSessions.map(async (s) => {
+          const latest = await fetchSession(s.sessionId).catch(() => null);
+          if (latest) {
+            useSessionStore.getState().syncFromServer(latest);
+          }
+        }),
+      );
+    };
 
     const onSessionUpdated = validatedEventHandler(
       SessionUpdatedEventSchema,
@@ -131,6 +184,7 @@ export default function RuntimeSync() {
       (data) => useRosterStore.getState().setWorkerStatus(data.sessionId, data.taskId, data.status),
     );
 
+    socket.on("connect", onConnect);
     socket.on("session:updated", onSessionUpdated);
     socket.on("agent:tool", onTool);
     socket.on("agent:started", onAgentStarted);
@@ -140,6 +194,7 @@ export default function RuntimeSync() {
     socket.on("worker:completed", onWorkerCompleted);
 
     return () => {
+      socket.off("connect", onConnect);
       socket.off("session:updated", onSessionUpdated);
       socket.off("agent:tool", onTool);
       socket.off("agent:started", onAgentStarted);
@@ -148,7 +203,7 @@ export default function RuntimeSync() {
       socket.off("worker:spawned", onWorkerSpawned);
       socket.off("worker:completed", onWorkerCompleted);
     };
-  }, []);
+  }, [hydrateOpenSessions]);
 
   return null;
 }

@@ -1,6 +1,6 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText } from "ai";
+import { generateText, tool } from "ai";
 import type { Message } from "../agent/types.js";
 import type { Config } from "../config.js";
 import type { LLMChatParams, LLMClient, LLMResponse } from "./client.js";
@@ -49,7 +49,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
         params.system,
         ...params.messages.filter((m) => m.role === "system").map((m) => m.content),
       ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
-      const instructions = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
+      const system = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
 
       const messages = convertMessages(params.messages);
 
@@ -57,10 +57,10 @@ export function createVercelAILLMClient(config: Config): LLMClient {
         ? Object.fromEntries(
             params.tools.map((t) => [
               t.name,
-              {
+              tool({
                 description: t.description,
                 inputSchema: t.parameters,
-              },
+              }),
             ]),
           )
         : undefined;
@@ -68,7 +68,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
       const result = await generateText({
         model,
         messages,
-        ...(instructions ? { instructions } : {}),
+        ...(system ? { system } : {}),
         ...(tools ? { tools } : {}),
         ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
         ...(params.signal ? { abortSignal: params.signal } : {}),
@@ -82,7 +82,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
         ? result.toolCalls.map((tc) => ({
             toolCallId: tc.toolCallId,
             toolName: tc.toolName,
-            args: requireRecord(tc.input, `tool call ${tc.toolCallId} input`),
+            args: requireRecord(tc.input, `tool call ${tc.toolCallId} args`),
           }))
         : undefined;
 
@@ -190,7 +190,8 @@ function convertMessages(messages: Message[]) {
 
 function findToolName(toolCallId: string, messages: Message[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const tc = messages[i].toolCalls?.find((c) => c.toolCallId === toolCallId);
+    const msg = messages[i];
+    const tc = msg?.toolCalls?.find((c) => c.toolCallId === toolCallId);
     if (tc) return tc.toolName;
   }
   return undefined;

@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   BoundaryValidationError,
+  createLogger,
+  describeError,
   type PluginManifest,
   PluginManifestSchema,
   parseJsonBoundary,
@@ -10,6 +12,8 @@ import {
   stringifyJsonBounded,
 } from "@agent-harness/core";
 import { z } from "zod";
+
+const logger = createLogger("server.plugins");
 
 const PluginStateSchema = z
   .object({ enabled: z.record(z.boolean()).refine((value) => Object.keys(value).length <= 10_000) })
@@ -61,12 +65,12 @@ export function discoverPlugins(pluginsDir: string): PluginManifest[] {
         `plugin manifest ${file}`,
       );
       if (plugins.has(parsed.name)) {
-        console.error(`[plugins] Duplicate plugin name "${parsed.name}" in ${file}; ignoring it`);
+        logger.error(`Duplicate plugin name "${parsed.name}" in ${file}; ignoring it`);
         continue;
       }
       plugins.set(parsed.name, parsed);
     } catch (err) {
-      console.error(`[plugins] Failed to load manifest ${file}:`, err);
+      logger.error(`Failed to load manifest ${file}`, { ...describeError(err) });
     }
   }
 
@@ -128,7 +132,7 @@ export class PluginRegistry {
       } catch (error) {
         if (!(error instanceof BoundaryValidationError)) throw error;
         this.invalidState = true;
-        console.error("[plugins] Enabled state is invalid; defaults remain active until repair");
+        logger.error("Enabled state is invalid; defaults remain active until repair");
       }
     }
   }

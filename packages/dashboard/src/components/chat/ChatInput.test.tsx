@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendMessage } from "@/lib/api";
 import { useSessionStore } from "@/stores/session-store";
+import { createTestSession } from "@/test-helpers/session-fixtures";
 import ChatInput from "./ChatInput";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -33,15 +34,7 @@ describe("ChatInput", () => {
     mockedSendMessage.mockReset();
     useSessionStore.setState({
       activeSessionId: "session-a",
-      sessions: [
-        {
-          sessionId: "session-a",
-          messages: [],
-          status: "active",
-          agentName: "orchestrator",
-          createdAt: "2026-08-15T00:00:00.000Z",
-        },
-      ],
+      sessions: [createTestSession({ sessionId: "session-a" })],
     });
   });
 

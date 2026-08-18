@@ -1,6 +1,6 @@
 import type { ChunkerConfig } from "./types.js";
 
-const SENTENCE_ENDINGS = /[.!?;]\s|\n/;
+const SENTENCE_ENDINGS = /[.!?;](?:\s|$)|(?:\r?\n)+/g;
 const TAG_PATTERN = /\[([^\]]+)\]/g;
 
 export interface SpeechChunker {
@@ -31,10 +31,20 @@ export function createSpeechChunker(config: ChunkerConfig): SpeechChunker {
         inTag = true;
       } else if (text[i] === "]" && inTag) {
         inTag = false;
-      } else if (!inTag && SENTENCE_ENDINGS.test(text[i])) {
-        depth++;
-        if (depth >= config.minSentences) {
-          return i + 1;
+      } else if (!inTag) {
+        const char = text[i];
+        const nextChar = text[i + 1];
+        const isPunctuationEnding =
+          char !== undefined &&
+          [".", "!", "?", ";"].includes(char) &&
+          (nextChar === undefined || /\s/.test(nextChar));
+        const isNewline = char === "\n";
+
+        if (isPunctuationEnding || isNewline) {
+          depth++;
+          if (depth >= config.minSentences) {
+            return i + 1;
+          }
         }
       }
     }

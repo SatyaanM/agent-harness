@@ -157,4 +157,84 @@ Updated instructions.
       error: { code: "invalid_request", message: "Agent source is invalid" },
     });
   });
+
+  it("returns 404 for non-existent agent across routes", async () => {
+    const { app } = await appFixture();
+
+    expect((await request(app).get("/api/agents/nonexistent")).status).toBe(404);
+    expect((await request(app).get("/api/agents/nonexistent/source")).status).toBe(404);
+    expect(
+      (
+        await request(app)
+          .put("/api/agents/nonexistent/source")
+          .send({ source: "---\nname: nonexistent\nmodel: m\ntools: []\nmaxSteps: 1\n---\n" })
+      ).status,
+    ).toBe(404);
+    expect((await request(app).put("/api/agents/nonexistent").send({ maxSteps: 5 })).status).toBe(
+      404,
+    );
+    expect((await request(app).delete("/api/agents/nonexistent")).status).toBe(404);
+  });
+
+  it("returns 409 when creating an agent that already exists", async () => {
+    const { app } = await appFixture();
+    await request(app).post("/api/agents").send({
+      name: "existing",
+      model: "test-model",
+      tools: [],
+      maxSteps: 10,
+      instructions: "First creation.",
+    });
+
+    const duplicate = await request(app).post("/api/agents").send({
+      name: "existing",
+      model: "test-model",
+      tools: [],
+      maxSteps: 10,
+      instructions: "Second creation.",
+    });
+
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body).toEqual({ error: "Agent already exists" });
+  });
+
+  it("deletes an agent and returns 204", async () => {
+    const { app } = await appFixture();
+    await request(app).post("/api/agents").send({
+      name: "to-delete",
+      model: "test-model",
+      tools: [],
+      maxSteps: 10,
+      instructions: "Delete me.",
+    });
+
+    const delRes = await request(app).delete("/api/agents/to-delete");
+    expect(delRes.status).toBe(204);
+
+    const getRes = await request(app).get("/api/agents/to-delete");
+    expect(getRes.status).toBe(404);
+  });
+
+  it("atomically handles concurrent creations of the same agent name with one 201 and one 409", async () => {
+    const { app } = await appFixture();
+    const [res1, res2] = await Promise.all([
+      request(app).post("/api/agents").send({
+        name: "concurrent-agent",
+        model: "test-model",
+        tools: [],
+        maxSteps: 10,
+        instructions: "A",
+      }),
+      request(app).post("/api/agents").send({
+        name: "concurrent-agent",
+        model: "test-model",
+        tools: [],
+        maxSteps: 10,
+        instructions: "B",
+      }),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    expect(statuses).toEqual([201, 409]);
+  });
 });

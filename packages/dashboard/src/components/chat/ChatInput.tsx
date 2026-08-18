@@ -1,5 +1,6 @@
 "use client";
 
+import { createLogger, describeError } from "@agent-harness/core/contracts";
 import { type KeyboardEvent, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,6 +9,8 @@ import { useChatInputStore } from "@/stores/chat-input-store";
 import { useSessionStore } from "@/stores/session-store";
 import { useTTSStore } from "@/stores/tts-store";
 import { TTSButton } from "./TTSButton";
+
+const logger = createLogger("dashboard.chat-input");
 
 interface PendingRequest {
   sessionId: string;
@@ -90,7 +93,7 @@ export default function ChatInput() {
       // Auto-play TTS if enabled
       if (ttsEnabled && accumulated.trim()) {
         void playTTS(accumulated).catch((error) => {
-          console.error("[ChatInput] Automatic voice playback failed:", error);
+          logger.error("Automatic voice playback failed", { ...describeError(error) });
         });
       }
     } catch (error) {

@@ -7,7 +7,7 @@
 ```bash
 git clone https://github.com/<you>/agent-harness.git
 cd agent-harness
-npm install
+corepack npm install
 ```
 
 ### 2. Set API Key
@@ -37,7 +37,7 @@ See the README's [Using any LLM provider](./README.md#using-any-llm-provider) se
 ### 3. Start Development Servers
 
 ```bash
-npm run dev
+corepack npm run dev
 ```
 
 This starts:

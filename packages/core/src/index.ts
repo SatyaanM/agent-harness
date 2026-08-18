@@ -40,6 +40,8 @@ export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supe
 export { callSupervisor } from "./collaboration/supervision.js";
 export type { Config } from "./config.js";
 export { ConfigSchema, getConfig, getConfigRoot, resetConfig } from "./config.js";
+export type { ErrorDescriptor } from "./contracts/errors.js";
+export { describeError } from "./contracts/errors.js";
 export { parseJsonResponseBoundary, readResponseTextBounded } from "./contracts/http.js";
 export {
   MAX_INBOX_FILE_BYTES,
@@ -50,6 +52,8 @@ export {
   MAX_SESSION_RESPONSE_BYTES,
   MAX_SESSION_TRANSCRIPT_BYTES,
 } from "./contracts/limits.js";
+export type { Logger, LogLevel, LogRecord, LogSink } from "./contracts/logging.js";
+export { consoleSink, createLogger } from "./contracts/logging.js";
 export {
   readFileBounded,
   readUtf8FileBounded,
@@ -68,7 +72,12 @@ export { createVercelAILLMClient } from "./llm/vercel-ai.js";
 export { CapabilityCache } from "./persistence/capability-cache.js";
 export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
 export type { PendingMessage, SessionData } from "./persistence/session.js";
-export { PendingMessageSchema, SessionDataSchema, SessionStore } from "./persistence/session.js";
+export {
+  createSessionData,
+  PendingMessageSchema,
+  SessionDataSchema,
+  SessionStore,
+} from "./persistence/session.js";
 export type { SessionMeta } from "./persistence/session-index.js";
 export type {
   InboxRendererManifest,

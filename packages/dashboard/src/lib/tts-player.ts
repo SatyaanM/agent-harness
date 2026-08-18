@@ -1,5 +1,11 @@
-import { parseJsonResponseBoundary } from "@agent-harness/core/contracts";
+import {
+  createLogger,
+  describeError,
+  parseJsonResponseBoundary,
+} from "@agent-harness/core/contracts";
 import { z } from "zod";
+
+const logger = createLogger("dashboard.tts-player");
 
 export type PlaybackState = "idle" | "playing" | "paused";
 
@@ -58,7 +64,8 @@ export function createTTSPlayer(): TTSPlayer {
   ): Promise<AudioBuffer> {
     const ctx = getAudioContext();
     // Convert Int16 PCM to Float32 for Web Audio API
-    const int16Array = new Int16Array(pcmData);
+    const alignedBytes = pcmData.byteLength - (pcmData.byteLength % 2);
+    const int16Array = new Int16Array(pcmData, 0, alignedBytes / 2);
     const float32Array = new Float32Array(int16Array.length);
     for (let i = 0; i < int16Array.length; i++) {
       float32Array[i] = int16Array[i] / 32768.0;
@@ -200,7 +207,7 @@ export function createTTSPlayer(): TTSPlayer {
         playFromQueue();
       } catch (error) {
         if (generation !== playbackGeneration) return;
-        console.error("[TTS Player] Error:", error);
+        logger.error("Error", { ...describeError(error) });
         notifyStateChange("idle");
         throw error;
       } finally {

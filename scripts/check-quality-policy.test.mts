@@ -188,4 +188,60 @@ describe("checkQualityPolicy", () => {
       expect.objectContaining({ rule: "boundaries/browser-safe-contracts" }),
     );
   });
+
+  it("rejects server or UI imports in core runtime", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/core/src/agent/example.ts",
+      source: 'import express from "express";\nexport const app = express;\n',
+    });
+
+    expect(checkQualityPolicy(root)).toContainEqual(
+      expect.objectContaining({ rule: "boundaries/core-isolation" }),
+    );
+  });
+
+  it("rejects direct core runtime imports in dashboard", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/dashboard/src/components/example.tsx",
+      source:
+        'import { SessionRuntime } from "@agent-harness/core";\nexport const r = SessionRuntime;\n',
+    });
+
+    expect(checkQualityPolicy(root)).toContainEqual(
+      expect.objectContaining({ rule: "boundaries/dashboard-contracts-only" }),
+    );
+  });
+
+  it("allows @agent-harness/core/contracts imports in dashboard", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/dashboard/src/components/example.tsx",
+      source:
+        'import type { SessionData } from "@agent-harness/core/contracts";\nexport const data: SessionData | undefined = undefined;\n',
+    });
+
+    expect(checkQualityPolicy(root)).toEqual([]);
+  });
+
+  it("rejects dashboard imports in server", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/server/src/routes/example.ts",
+      source: 'import { Sidebar } from "@agent-harness/dashboard";\nexport const s = Sidebar;\n',
+    });
+
+    expect(checkQualityPolicy(root)).toContainEqual(
+      expect.objectContaining({ rule: "boundaries/server-isolation" }),
+    );
+  });
+
+  it("rejects direct fs write operations in core outside allowed owners", async () => {
+    const root = await makeRepository({
+      sourcePath: "packages/core/src/agent/bad-writer.ts",
+      source:
+        'import fs from "fs-extra";\nexport async function write() { await fs.writeFile("foo", "bar"); }\n',
+    });
+
+    expect(checkQualityPolicy(root)).toContainEqual(
+      expect.objectContaining({ rule: "persistence/single-writer-only" }),
+    );
+  });
 });
