@@ -25,7 +25,7 @@ These steps get a fresh copy of the app running on your machine.
 
 ### 1. Prerequisites
 
-- **Node.js 20.9+** and the repository-pinned **pnpm 11.22.0** through Corepack
+- **Node.js 22.13+** and the repository-pinned **pnpm 11.22.0** through Corepack
 - An API key for an LLM provider (see [Using any LLM provider](#using-any-llm-provider))
 
 ### 2. Clone and install
