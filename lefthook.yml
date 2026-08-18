@@ -1,23 +1,21 @@
 min_version: 2.1.10
 
 pre-commit:
-  parallel: false
+  parallel: true
   commands:
     biome:
-      run: corepack npm run quality:staged
+      glob: "*.{js,ts,tsx,json,jsonc,css}"
+      run: corepack pnpm exec biome check --write --staged --no-errors-on-unmatched {staged_files}
       stage_fixed: true
-    policy:
-      run: corepack npm run quality:policy
-    docs:
-      run: corepack npm run docs:check
-    skills:
-      run: corepack npm run skills:validate
-    secrets:
-      run: node scripts/check-secrets.mjs --staged
-    whitespace:
-      run: git diff --cached --check
+    staged-gates:
+      run: node scripts/run-staged-gates.mjs
+
+commit-msg:
+  commands:
+    conventional-commits:
+      run: corepack pnpm exec commitlint --edit {1}
 
 pre-push:
   commands:
     verify:
-      run: corepack npm run check
+      run: node scripts/run-checks.mjs fast

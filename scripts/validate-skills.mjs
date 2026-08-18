@@ -114,21 +114,28 @@ function validateUiManifest(file, displayPath, skillName) {
   }
 }
 
-function validate(root, repositoryRoot) {
-  if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
-    throw new Error(`Skills root is not a directory: ${root}`);
+/**
+ * @param {string} [root]
+ * @param {string} [repositoryRoot]
+ * @returns {{ count: number, failures: string[] }}
+ */
+export function validateSkills(root, repositoryRoot = process.cwd()) {
+  const skillsRoot = root ? path.resolve(root) : path.join(repositoryRoot, ".agents", "skills");
+  if (!fs.existsSync(skillsRoot) || !fs.statSync(skillsRoot).isDirectory()) {
+    return { count: 0, failures: [`Skills root is not a directory: ${skillsRoot}`] };
   }
 
   const directories = fs
-    .readdirSync(root, { withFileTypes: true })
+    .readdirSync(skillsRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .sort((left, right) => left.name.localeCompare(right.name));
-  if (directories.length === 0) throw new Error(`No skill directories found under ${root}`);
+  if (directories.length === 0)
+    return { count: 0, failures: [`No skill directories found under ${skillsRoot}`] };
 
   const names = new Map();
   const failures = [];
   for (const directory of directories) {
-    const skillFile = path.join(root, directory.name, "SKILL.md");
+    const skillFile = path.join(skillsRoot, directory.name, "SKILL.md");
     const displayPath = path.relative(repositoryRoot, skillFile).replaceAll(path.sep, "/");
     try {
       if (!fs.existsSync(skillFile)) throw new Error(`${displayPath}: missing SKILL.md`);
@@ -145,7 +152,7 @@ function validate(root, repositoryRoot) {
         );
       }
 
-      const uiFile = path.join(root, directory.name, "agents", "openai.yaml");
+      const uiFile = path.join(skillsRoot, directory.name, "agents", "openai.yaml");
       if (fs.existsSync(uiFile)) {
         validateUiManifest(
           uiFile,
@@ -158,18 +165,19 @@ function validate(root, repositoryRoot) {
     }
   }
 
-  if (failures.length > 0) throw new Error(failures.join("\n"));
-  console.log(`Validated ${names.size} skill${names.size === 1 ? "" : "s"}.`);
+  return { count: names.size, failures };
 }
 
-try {
-  const args = parseArgs(process.argv.slice(2));
-  const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  validate(
-    path.resolve(args.root ?? path.join(repositoryRoot, ".agents", "skills")),
-    repositoryRoot,
-  );
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
+if (invokedPath === path.resolve(fileURLToPath(import.meta.url))) {
+  try {
+    const args = parseArgs(process.argv.slice(2));
+    const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const { count, failures } = validateSkills(args.root, repositoryRoot);
+    if (failures.length > 0) throw new Error(failures.join("\n"));
+    console.log(`Validated ${count} skill${count === 1 ? "" : "s"}.`);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

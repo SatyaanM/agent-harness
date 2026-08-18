@@ -2,13 +2,10 @@
   "name": "agent-harness",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "npm@10.9.2",
+  "packageManager": "pnpm@11.22.0",
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.13.0"
   },
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
     "build": "turbo run build",
     "check": "node scripts/run-checks.mjs",
@@ -23,6 +20,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "hooks:install": "node scripts/install-hooks.mjs",
+    "knip": "knip",
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",
     "perf:report": "node scripts/perf-report.mjs",
@@ -39,32 +37,24 @@
     "start": "turbo run start",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
     "test:packages": "turbo run test",
     "test:ui": "vitest --ui",
     "test:watch": "vitest",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.5",
-    "@vitest/coverage-v8": "4.1.10",
-    "@vitest/ui": "4.1.10",
-    "lefthook": "2.1.10",
-    "turbo": "^2.x",
-    "typescript": "^5.x",
-    "vitest": "4.1.10"
-  },
-  "overrides": {
-    "@excalidraw/excalidraw": {
-      "@excalidraw/mermaid-to-excalidraw": {
-        "nanoid": "^5.1.16"
-      },
-      "nanoid": "^3.3.17"
-    },
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "dompurify": "^3.4.13",
-    "lodash-es": "^4.18.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@biomejs/biome": "catalog:",
+    "@commitlint/cli": "catalog:",
+    "@commitlint/config-conventional": "catalog:",
+    "@playwright/test": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "knip": "catalog:",
+    "lefthook": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
   }
 }

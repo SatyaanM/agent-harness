@@ -13,7 +13,7 @@ description: Create or update durable repository documentation, specifications, 
 
 ## Write from evidence
 
-1. Discover current docs with `corepack npm run docs:list` and inspect source before describing implementation.
+1. Discover current docs with `corepack pnpm run docs:list` and inspect source before describing implementation.
 2. Separate current behavior, target direction, decisions, and unresolved questions.
 3. For an ADR, record context, decision, alternatives, consequences, status, and supersession links.
 4. Add concise `summary` and `read_when` frontmatter to files under `docs/`.
@@ -21,4 +21,4 @@ description: Create or update durable repository documentation, specifications, 
 
 ## Verify
 
-Run `corepack npm run docs:list`, `corepack npm run docs:check`, and `git diff --check`. Check links and ensure directly affected plans or future tasks still reflect the new facts.
+Run `corepack pnpm run docs:list`, `corepack pnpm run docs:check`, and `git diff --check`. Check links and ensure directly affected plans or future tasks still reflect the new facts.

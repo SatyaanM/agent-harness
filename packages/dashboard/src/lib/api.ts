@@ -1,7 +1,6 @@
 import {
   AgentConfigSchema,
   PluginManifestSchema as CorePluginManifestSchema,
-  type InboxRendererManifestSchema,
   MAX_INBOX_FILE_RESPONSE_BYTES,
   MAX_SESSION_METADATA_RESPONSE_BYTES,
   MAX_SESSION_RESPONSE_BYTES,
@@ -194,12 +193,6 @@ const InboxItemSchema = z.object({
   metadata: z.unknown().optional(),
 });
 export type InboxItem = z.infer<typeof InboxItemSchema>;
-
-export async function fetchInboxItems(): Promise<InboxItem[]> {
-  const res = await fetch(`${BASE_URL}/api/inbox`);
-  if (!res.ok) throw new Error(`Failed to fetch inbox items (${res.status})`);
-  return parseJsonResponse(res, z.array(InboxItemSchema), "inbox items response");
-}
 
 export async function fetchInboxTree(): Promise<InboxTreeEntry[]> {
   const res = await fetch(`${BASE_URL}/api/inbox/tree`);
@@ -405,7 +398,6 @@ export async function deleteAgent(name: string): Promise<void> {
 }
 
 const PluginManifestSchema = CorePluginManifestSchema.extend({ enabled: z.boolean() });
-export type InboxRendererMeta = z.infer<typeof InboxRendererManifestSchema>;
 export type PluginCommandManifest = z.infer<typeof PluginCommandManifestSchema>;
 export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 

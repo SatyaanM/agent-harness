@@ -9,7 +9,7 @@ description: Gather fresh, proportionate evidence before claiming repository wor
 
 1. Re-read the request, acceptance criteria, applicable instructions, and final diff.
 2. Run the narrowest checks that exercise changed behavior, then the required package or root checks.
-3. Use `corepack npm` so the repository package-manager pin is honored.
+3. Use `corepack pnpm` so the repository package-manager pin is honored.
 4. Run `git diff --check` and inspect `git status` for generated, temporary, secret, or unrelated files.
 
 Do not claim a check passed from an earlier run if relevant files changed afterward. Report cached results as cached. A build exit code does not replace behavior-specific evidence.

@@ -7,7 +7,7 @@
 ```bash
 git clone https://github.com/<you>/agent-harness.git
 cd agent-harness
-corepack npm install
+corepack pnpm install
 ```
 
 ### 2. Set API Key
@@ -37,7 +37,7 @@ See the README's [Using any LLM provider](./README.md#using-any-llm-provider) se
 ### 3. Start Development Servers
 
 ```bash
-corepack npm run dev
+corepack pnpm run dev
 ```
 
 This starts:
@@ -177,7 +177,7 @@ Check the server logs for details. Common issues:
 
 1. Check if server is running: `curl http://localhost:3001/api/health`
 2. Check browser console for errors
-3. Restart both servers: `npm run dev`
+3. Restart both servers: `pnpm run dev`
 
 ## Next Steps
 

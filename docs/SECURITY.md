@@ -32,4 +32,4 @@ Agent Harness is hardened for a mainly restricted, trusted-operator deployment. 
 
 ## Dependency response
 
-Use the repository-pinned package manager and commit `package-lock.json`. Run `corepack npm run security:audit` after dependency changes and in CI. Prefer a patched compatible release or narrow override with a green build/test suite. If no verified fix exists, add the smallest time-bounded exception and document compensating controls; do not lower the audit threshold or add an unbounded allowlist.
+Use the repository-pinned package manager and commit `pnpm-lock.yaml`. Run `corepack pnpm run security:audit` after dependency changes and in CI. Prefer a patched compatible release or narrow override with a green build/test suite. If no verified fix exists, add the smallest time-bounded exception and document compensating controls; do not lower the audit threshold or add an unbounded allowlist.

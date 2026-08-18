@@ -12,7 +12,7 @@ import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
 
-export const ttsRouter = Router();
+export const ttsRouter: Router = Router();
 
 const logger = createLogger("server.tts");
 

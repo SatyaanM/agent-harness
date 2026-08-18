@@ -25,18 +25,17 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.16",
     "@ai-sdk/openai": "^4.0.16",
-    "@ai-sdk/openai-compatible": "^3.0.12",
     "ai": "^7.0.31",
     "fast-glob": "^3.x",
-    "fs-extra": "^11.x",
-    "gray-matter": "^4.x",
+    "fs-extra": "catalog:",
+    "gray-matter": "catalog:",
     "uuid": "^14.0.1",
-    "zod": "^3.x"
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/fs-extra": "^11.x",
-    "@types/node": "^20.x",
-    "typescript": "^5.x",
-    "vitest": "4.1.10"
+    "@types/fs-extra": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

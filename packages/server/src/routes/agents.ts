@@ -17,7 +17,7 @@ import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { IdentifierSchema, validateRequest } from "../http/validation.js";
 
-export const agentsRouter = Router();
+export const agentsRouter: Router = Router();
 
 const AgentParamsSchema = z.object({ name: IdentifierSchema }).strict();
 const AgentCreateSchema = AgentConfigSchema.partial()

@@ -1,32 +1,42 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
+const pkgJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const rawManager = pkgJson.packageManager?.split("@")[0];
+if (rawManager !== "pnpm") {
+  throw new Error(
+    `Unsupported packageManager in package.json: "${pkgJson.packageManager}". Only pnpm is supported.`,
+  );
+}
+const pkgManager = "pnpm";
 
 const mode = process.argv[2] ?? "default";
 const commonChecks = [
-  [corepack, ["npm", "run", mode === "ci" || mode === "nightly" ? "quality:ci" : "quality"]],
-  [corepack, ["npm", "run", "quality:policy"]],
-  [corepack, ["npm", "run", "skills:validate"]],
-  [corepack, ["npm", "run", "docs:check"]],
-  [corepack, ["npm", "run", "secrets:check"]],
-  [corepack, ["npm", "run", "typecheck"]],
+  [corepack, [pkgManager, "run", mode === "ci" || mode === "nightly" ? "quality:ci" : "quality"]],
+  [corepack, [pkgManager, "run", "quality:policy"]],
+  [corepack, [pkgManager, "run", "skills:validate"]],
+  [corepack, [pkgManager, "run", "docs:check"]],
+  [corepack, [pkgManager, "run", "secrets:check"]],
+  [corepack, [pkgManager, "run", "typecheck"]],
+  [corepack, [pkgManager, "run", "knip"]],
 ];
 const modeChecks = {
   default: [
-    [corepack, ["npm", "test"]],
-    [corepack, ["npm", "run", "build"]],
+    [corepack, [pkgManager, "test"]],
+    [corepack, [pkgManager, "run", "build"]],
   ],
-  fast: [[corepack, ["npm", "test"]]],
+  fast: [[corepack, [pkgManager, "test"]]],
   ci: [
-    [corepack, ["npm", "run", "test:coverage"]],
-    [corepack, ["npm", "run", "build"]],
-    [corepack, ["npm", "run", "security:audit"]],
+    [corepack, [pkgManager, "run", "test:coverage"]],
+    [corepack, [pkgManager, "run", "build"]],
+    [corepack, [pkgManager, "run", "security:audit"]],
   ],
   nightly: [
-    [corepack, ["npm", "run", "test:coverage"]],
-    [corepack, ["npm", "run", "build"]],
-    [corepack, ["npm", "run", "security:audit"]],
-    [corepack, ["npm", "run", "perf:report"]],
+    [corepack, [pkgManager, "run", "test:coverage"]],
+    [corepack, [pkgManager, "run", "build"]],
+    [corepack, [pkgManager, "run", "security:audit"]],
+    [corepack, [pkgManager, "run", "perf:report"]],
   ],
 };
 

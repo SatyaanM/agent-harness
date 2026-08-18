@@ -6,7 +6,7 @@ import { asyncHandler } from "../http/async-handler.js";
 import { IdentifierSchema, validateRequest } from "../http/validation.js";
 import { sessionManager } from "../session-manager.js";
 
-export const chatRouter = Router();
+export const chatRouter: Router = Router();
 
 const logger = createLogger("server.chat");
 

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { IdentifierSchema, validateRequest } from "../http/validation.js";
 import { sessionManager } from "../session-manager.js";
 
-export const workersRouter = Router();
+export const workersRouter: Router = Router();
 const WorkerParamsSchema = z.object({ taskId: IdentifierSchema }).strict();
 
 workersRouter.post("/:taskId/cancel", (req, res) => {

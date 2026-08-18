@@ -36,10 +36,63 @@ export function checkQualityPolicy(rootDir) {
   return [
     ...checkTypeScriptConfigs(absoluteRoot),
     ...checkWorkflowActionPins(absoluteRoot),
+    ...checkKnipConfig(absoluteRoot),
     ...findFiles(absoluteRoot, (file) => SOURCE_EXTENSIONS.has(path.extname(file))).flatMap(
       (file) => checkSourceFile(absoluteRoot, file),
     ),
   ].sort((a, b) => a.file.localeCompare(b.file) || (a.line ?? 0) - (b.line ?? 0));
+}
+
+/** @param {string} rootDir */
+function checkKnipConfig(rootDir) {
+  const knipPaths = [path.join(rootDir, "knip.json"), path.join(rootDir, "knip.jsonc")];
+  /** @type {PolicyDiagnostic[]} */
+  const diagnostics = [];
+
+  for (const knipPath of knipPaths) {
+    if (!fs.existsSync(knipPath)) continue;
+    const relative = relativePath(rootDir, knipPath);
+    const content = fs.readFileSync(knipPath, "utf8");
+    const parsed = ts.parseConfigFileTextToJson(knipPath, content);
+    if (parsed.error) {
+      diagnostics.push({
+        file: relative,
+        rule: "knip/valid-config",
+        message: ts.flattenDiagnosticMessageText(parsed.error.messageText, " "),
+      });
+      continue;
+    }
+    const config = parsed.config;
+
+    /** @param {any} obj @param {string} location */
+    const checkIgnores = (obj, location) => {
+      if (!obj || typeof obj !== "object") return;
+      const ignoreFields = ["ignore", "ignoreDependencies", "ignoreBinaries"];
+      for (const field of ignoreFields) {
+        const list = obj[field];
+        if (Array.isArray(list)) {
+          for (const item of list) {
+            if (typeof item === "string" && (item.includes("*") || item === "**")) {
+              diagnostics.push({
+                file: relative,
+                rule: "knip/no-wildcard-ignores",
+                message: `Wildcard ignore '${item}' in ${location}.${field} is forbidden; use explicit symbol or file exclusions.`,
+              });
+            }
+          }
+        }
+      }
+    };
+
+    checkIgnores(config, "root");
+    if (config?.workspaces && typeof config.workspaces === "object") {
+      for (const [wsName, wsConfig] of Object.entries(config.workspaces)) {
+        checkIgnores(wsConfig, `workspaces['${wsName}']`);
+      }
+    }
+  }
+
+  return diagnostics;
 }
 
 /** @param {string} rootDir */

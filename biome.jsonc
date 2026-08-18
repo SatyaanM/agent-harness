@@ -21,6 +21,27 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "complexity": {
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": {
+            "maxAllowedComplexity": 25
+          }
+        },
+        "noUselessFragments": "error"
+      },
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
+      "performance": {
+        "noAccumulatingSpread": "error",
+        "noDelete": "warn"
+      },
+      "security": {
+        "noGlobalEval": "error",
+        "noDangerouslySetInnerHtml": "error"
+      },
       "suspicious": {
         "noUnknownAtRules": {
           "level": "error",

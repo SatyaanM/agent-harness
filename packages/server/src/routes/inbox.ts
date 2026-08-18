@@ -15,7 +15,7 @@ import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { IdentifierSchema, RelativePathSchema, validateRequest } from "../http/validation.js";
 
-const router = Router();
+const router: Router = Router();
 
 const NonEmptyRelativePathSchema = RelativePathSchema.refine(
   (value) => value.length > 0,

@@ -1,8 +1,8 @@
 "use client";
 
 import { type ReactNode, useCallback, useMemo, useState } from "react";
+import type { InboxItem } from "@/lib/api";
 import { fallbackRenderer, resolveRenderer } from "@/plugins/registry";
-import type { InboxItem } from "@/stores/inbox-store";
 import { usePluginStore } from "@/stores/plugin-store";
 import { InboxHeaderActionsContext } from "./header-actions";
 

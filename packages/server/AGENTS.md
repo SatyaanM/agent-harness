@@ -10,4 +10,4 @@
 - Return stable client-safe error envelopes; do not disclose internal paths, stack traces, or provider secrets.
 - Add route/manager tests for validation, error mapping, state transitions, and emitted events.
 
-Verify with `corepack npm run typecheck --workspace @agent-harness/server` and `corepack npm test --workspace @agent-harness/server`. Run the root suite when core contracts or dashboard-visible APIs change.
+Verify with `corepack pnpm --filter @agent-harness/server run typecheck` and `corepack pnpm --filter @agent-harness/server test`. Run the root suite when core contracts or dashboard-visible APIs change.
