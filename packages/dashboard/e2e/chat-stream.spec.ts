@@ -27,6 +27,24 @@ test.describe("Chat Stream Flow", () => {
       });
     });
 
+    await page.route("**/api/sessions", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            sessionId: "test-session-1",
+            agentName: "agent",
+            messages: [],
+            mailbox: [],
+            createdAt: new Date().toISOString(),
+          }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+
     await page.route("**/api/sessions/test-session-1", async (route) => {
       await route.fulfill({
         status: 200,

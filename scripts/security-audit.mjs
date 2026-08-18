@@ -65,7 +65,7 @@ export function evaluateSecurityAudit(rawAudit, rawExceptions, now = new Date())
       if (!vulnerabilities[pkg]) {
         vulnerabilities[pkg] = {
           severity: adv.severity || "high",
-          via: [{ source: adv.id ?? id, url: adv.url, severity: adv.severity }],
+          via: [{ source: adv.id ?? id, severity: adv.severity }],
         };
       }
     }
@@ -98,7 +98,7 @@ function advisoryIdentifierGroups(via) {
   return via.flatMap((entry) => {
     if (typeof entry === "string") return [[entry]];
     if (entry.severity && entry.severity !== "high" && entry.severity !== "critical") return [];
-    return [[String(entry.source ?? entry.id ?? ""), ...(entry.url ? [entry.url] : [])]];
+    return [[String(entry.source ?? entry.id ?? "")]];
   });
 }
 

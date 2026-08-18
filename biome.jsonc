@@ -73,21 +73,5 @@
     "formatter": {
       "enabled": true
     }
-  },
-  "overrides": [
-    {
-      // Targeted overrides for sanitized renderers where output is pre-processed with DOMPurify
-      "includes": [
-        "packages/dashboard/src/components/inbox/renderers/MarkdownRenderer.tsx",
-        "packages/dashboard/src/components/inbox/renderers/TextRenderer.tsx"
-      ],
-      "linter": {
-        "rules": {
-          "security": {
-            "noDangerouslySetInnerHtml": "off"
-          }
-        }
-      }
-    }
-  ]
+  }
 }
