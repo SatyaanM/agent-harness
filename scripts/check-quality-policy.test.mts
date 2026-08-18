@@ -244,4 +244,27 @@ describe("checkQualityPolicy", () => {
       expect.objectContaining({ rule: "persistence/single-writer-only" }),
     );
   });
+
+  it("rejects wildcard ignore patterns in knip configuration", async () => {
+    const root = await makeRepository();
+    await writeFile(
+      path.join(root, "knip.jsonc"),
+      JSON.stringify({
+        ignore: ["packages/core/**"],
+        workspaces: {
+          "packages/server": {
+            ignoreDependencies: ["*"],
+          },
+        },
+      }),
+    );
+
+    const diagnostics = checkQualityPolicy(root);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        rule: "knip/no-wildcard-ignores",
+        file: "knip.jsonc",
+      }),
+    );
+  });
 });

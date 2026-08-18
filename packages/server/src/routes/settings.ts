@@ -63,7 +63,7 @@ function getSettingsFile(): string {
   return path.join(getConfigRoot(), ".harness", "settings.json");
 }
 
-export const settingsRouter = Router();
+export const settingsRouter: Router = Router();
 
 settingsRouter.get("/", (_req, res) => {
   res.json(getConfig());

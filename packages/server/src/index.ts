@@ -29,7 +29,7 @@ export function createServer(app: express.Express): { server: HTTPServer; io: So
   return { server, io };
 }
 
-const app = createApp();
+const app: express.Express = createApp();
 const { server } = createServer(app);
 
 export { app, server };

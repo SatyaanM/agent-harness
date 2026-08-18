@@ -1,0 +1,33 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.{mjs,mts}"],
+      "project": ["scripts/**/*.{mjs,mts}", "*.{ts,js,mjs,json,jsonc}"]
+    },
+    "packages/core": {
+      "entry": ["src/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/server": {
+      "entry": ["src/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/dashboard": {
+      "next": {
+        "entry": [
+          "next.config.js",
+          "src/app/**/{page,layout,loading,error,not-found,route,template,default}.tsx"
+        ]
+      },
+      "entry": ["src/**/*.test.{ts,tsx}", "src/test-helpers/**/*.ts", "e2e/**/*.spec.ts"],
+      "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts"],
+      "ignore": [
+        "src/components/ui/dialog.tsx",
+        "src/components/ui/select.tsx",
+        "src/components/ui/context-menu.tsx"
+      ]
+    }
+  },
+  "ignoreExportsUsedInFile": true
+}

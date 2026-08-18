@@ -72,7 +72,7 @@ export class HookBus {
   private before = new Map<string, LifecycleObserver[]>();
 
   /** Register an after-observer. `{ parallel: true }` bypasses the serial queue. */
-  on(event: string, handler: LifecycleObserver, options?: { parallel?: boolean }): void {
+  on(event: LifecycleEvent, handler: LifecycleObserver, options?: { parallel?: boolean }): void {
     const regs = this.after.get(event) ?? [];
     regs.push({ handler, parallel: options?.parallel ?? false });
     this.after.set(event, regs);
@@ -86,7 +86,7 @@ export class HookBus {
   }
 
   /** Fire after-observers. Never blocks the caller; errors are isolated. */
-  emit(event: string, payload: LifecyclePayload): void {
+  emit(event: LifecycleEvent, payload: LifecyclePayload): void {
     const regs = this.after.get(event) ?? [];
     for (const reg of regs) {
       if (reg.parallel) {

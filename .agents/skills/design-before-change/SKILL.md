@@ -7,7 +7,7 @@ description: Define a bounded technical design before implementation. Use for am
 
 ## Establish the problem
 
-1. Read the applicable `AGENTS.md` files and discover relevant docs with `corepack npm run docs:list`.
+1. Read the applicable `AGENTS.md` files and discover relevant docs with `corepack pnpm run docs:list`.
 2. Trace the current behavior through source and tests. Separate verified behavior from documentation intent.
 3. State the user-visible problem, constraints, non-goals, and unknowns. Ask only for choices that materially change the design.
 

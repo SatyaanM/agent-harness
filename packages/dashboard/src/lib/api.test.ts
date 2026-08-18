@@ -8,6 +8,7 @@ import {
   fetchSession,
   fetchSessions,
   parseChatStreamEvent,
+  updateAgent,
   updateAgentSource,
 } from "./api";
 
@@ -167,6 +168,35 @@ describe("dashboard API boundary", () => {
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ source: "---\nname: test\n---" }),
+      }),
+    );
+  });
+
+  it("updates structured agent configuration via PUT /api/agents/:name", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      Response.json({
+        name: "orchestrator",
+        model: "openai/gpt-4o",
+        description: "Primary orchestrator",
+        tools: ["run_command"],
+        maxSteps: 10,
+        instructions: "System prompt",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await updateAgent("orchestrator", {
+      model: "openai/gpt-4o",
+      description: "Primary orchestrator",
+    });
+
+    expect(updated.name).toBe("orchestrator");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/agents/orchestrator"),
+      expect.objectContaining({
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "openai/gpt-4o", description: "Primary orchestrator" }),
       }),
     );
   });

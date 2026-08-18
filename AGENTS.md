@@ -35,14 +35,14 @@ Do not overwrite unrelated work in a dirty tree, upgrade dependencies without ne
 
 ## Verification
 
-Use the repository-pinned npm through Corepack:
+Use the repository-pinned pnpm through Corepack:
 
 ```powershell
-corepack npm run quality
-corepack npm run typecheck
-corepack npm test
-corepack npm run build
+corepack pnpm run quality
+corepack pnpm run typecheck
+corepack pnpm test
+corepack pnpm run build
 git diff --check
 ```
 
-Use `corepack npm run check` for the complete credential-free handoff suite and `corepack npm run test:coverage` when test scope or coverage changes. Run focused package tests while iterating, then proportional root checks before completion. Next.js-generated type files and build output are ignored and must not be force-added.
+Use `corepack pnpm run check` for the complete credential-free handoff suite and `corepack pnpm run test:coverage` when test scope or coverage changes. Run focused package tests while iterating, then proportional root checks before completion. Next.js-generated type files and build output are ignored and must not be force-added.

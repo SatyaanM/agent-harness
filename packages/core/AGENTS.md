@@ -10,4 +10,4 @@
 - Keep validation outside hot internal loops, and enforce explicit resource budgets where core performs repeated or privileged work.
 - Add focused tests for changed behavior, especially concurrency, persistence ordering, cancellation, and failure paths.
 
-Verify with `corepack npm run typecheck --workspace @agent-harness/core` and `corepack npm test --workspace @agent-harness/core`. Run the root suite when exported contracts or build behavior changes.
+Verify with `corepack pnpm --filter @agent-harness/core run typecheck` and `corepack pnpm --filter @agent-harness/core test`. Run the root suite when exported contracts or build behavior changes.

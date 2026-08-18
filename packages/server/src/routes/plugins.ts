@@ -22,7 +22,7 @@ function getRegistry(): PluginRegistry {
   return cachedRegistry;
 }
 
-export const pluginsRouter = Router();
+export const pluginsRouter: Router = Router();
 
 const PluginUpdateSchema = z
   .object({

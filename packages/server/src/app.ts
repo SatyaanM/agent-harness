@@ -25,7 +25,7 @@ export function createApp(options?: {
   allowedOrigins?: readonly string[];
   jsonLimit?: string | number;
   inboxJsonLimit?: string | number;
-}) {
+}): express.Express {
   const app = express();
   const allowedOrigins = new Set(options?.allowedOrigins ?? parseServerConfig().allowedOrigins);
 

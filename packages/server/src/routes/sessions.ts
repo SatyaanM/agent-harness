@@ -16,7 +16,7 @@ import {
 import { sessionManager } from "../session-manager.js";
 import { emitAgentEvent } from "../ws/events.js";
 
-export const sessionsRouter = Router();
+export const sessionsRouter: Router = Router();
 
 const logger = createLogger("server.sessions");
 

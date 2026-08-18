@@ -25,7 +25,7 @@ These steps get a fresh copy of the app running on your machine.
 
 ### 1. Prerequisites
 
-- **Node.js 20.9+** and the repository-pinned **npm 10.9.2** through Corepack
+- **Node.js 20.9+** and the repository-pinned **pnpm 11.22.0** through Corepack
 - An API key for an LLM provider (see [Using any LLM provider](#using-any-llm-provider))
 
 ### 2. Clone and install
@@ -33,10 +33,10 @@ These steps get a fresh copy of the app running on your machine.
 ```bash
 git clone https://github.com/<you>/agent-harness.git
 cd agent-harness
-corepack npm ci
+corepack pnpm install
 ```
 
-This installs all three workspace packages (`core`, `server`, `dashboard`) and installs the repository's Lefthook-managed Git hooks.
+This installs all workspace packages (`core`, `server`, `dashboard`) and installs the repository's Lefthook-managed Git hooks.
 
 ### 3. Configure your API key
 
@@ -59,7 +59,7 @@ PROVIDER_ENDPOINT=https://api.openai.com/v1
 ### 4. Start in development mode
 
 ```bash
-corepack npm run dev
+corepack pnpm run dev
 ```
 
 This starts everything in parallel:
@@ -315,32 +315,34 @@ The root scripts are the supported entry points for local development and coding
 
 | Command | Purpose |
 |---|---|
-| `corepack npm run quality` | Check Biome formatting, lint rules, and import organization |
-| `corepack npm run quality:fix` | Apply Biome's safe fixes |
-| `corepack npm run quality:policy` | Enforce strict TypeScript and repository-specific escape-hatch policy |
-| `corepack npm test` | Run all Vitest projects once |
-| `corepack npm run test:watch` | Run the Vitest project matrix in watch mode |
-| `corepack npm run test:ui` | Open the local Vitest UI |
-| `corepack npm run test:coverage` | Run V8 coverage and write text, HTML, and LCOV reports under `coverage/` |
-| `corepack npm run check:fast` | Run local static checks, typecheck, and tests without a production build |
-| `corepack npm run check` | Run the complete credential-free repository verification suite |
-| `corepack npm run check:ci` | Run authoritative CI checks, coverage, builds, and the production audit |
-| `corepack npm run security:audit` | Reject high/critical production advisories without an unexpired package-and-advisory exception |
-| `corepack npm run perf:report` | Report the local validation throughput benchmark without a noisy timing gate |
-| `corepack npm run check:nightly` | Run CI checks plus the informational performance report |
+| `corepack pnpm run quality` | Check Biome formatting, lint rules, and import organization |
+| `corepack pnpm run quality:fix` | Apply Biome's safe fixes |
+| `corepack pnpm run quality:policy` | Enforce strict TypeScript, Knip config policies, and AST quality rules |
+| `corepack pnpm run knip` | Find and prune unused files, exports, and dependencies |
+| `corepack pnpm test` | Run all Vitest projects once |
+| `corepack pnpm run test:watch` | Run the Vitest project matrix in watch mode |
+| `corepack pnpm run test:ui` | Open the local Vitest UI |
+| `corepack pnpm run test:coverage` | Run V8 coverage and write text, HTML, and LCOV reports under `coverage/` |
+| `corepack pnpm run test:e2e` | Run Playwright end-to-end browser test suite |
+| `corepack pnpm run check:fast` | Run local static checks, typecheck, and tests without a production build |
+| `corepack pnpm run check` | Run the complete credential-free repository verification suite |
+| `corepack pnpm run check:ci` | Run authoritative CI checks, coverage, builds, and the production audit |
+| `corepack pnpm run security:audit` | Reject high/critical production advisories without an unexpired exception |
+| `corepack pnpm run perf:report` | Report the local validation throughput benchmark without a noisy timing gate |
+| `corepack pnpm run check:nightly` | Run CI checks plus the informational performance report |
 
 Run the complete check before handing work off:
 
 ```bash
-corepack npm run check
+corepack pnpm run check
 ```
 
-The check runs Biome, the repository policy, documentation and skill validation, typecheck, tests, builds, and diff whitespace checks. Coverage has a conservative non-regression floor; deterministic runtime budgets and security tests carry more weight than the still-low global percentage. GitHub Actions runs `check:ci` on pull requests and main, while the nightly workflow adds the benchmark report. Workflow actions are pinned to immutable commit SHAs. CI is authoritative; local hooks are early feedback.
+The check runs Biome, the repository policy, documentation and skill validation, typecheck, Knip dead-code verification, tests, builds, and diff whitespace checks. GitHub Actions runs `check:ci` on pull requests and main, while the nightly workflow adds the benchmark report.
 
-Lefthook is installed automatically by `corepack npm ci` or `corepack npm install`. The pre-commit hook applies safe Biome fixes to staged files, re-stages those fixes, and runs documentation, skill, and whitespace checks. The pre-push hook runs the full `check` suite. Repair or refresh the hooks manually with:
+Lefthook is installed automatically by `corepack pnpm install`. The pre-commit hook applies safe Biome fixes to staged files, re-stages those fixes, and runs documentation, skill, and whitespace checks in parallel (< 150ms). Commitlint enforces Conventional Commits on commit messages. The pre-push hook runs the fast check suite. Repair or refresh the hooks manually with:
 
 ```bash
-corepack npm run hooks:install
+corepack pnpm run hooks:install
 ```
 
 The installer removes only this repository's obsolete `core.hooksPath=hooks` setting. It preserves and skips installation when a contributor has configured a different custom hook path.

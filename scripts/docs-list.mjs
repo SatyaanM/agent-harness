@@ -127,31 +127,44 @@ function parseMetadata(content, file) {
   return { summary, readWhen };
 }
 
+/**
+ * @param {string} [repositoryRoot]
+ * @param {string} [docsRoot]
+ * @returns {string[]} failures
+ */
+export function checkDocs(repositoryRoot = process.cwd(), docsRoot) {
+  const resolvedDocsRoot = docsRoot ? path.resolve(docsRoot) : undefined;
+  if (
+    resolvedDocsRoot &&
+    (!fs.existsSync(resolvedDocsRoot) || !fs.statSync(resolvedDocsRoot).isDirectory())
+  ) {
+    return [`Documentation root is not a directory: ${resolvedDocsRoot}`];
+  }
+
+  const markdownFiles = resolvedDocsRoot
+    ? findMarkdownFiles(resolvedDocsRoot)
+    : collectDefaultMarkdownFiles(repositoryRoot);
+
+  const failures = [];
+  for (const file of markdownFiles) {
+    const displayPath = path.relative(repositoryRoot, file).replaceAll(path.sep, "/");
+    try {
+      parseMetadata(fs.readFileSync(file, "utf8"), displayPath);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return failures;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
   const repositoryRoot = path.resolve(scriptDirectory, "..");
   const docsRoot = args.root ? path.resolve(args.root) : undefined;
 
-  if (docsRoot && (!fs.existsSync(docsRoot) || !fs.statSync(docsRoot).isDirectory())) {
-    throw new Error(`Documentation root is not a directory: ${docsRoot}`);
-  }
-
-  const markdownFiles = docsRoot
-    ? findMarkdownFiles(docsRoot)
-    : collectDefaultMarkdownFiles(repositoryRoot);
-
-  const failures = [];
-  const entries = [];
-  for (const file of markdownFiles) {
-    const displayPath = path.relative(repositoryRoot, file).replaceAll(path.sep, "/");
-    try {
-      entries.push({ displayPath, ...parseMetadata(fs.readFileSync(file, "utf8"), displayPath) });
-    } catch (error) {
-      failures.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-
+  const failures = checkDocs(repositoryRoot, docsRoot);
   if (failures.length > 0) {
     for (const failure of failures) console.error(failure);
     process.exitCode = 1;
@@ -159,16 +172,24 @@ function main() {
   }
 
   if (!args.check) {
-    for (const entry of entries) {
+    const markdownFiles = docsRoot
+      ? findMarkdownFiles(docsRoot)
+      : collectDefaultMarkdownFiles(repositoryRoot);
+    for (const file of markdownFiles) {
+      const displayPath = path.relative(repositoryRoot, file).replaceAll(path.sep, "/");
+      const entry = { displayPath, ...parseMetadata(fs.readFileSync(file, "utf8"), displayPath) };
       console.log(`${entry.displayPath}\n  ${entry.summary}`);
       for (const trigger of entry.readWhen) console.log(`  - ${trigger}`);
     }
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
+if (invokedPath === path.resolve(fileURLToPath(import.meta.url))) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }
