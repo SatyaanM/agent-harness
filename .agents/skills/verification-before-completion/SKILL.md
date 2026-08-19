@@ -24,6 +24,7 @@ State the exact commands, outcomes, changed files, unresolved risks, and skipped
 
 ## Pull Requests and Handoffs
 
-When creating or editing Pull Requests:
-1. Always target the `SatyaanM/agent-harness` repository (`--repo SatyaanM/agent-harness`) and the `development` branch (`--base development`).
-2. Always write PR descriptions / bodies to a temporary file and use `--body-file <file>`. Never pass multi-line markdown strings inline in PowerShell to prevent shell escaping and formatting corruption.
+When pushing branches or creating/editing Pull Requests:
+1. NEVER push, branch, or create Pull Requests to `damain/agent-harness` or any `upstream` remote.
+2. Always target the `SatyaanM/agent-harness` repository (`--repo SatyaanM/agent-harness`) and the `development` branch (`--base development`).
+3. Always write PR descriptions / bodies to a temporary file and use `--body-file <file>`. Never pass multi-line markdown strings inline in PowerShell to prevent shell escaping and formatting corruption.
