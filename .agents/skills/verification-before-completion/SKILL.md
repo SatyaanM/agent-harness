@@ -21,3 +21,9 @@ If a check fails, determine whether the change caused it. Fix in-scope failures,
 ## Report evidence
 
 State the exact commands, outcomes, changed files, unresolved risks, and skipped checks with reasons. Claim completion only when acceptance criteria are met and no required work remains.
+
+## Pull Requests and Handoffs
+
+When creating or editing Pull Requests:
+1. Always target the `SatyaanM/agent-harness` repository (`--repo SatyaanM/agent-harness`) and the `development` branch (`--base development`).
+2. Always write PR descriptions / bodies to a temporary file and use `--body-file <file>`. Never pass multi-line markdown strings inline in PowerShell to prevent shell escaping and formatting corruption.
