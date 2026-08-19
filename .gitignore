@@ -23,3 +23,7 @@ pk/
 
 # TypeScript incremental build artifacts
 *.tsbuildinfo
+
+# Playwright test outputs
+test-results/
+playwright-report/
