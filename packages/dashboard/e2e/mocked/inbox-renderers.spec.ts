@@ -1,8 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-test.describe("Inbox File Renderers", () => {
+test.describe("Inbox File Renderers (Mocked)", () => {
   test("loads file explorer tree and renders file preview content", async ({ page }) => {
-    // Mock Inbox endpoints
     await page.route("**/api/inbox/tree", async (route) => {
       await route.fulfill({
         status: 200,

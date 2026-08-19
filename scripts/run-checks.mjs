@@ -29,11 +29,17 @@ const modeChecks = {
   fast: [[corepack, [pkgManager, "test"]]],
   ci: [
     [corepack, [pkgManager, "run", "test:coverage"]],
+    [corepack, [pkgManager, "run", "test:chaos"]],
+    [corepack, [pkgManager, "run", "test:security"]],
+    [corepack, [pkgManager, "run", "test:load"]],
     [corepack, [pkgManager, "run", "build"]],
     [corepack, [pkgManager, "run", "security:audit"]],
   ],
   nightly: [
     [corepack, [pkgManager, "run", "test:coverage"]],
+    [corepack, [pkgManager, "run", "test:chaos"]],
+    [corepack, [pkgManager, "run", "test:security"]],
+    [corepack, [pkgManager, "run", "test:load"]],
     [corepack, [pkgManager, "run", "build"]],
     [corepack, [pkgManager, "run", "security:audit"]],
     [corepack, [pkgManager, "run", "perf:report"]],
