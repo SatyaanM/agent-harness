@@ -127,6 +127,71 @@ describe("SqliteDatabaseDriver & Connection Factory", () => {
     db.close();
   });
 
+  it("rejects async functions in transactions to prevent ACID bypass", () => {
+    const db = createDatabaseConnection(":memory:");
+    db.exec("CREATE TABLE test_async (id TEXT PRIMARY KEY);");
+
+    const asyncFn1 = (): unknown => {
+      return (async () => {
+        db.prepare<[string]>("INSERT INTO test_async (id) VALUES (?);").run("a1");
+      })();
+    };
+    expect(() => {
+      withTransaction(db, asyncFn1);
+    }).toThrow(/must be synchronous/);
+
+    const asyncFn2 = (): unknown => {
+      return (async () => {
+        db.prepare<[string]>("INSERT INTO test_async (id) VALUES (?);").run("a2");
+      })();
+    };
+    expect(() => {
+      withImmediateTransaction(db, asyncFn2);
+    }).toThrow(/must be synchronous/);
+
+    db.close();
+  });
+
+  it("handles nested savepoint transactions and releases savepoints after rollback", () => {
+    const db = createDatabaseConnection(":memory:");
+    db.exec("CREATE TABLE test_nested (id TEXT PRIMARY KEY, val TEXT);");
+
+    withTransaction(db, () => {
+      db.prepare<[string, string]>("INSERT INTO test_nested (id, val) VALUES (?, ?);").run(
+        "n1",
+        "outer",
+      );
+
+      // Inner savepoint that fails
+      try {
+        withTransaction(db, () => {
+          db.prepare<[string, string]>("INSERT INTO test_nested (id, val) VALUES (?, ?);").run(
+            "n2",
+            "inner",
+          );
+          throw new Error("Inner fail");
+        });
+      } catch {
+        // outer catches and continues
+      }
+
+      // Inner savepoint that succeeds
+      withTransaction(db, () => {
+        db.prepare<[string, string]>("INSERT INTO test_nested (id, val) VALUES (?, ?);").run(
+          "n3",
+          "inner-ok",
+        );
+      });
+    });
+
+    const rows = db
+      .prepare<[], { id: string }>("SELECT id FROM test_nested ORDER BY id ASC;")
+      .all();
+    expect(rows.map((r) => r.id)).toEqual(["n1", "n3"]);
+
+    db.close();
+  });
+
   it("prevents executing queries on a closed database", () => {
     const db = createDatabaseConnection(":memory:");
     db.close();

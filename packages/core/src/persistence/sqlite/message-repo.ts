@@ -43,65 +43,67 @@ export class MessageRepository {
     createdAt?: number;
     metadata?: Record<string, unknown> | null;
   }): MessageRow {
-    const validated = parseBoundary(MessageInputSchema, input, "MessageRepository.create");
-    const id = validated.id ?? uuidv4();
-    const sequenceNum =
-      validated.sequenceNum !== undefined
-        ? validated.sequenceNum
-        : this.getNextSequenceNum(validated.sessionId);
-    const createdAt = validated.createdAt ?? Date.now();
-    const runId = validated.runId ?? null;
-    const reasoning = validated.reasoning ?? null;
-    const toolCallsStr = validated.toolCalls ? JSON.stringify(validated.toolCalls) : null;
-    const toolCallId = validated.toolCallId ?? null;
-    const metadataStr = validated.metadata ? JSON.stringify(validated.metadata) : null;
+    return this.db.immediateTransaction(() => {
+      const validated = parseBoundary(MessageInputSchema, input, "MessageRepository.create");
+      const id = validated.id ?? uuidv4();
+      const sequenceNum =
+        validated.sequenceNum !== undefined
+          ? validated.sequenceNum
+          : this.getNextSequenceNum(validated.sessionId);
+      const createdAt = validated.createdAt ?? Date.now();
+      const runId = validated.runId ?? null;
+      const reasoning = validated.reasoning ?? null;
+      const toolCallsStr = validated.toolCalls ? JSON.stringify(validated.toolCalls) : null;
+      const toolCallId = validated.toolCallId ?? null;
+      const metadataStr = validated.metadata ? JSON.stringify(validated.metadata) : null;
 
-    const stmt = this.db.prepare<
-      [
-        string,
-        string,
-        string | null,
-        string,
-        string,
-        string | null,
-        string | null,
-        string | null,
-        number,
-        number,
-        string | null,
-      ]
-    >(
-      `INSERT INTO messages (id, session_id, run_id, role, content, reasoning, tool_calls, tool_call_id, sequence_num, created_at, metadata)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
+      const stmt = this.db.prepare<
+        [
+          string,
+          string,
+          string | null,
+          string,
+          string,
+          string | null,
+          string | null,
+          string | null,
+          number,
+          number,
+          string | null,
+        ]
+      >(
+        `INSERT INTO messages (id, session_id, run_id, role, content, reasoning, tool_calls, tool_call_id, sequence_num, created_at, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
 
-    stmt.run(
-      id,
-      validated.sessionId,
-      runId,
-      validated.role,
-      validated.content,
-      reasoning,
-      toolCallsStr,
-      toolCallId,
-      sequenceNum,
-      createdAt,
-      metadataStr,
-    );
+      stmt.run(
+        id,
+        validated.sessionId,
+        runId,
+        validated.role,
+        validated.content,
+        reasoning,
+        toolCallsStr,
+        toolCallId,
+        sequenceNum,
+        createdAt,
+        metadataStr,
+      );
 
-    return {
-      id,
-      session_id: validated.sessionId,
-      run_id: runId,
-      role: validated.role,
-      content: validated.content,
-      reasoning,
-      tool_calls: toolCallsStr,
-      tool_call_id: toolCallId,
-      sequence_num: sequenceNum,
-      created_at: createdAt,
-      metadata: metadataStr,
-    };
+      return {
+        id,
+        session_id: validated.sessionId,
+        run_id: runId,
+        role: validated.role,
+        content: validated.content,
+        reasoning,
+        tool_calls: toolCallsStr,
+        tool_call_id: toolCallId,
+        sequence_num: sequenceNum,
+        created_at: createdAt,
+        metadata: metadataStr,
+      };
+    })();
   }
 
   get(id: string): MessageRow | undefined {

@@ -293,8 +293,11 @@ export class SqliteMigrator {
         this.db.exec(defined.downSql);
         try {
           deleteStmt.run(appliedMigration.version);
-        } catch {
-          // If schema_migrations itself was dropped in down migration, ignore delete failure
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!msg.toLowerCase().includes("no such table")) {
+            throw err;
+          }
         }
         rolledBackVersions.push(appliedMigration.version);
       }

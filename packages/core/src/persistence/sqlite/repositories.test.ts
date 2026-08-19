@@ -325,4 +325,52 @@ describe("Relational Repositories & Data Access Layer", () => {
       expect(openSessionsRepo.getAll()).toHaveLength(0);
     });
   });
+
+  describe("Repository Concurrency & Atomicity", () => {
+    it("generates monotonic message sequence numbers atomically", () => {
+      sessionRepo.create({ id: "mono-sess", agentName: "mono", prompt: "p" });
+
+      const m1 = msgRepo.create({ sessionId: "mono-sess", role: "user", content: "first" });
+      const m2 = msgRepo.create({ sessionId: "mono-sess", role: "assistant", content: "second" });
+      const m3 = msgRepo.create({ sessionId: "mono-sess", role: "user", content: "third" });
+
+      expect(m1.sequence_num).toBe(0);
+      expect(m2.sequence_num).toBe(1);
+      expect(m3.sequence_num).toBe(2);
+
+      const list = msgRepo.listBySession("mono-sess");
+      expect(list.map((m) => m.sequence_num)).toEqual([0, 1, 2]);
+    });
+
+    it("drains pending mailbox events atomically", () => {
+      sessionRepo.create({ id: "drain-sess", agentName: "drain", prompt: "p" });
+      taskRepo.create({ taskId: "d-t1", parentSessionId: "drain-sess", description: "d1" });
+      taskRepo.create({ taskId: "d-t2", parentSessionId: "drain-sess", description: "d2" });
+
+      mailboxRepo.enqueue({ parentSessionId: "drain-sess", taskId: "d-t1", payload: "p1" });
+      mailboxRepo.enqueue({ parentSessionId: "drain-sess", taskId: "d-t2", payload: "p2" });
+
+      const drained = mailboxRepo.drainPendingEvents("drain-sess");
+      expect(drained).toHaveLength(2);
+      expect(mailboxRepo.countPending("drain-sess")).toBe(0);
+
+      const drainedAgain = mailboxRepo.drainPendingEvents("drain-sess");
+      expect(drainedAgain).toHaveLength(0);
+    });
+
+    it("assigns tab order atomically in OpenSessionsRepository", () => {
+      sessionRepo.create({ id: "tab-auto-1", agentName: "a", prompt: "p" });
+      sessionRepo.create({ id: "tab-auto-2", agentName: "a", prompt: "p" });
+
+      openSessionsRepo.add("tab-auto-1", undefined, true);
+      openSessionsRepo.add("tab-auto-2", undefined, true);
+
+      const tabs = openSessionsRepo.getAll();
+      expect(tabs).toHaveLength(2);
+      expect(tabs[0]?.tab_order).toBe(0);
+      expect(tabs[0]?.is_active).toBe(0);
+      expect(tabs[1]?.tab_order).toBe(1);
+      expect(tabs[1]?.is_active).toBe(1);
+    });
+  });
 });

@@ -115,17 +115,19 @@ export class MailboxRepository {
   }
 
   drainPendingEvents(parentSessionId: string, acknowledgedAt = Date.now()): MailboxEventRow[] {
-    const pending = this.peekPending(parentSessionId);
-    if (pending.length === 0) return [];
+    return this.db.immediateTransaction(() => {
+      const pending = this.peekPending(parentSessionId);
+      if (pending.length === 0) return [];
 
-    const ackStmt = this.db.prepare<[number, number]>(
-      "UPDATE mailbox_events SET status = 'acknowledged', acknowledged_at = ? WHERE id = ?",
-    );
+      const ackStmt = this.db.prepare<[number, number]>(
+        "UPDATE mailbox_events SET status = 'acknowledged', acknowledged_at = ? WHERE id = ?",
+      );
 
-    for (const evt of pending) {
-      ackStmt.run(acknowledgedAt, evt.id);
-    }
+      for (const evt of pending) {
+        ackStmt.run(acknowledgedAt, evt.id);
+      }
 
-    return pending;
+      return pending;
+    })();
   }
 }

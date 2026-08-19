@@ -205,6 +205,10 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
             receivedAt: new Date().toISOString(),
           };
 
+          if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
+            return;
+          }
+
           if (deps.db) {
             const taskRepo = new TaskRepository(deps.db);
             const mailboxRepo = new MailboxRepository(deps.db);
@@ -233,6 +237,9 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
           }
           deps.onWorkerCompleted?.(deps.sessionId, pending);
         } catch (workerError) {
+          if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
+            return;
+          }
           const errorMsg = describeError(workerError).message;
           const pending: PendingMessage = {
             taskId,
@@ -262,7 +269,6 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
             }
           }
 
-          if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) return;
           deps.onWorkerCompleted?.(deps.sessionId, pending);
           throw workerError;
         }

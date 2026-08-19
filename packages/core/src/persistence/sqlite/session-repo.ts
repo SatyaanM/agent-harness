@@ -94,31 +94,33 @@ export class SessionRepository {
       updatedAt?: number;
     },
   ): boolean {
-    const existing = this.get(id);
-    if (!existing) return false;
+    return this.db.immediateTransaction(() => {
+      const existing = this.get(id);
+      if (!existing) return false;
 
-    const updatedAt = updates.updatedAt ?? Date.now();
-    const title = updates.title !== undefined ? updates.title : existing.title;
-    const prompt = updates.prompt ?? existing.prompt;
-    const completedAt =
-      updates.completedAt !== undefined ? updates.completedAt : existing.completed_at;
-    const metadata =
-      updates.metadata !== undefined
-        ? updates.metadata
-          ? JSON.stringify(updates.metadata)
-          : null
-        : existing.metadata;
+      const updatedAt = updates.updatedAt ?? Date.now();
+      const title = updates.title !== undefined ? updates.title : existing.title;
+      const prompt = updates.prompt ?? existing.prompt;
+      const completedAt =
+        updates.completedAt !== undefined ? updates.completedAt : existing.completed_at;
+      const metadata =
+        updates.metadata !== undefined
+          ? updates.metadata
+            ? JSON.stringify(updates.metadata)
+            : null
+          : existing.metadata;
 
-    const stmt = this.db.prepare<
-      [string | null, string, number | null, string | null, number, string]
-    >(
-      `UPDATE sessions
-       SET title = ?, prompt = ?, completed_at = ?, metadata = ?, updated_at = ?
-       WHERE id = ?`,
-    );
+      const stmt = this.db.prepare<
+        [string | null, string, number | null, string | null, number, string]
+      >(
+        `UPDATE sessions
+         SET title = ?, prompt = ?, completed_at = ?, metadata = ?, updated_at = ?
+         WHERE id = ?`,
+      );
 
-    const res = stmt.run(title, prompt, completedAt, metadata, updatedAt, id);
-    return Number(res.changes) > 0;
+      const res = stmt.run(title, prompt, completedAt, metadata, updatedAt, id);
+      return Number(res.changes) > 0;
+    })();
   }
 
   delete(id: string): boolean {

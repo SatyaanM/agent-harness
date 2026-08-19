@@ -49,34 +49,36 @@ export class OpenSessionsRepository {
   }
 
   add(sessionId: string, tabOrder?: number, isActive = false): void {
-    const validated = parseBoundary(
-      OpenSessionInputSchema,
-      { sessionId, tabOrder, isActive },
-      "OpenSessionsRepository.add",
-    );
-
-    let nextTabOrder = validated.tabOrder;
-    if (nextTabOrder === undefined) {
-      const maxStmt = this.db.prepare<[], { max_order: number }>(
-        "SELECT COALESCE(MAX(tab_order), -1) + 1 AS max_order FROM open_sessions",
+    this.db.immediateTransaction(() => {
+      const validated = parseBoundary(
+        OpenSessionInputSchema,
+        { sessionId, tabOrder, isActive },
+        "OpenSessionsRepository.add",
       );
-      const row = maxStmt.get();
-      nextTabOrder = Number(row?.max_order ?? 0);
-    }
 
-    if (validated.isActive) {
-      this.db.exec("UPDATE open_sessions SET is_active = 0 WHERE is_active = 1;");
-    }
+      let nextTabOrder = validated.tabOrder;
+      if (nextTabOrder === undefined) {
+        const maxStmt = this.db.prepare<[], { max_order: number }>(
+          "SELECT COALESCE(MAX(tab_order), -1) + 1 AS max_order FROM open_sessions",
+        );
+        const row = maxStmt.get();
+        nextTabOrder = Number(row?.max_order ?? 0);
+      }
 
-    const insertStmt = this.db.prepare<[string, number, number]>(
-      `INSERT INTO open_sessions (session_id, tab_order, is_active)
-       VALUES (?, ?, ?)
-       ON CONFLICT(session_id) DO UPDATE SET
-         tab_order = excluded.tab_order,
-         is_active = excluded.is_active`,
-    );
+      if (validated.isActive) {
+        this.db.exec("UPDATE open_sessions SET is_active = 0 WHERE is_active = 1;");
+      }
 
-    insertStmt.run(validated.sessionId, nextTabOrder, validated.isActive ? 1 : 0);
+      const insertStmt = this.db.prepare<[string, number, number]>(
+        `INSERT INTO open_sessions (session_id, tab_order, is_active)
+         VALUES (?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           tab_order = excluded.tab_order,
+           is_active = excluded.is_active`,
+      );
+
+      insertStmt.run(validated.sessionId, nextTabOrder, validated.isActive ? 1 : 0);
+    })();
   }
 
   remove(sessionId: string): boolean {

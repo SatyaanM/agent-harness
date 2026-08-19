@@ -99,6 +99,17 @@ export class SessionManager {
     return this.db;
   }
 
+  close(): void {
+    if (this.db) {
+      try {
+        this.db.close();
+      } catch {
+        // best effort
+      }
+      this.db = undefined;
+    }
+  }
+
   private reconcileOrphanedTasks(): void {
     if (!this.db) return;
 

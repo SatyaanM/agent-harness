@@ -274,4 +274,69 @@ describe("LegacyMigrator Pipeline & Quarantine", () => {
 
     db.close();
   });
+
+  it("preserves genuine parent session metadata when worker session is processed first", () => {
+    const dir = createTempDir();
+
+    // 1. Worker session named with 'a-' so it sorts earlier in directory listing
+    const workerSession = {
+      sessionId: "worker-task-early",
+      taskId: "task-early",
+      agentName: "worker",
+      prompt: "Early worker task",
+      messages: [{ role: "assistant", content: "Result" }],
+      createdAt: "2026-08-10T00:01:00.000Z",
+    };
+    fs.writeFileSync(
+      path.join(dir, "a-worker-task-early.json"),
+      JSON.stringify(workerSession),
+      "utf8",
+    );
+
+    // 2. Real parent session named with 'z-'
+    const parentSession = {
+      sessionId: "z-parent-orchestrator",
+      taskId: "task-parent",
+      agentName: "orchestrator",
+      title: "Real Parent Session Title",
+      prompt: "Real Parent Session Prompt",
+      messages: [
+        {
+          role: "tool",
+          toolCallId: "call-early",
+          content: JSON.stringify({ taskId: "task-early" }),
+        },
+      ],
+      createdAt: "2026-08-10T00:00:00.000Z",
+    };
+    fs.writeFileSync(
+      path.join(dir, "z-parent-orchestrator.json"),
+      JSON.stringify(parentSession),
+      "utf8",
+    );
+
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+
+    const migrator = new LegacyMigrator(db, dir);
+    const result = migrator.migrate();
+
+    expect(result.migratedSessions).toBe(2);
+
+    const sessionRepo = new SessionRepository(db);
+    const parent = sessionRepo.get("z-parent-orchestrator");
+    expect(parent).toBeDefined();
+    expect(parent?.title).toBe("Real Parent Session Title");
+    expect(parent?.prompt).toBe("Real Parent Session Prompt");
+
+    // Verify files marked as .migrated
+    expect(fs.existsSync(path.join(dir, "a-worker-task-early.json.migrated"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "z-parent-orchestrator.json.migrated"))).toBe(true);
+
+    // Second run should be skipped
+    const secondResult = migrator.migrate();
+    expect(secondResult.skipped).toBe(true);
+
+    db.close();
+  });
 });

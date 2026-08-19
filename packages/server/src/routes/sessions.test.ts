@@ -1,7 +1,15 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createSessionData, resetConfig, SessionRuntime, SessionStore } from "@agent-harness/core";
+import {
+  createDatabaseConnection,
+  createSessionData,
+  resetConfig,
+  SessionRepository,
+  SessionRuntime,
+  SessionStore,
+  SqliteMigrator,
+} from "@agent-harness/core";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -21,6 +29,7 @@ async function fixture() {
 }
 
 afterEach(async () => {
+  sessionManager.close();
   if (originalRoot === undefined) delete process.env.ROOT;
   else process.env.ROOT = originalRoot;
   resetConfig();
@@ -249,5 +258,46 @@ describe("session collection and durable diagnostics", () => {
     expect(deleteRes.status).toBe(204);
     expect(deletedHook).toHaveBeenCalledWith({ sessionId });
     await expect(store.load(sessionId)).resolves.toBeNull();
+  });
+
+  it("synchronizes SQLite repositories on session creation, rename, open, and deletion", async () => {
+    const { app, root } = await fixture();
+    const dbPath = path.join(root, "test-routes.db");
+    const db = createDatabaseConnection(dbPath);
+    new SqliteMigrator(db).up();
+    sessionManager.initialize(db);
+
+    try {
+      // 1. POST /api/sessions
+      const createRes = await request(app).post("/api/sessions").send({
+        prompt: "SQLite Session",
+        agentName: "orchestrator",
+      });
+      expect(createRes.status).toBe(201);
+      const sessionId = createRes.body.sessionId;
+
+      const sessionRepo = new SessionRepository(db);
+      const inDb = sessionRepo.get(sessionId);
+      expect(inDb).toBeDefined();
+      expect(inDb?.prompt).toBe("SQLite Session");
+
+      // 2. PATCH /api/sessions/:id
+      const patchRes = await request(app)
+        .patch(`/api/sessions/${sessionId}`)
+        .send({ title: "Updated SQLite Title" });
+      expect(patchRes.status).toBe(200);
+
+      const afterPatch = sessionRepo.get(sessionId);
+      expect(afterPatch?.title).toBe("Updated SQLite Title");
+
+      // 3. DELETE /api/sessions/:id
+      const deleteRes = await request(app).delete(`/api/sessions/${sessionId}`);
+      expect(deleteRes.status).toBe(204);
+
+      // Verify deleted from SQLite (preventing resurrection)
+      expect(sessionRepo.get(sessionId)).toBeUndefined();
+    } finally {
+      sessionManager.close();
+    }
   });
 });

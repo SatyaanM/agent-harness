@@ -145,37 +145,41 @@ export class TaskRepository {
       workerSessionId?: string | null;
     },
   ): boolean {
-    const existing = this.get(taskId);
-    if (!existing) return false;
+    return this.db.immediateTransaction(() => {
+      const existing = this.get(taskId);
+      if (!existing) return false;
 
-    const status = updates.status ?? existing.status;
-    const updatedAt = updates.updatedAt ?? Date.now();
-    const completedAt =
-      updates.completedAt !== undefined ? updates.completedAt : existing.completed_at;
-    const errorCode = updates.errorCode !== undefined ? updates.errorCode : existing.error_code;
-    const errorMessage =
-      updates.errorMessage !== undefined ? updates.errorMessage : existing.error_message;
-    const workerSessionId =
-      updates.workerSessionId !== undefined ? updates.workerSessionId : existing.worker_session_id;
+      const status = updates.status ?? existing.status;
+      const updatedAt = updates.updatedAt ?? Date.now();
+      const completedAt =
+        updates.completedAt !== undefined ? updates.completedAt : existing.completed_at;
+      const errorCode = updates.errorCode !== undefined ? updates.errorCode : existing.error_code;
+      const errorMessage =
+        updates.errorMessage !== undefined ? updates.errorMessage : existing.error_message;
+      const workerSessionId =
+        updates.workerSessionId !== undefined
+          ? updates.workerSessionId
+          : existing.worker_session_id;
 
-    const stmt = this.db.prepare<
-      [string, number | null, number, string | null, string | null, string | null, string]
-    >(
-      `UPDATE tasks
-       SET status = ?, completed_at = ?, updated_at = ?, error_code = ?, error_message = ?, worker_session_id = ?
-       WHERE task_id = ?`,
-    );
+      const stmt = this.db.prepare<
+        [string, number | null, number, string | null, string | null, string | null, string]
+      >(
+        `UPDATE tasks
+         SET status = ?, completed_at = ?, updated_at = ?, error_code = ?, error_message = ?, worker_session_id = ?
+         WHERE task_id = ?`,
+      );
 
-    const res = stmt.run(
-      status,
-      completedAt,
-      updatedAt,
-      errorCode,
-      errorMessage,
-      workerSessionId,
-      taskId,
-    );
-    return Number(res.changes) > 0;
+      const res = stmt.run(
+        status,
+        completedAt,
+        updatedAt,
+        errorCode,
+        errorMessage,
+        workerSessionId,
+        taskId,
+      );
+      return Number(res.changes) > 0;
+    })();
   }
 
   delete(taskId: string): boolean {

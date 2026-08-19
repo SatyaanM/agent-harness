@@ -108,4 +108,21 @@ describe("SqliteMigrator", () => {
     const sql2 = "  CREATE TABLE test (id TEXT PRIMARY KEY);  \n";
     expect(computeSqlChecksum(sql1)).toBe(computeSqlChecksum(sql2));
   });
+
+  it("propagates SQL execution errors during down migration", () => {
+    const db = createDatabaseConnection(":memory:");
+    const badDownMigration: MigrationFile = {
+      version: 1,
+      name: "001_bad_down",
+      upSql: "CREATE TABLE bad_down (id TEXT PRIMARY KEY);",
+      downSql: "INVALID SYNTAX STATEMENT;",
+    };
+
+    const migrator = new SqliteMigrator(db, [badDownMigration]);
+    migrator.up();
+
+    expect(() => migrator.down(0)).toThrow();
+
+    db.close();
+  });
 });

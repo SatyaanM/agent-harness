@@ -117,32 +117,34 @@ export class RunRepository {
       errorMessage?: string | null;
     },
   ): boolean {
-    const existing = this.get(runId);
-    if (!existing) return false;
+    return this.db.immediateTransaction(() => {
+      const existing = this.get(runId);
+      if (!existing) return false;
 
-    const status = updates.status ?? existing.status;
-    const completedAt =
-      updates.completedAt !== undefined ? updates.completedAt : existing.completed_at;
-    const tokenUsage =
-      updates.tokenUsage !== undefined
-        ? updates.tokenUsage
-          ? JSON.stringify(updates.tokenUsage)
-          : null
-        : existing.token_usage;
-    const errorCode = updates.errorCode !== undefined ? updates.errorCode : existing.error_code;
-    const errorMessage =
-      updates.errorMessage !== undefined ? updates.errorMessage : existing.error_message;
+      const status = updates.status ?? existing.status;
+      const completedAt =
+        updates.completedAt !== undefined ? updates.completedAt : existing.completed_at;
+      const tokenUsage =
+        updates.tokenUsage !== undefined
+          ? updates.tokenUsage
+            ? JSON.stringify(updates.tokenUsage)
+            : null
+          : existing.token_usage;
+      const errorCode = updates.errorCode !== undefined ? updates.errorCode : existing.error_code;
+      const errorMessage =
+        updates.errorMessage !== undefined ? updates.errorMessage : existing.error_message;
 
-    const stmt = this.db.prepare<
-      [string, number | null, string | null, string | null, string | null, string]
-    >(
-      `UPDATE runs
-       SET status = ?, completed_at = ?, token_usage = ?, error_code = ?, error_message = ?
-       WHERE run_id = ?`,
-    );
+      const stmt = this.db.prepare<
+        [string, number | null, string | null, string | null, string | null, string]
+      >(
+        `UPDATE runs
+         SET status = ?, completed_at = ?, token_usage = ?, error_code = ?, error_message = ?
+         WHERE run_id = ?`,
+      );
 
-    const res = stmt.run(status, completedAt, tokenUsage, errorCode, errorMessage, runId);
-    return Number(res.changes) > 0;
+      const res = stmt.run(status, completedAt, tokenUsage, errorCode, errorMessage, runId);
+      return Number(res.changes) > 0;
+    })();
   }
 
   delete(runId: string): boolean {

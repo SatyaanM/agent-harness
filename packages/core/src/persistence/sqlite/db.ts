@@ -9,6 +9,13 @@ import type {
   SqliteBindValue,
 } from "./types.js";
 
+function isPromiseLike(val: unknown): boolean {
+  if (typeof val === "object" && val !== null && "then" in val) {
+    return typeof val.then === "function";
+  }
+  return false;
+}
+
 class SqliteStatementWrapper<
   TBind extends SqliteBindValue[] = SqliteBindValue[],
   TResult = Record<string, unknown>,
@@ -101,11 +108,17 @@ export class SqliteDatabaseDriver implements ISqliteDatabase {
         this.exec(`SAVEPOINT ${savepointName};`);
         try {
           const result = fn();
+          if (isPromiseLike(result)) {
+            throw new Error(
+              "Transactions must be synchronous. Async functions bypass ACID guarantees.",
+            );
+          }
           this.exec(`RELEASE SAVEPOINT ${savepointName};`);
           return result;
         } catch (err) {
           try {
             this.exec(`ROLLBACK TO SAVEPOINT ${savepointName};`);
+            this.exec(`RELEASE SAVEPOINT ${savepointName};`);
           } catch {
             // ignore
           }
@@ -119,6 +132,11 @@ export class SqliteDatabaseDriver implements ISqliteDatabase {
       this.exec("BEGIN DEFERRED;");
       try {
         const result = fn();
+        if (isPromiseLike(result)) {
+          throw new Error(
+            "Transactions must be synchronous. Async functions bypass ACID guarantees.",
+          );
+        }
         this.exec("COMMIT;");
         return result;
       } catch (err) {
@@ -143,11 +161,17 @@ export class SqliteDatabaseDriver implements ISqliteDatabase {
         this.exec(`SAVEPOINT ${savepointName};`);
         try {
           const result = fn();
+          if (isPromiseLike(result)) {
+            throw new Error(
+              "Transactions must be synchronous. Async functions bypass ACID guarantees.",
+            );
+          }
           this.exec(`RELEASE SAVEPOINT ${savepointName};`);
           return result;
         } catch (err) {
           try {
             this.exec(`ROLLBACK TO SAVEPOINT ${savepointName};`);
+            this.exec(`RELEASE SAVEPOINT ${savepointName};`);
           } catch {
             // ignore
           }
@@ -161,6 +185,11 @@ export class SqliteDatabaseDriver implements ISqliteDatabase {
       this.exec("BEGIN IMMEDIATE;");
       try {
         const result = fn();
+        if (isPromiseLike(result)) {
+          throw new Error(
+            "Transactions must be synchronous. Async functions bypass ACID guarantees.",
+          );
+        }
         this.exec("COMMIT;");
         return result;
       } catch (err) {

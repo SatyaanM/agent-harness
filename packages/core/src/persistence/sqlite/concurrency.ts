@@ -8,6 +8,19 @@ export interface RetryOptions {
 
 export function isSqliteBusyError(error: unknown): boolean {
   if (!error) return false;
+  if (typeof error === "object" && "errcode" in error) {
+    const code = error.errcode;
+    if (
+      code === 5 ||
+      code === 6 ||
+      code === 261 ||
+      code === "5" ||
+      code === "6" ||
+      code === "261"
+    ) {
+      return true;
+    }
+  }
   const desc = describeError(error);
   const msg = (error instanceof Error ? error.message : desc.message).toLowerCase();
   const code = (desc.code ?? "").toLowerCase();
@@ -48,7 +61,18 @@ export function withDbRetry<T>(fn: () => T, options: RetryOptions = {}): T {
   let attempt = 0;
   while (true) {
     try {
-      return fn();
+      const result = fn();
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        "then" in result &&
+        typeof result.then === "function"
+      ) {
+        throw new Error(
+          "withDbRetry requires a synchronous function. For async operations, use withDbRetryAsync.",
+        );
+      }
+      return result;
     } catch (err) {
       attempt += 1;
       if (attempt > maxRetries || !isSqliteBusyError(err)) {

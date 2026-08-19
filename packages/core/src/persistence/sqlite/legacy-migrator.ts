@@ -145,7 +145,12 @@ export class LegacyMigrator {
         try {
           fs.renameSync(filePath, quarantinePath);
         } catch {
-          // If rename fails, try copying
+          try {
+            fs.copyFileSync(filePath, quarantinePath);
+            fs.unlinkSync(filePath);
+          } catch {
+            // best effort quarantine
+          }
         }
         quarantinedCount += 1;
         diagnostics.push({
@@ -180,7 +185,12 @@ export class LegacyMigrator {
         try {
           fs.renameSync(filePath, quarantinePath);
         } catch {
-          // Best effort quarantine
+          try {
+            fs.copyFileSync(filePath, quarantinePath);
+            fs.unlinkSync(filePath);
+          } catch {
+            // best effort quarantine
+          }
         }
         quarantinedCount += 1;
         diagnostics.push({
@@ -217,7 +227,12 @@ export class LegacyMigrator {
         try {
           fs.renameSync(openSessionsPath, quarantinePath);
         } catch {
-          // best effort
+          try {
+            fs.copyFileSync(openSessionsPath, quarantinePath);
+            fs.unlinkSync(openSessionsPath);
+          } catch {
+            // best effort quarantine
+          }
         }
         quarantinedCount += 1;
         diagnostics.push({
@@ -265,7 +280,7 @@ export class LegacyMigrator {
     }
 
     this.db.immediateTransaction(() => {
-      // Import sessions and messages
+      // Pass 1: Import all genuine session roots first so real parent sessions exist
       for (const session of validSessions) {
         const createdAtMs = new Date(session.createdAt).getTime();
         const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : null;
@@ -284,6 +299,12 @@ export class LegacyMigrator {
             metadata: session.result ? { result: session.result } : null,
           });
         }
+      }
+
+      // Pass 2: Import messages and resolve worker task relationships
+      for (const session of validSessions) {
+        const createdAtMs = new Date(session.createdAt).getTime();
+        const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : null;
 
         // Insert messages idempotently
         const existingMessages = this.messageRepo.listBySession(session.sessionId);
@@ -319,8 +340,13 @@ export class LegacyMigrator {
             taskParentMap.get(session.sessionId.replace(/^worker-/, ""));
 
           if (!parentSessionId) {
-            const nonWorker = validSessions.find((s) => !s.sessionId.startsWith("worker-"));
-            parentSessionId = nonWorker ? nonWorker.sessionId : session.sessionId;
+            const existingTaskInDb = this.taskRepo.get(taskId);
+            if (existingTaskInDb) {
+              parentSessionId = existingTaskInDb.parent_session_id;
+            } else {
+              const nonWorker = validSessions.find((s) => !s.sessionId.startsWith("worker-"));
+              parentSessionId = nonWorker ? nonWorker.sessionId : session.sessionId;
+            }
           }
 
           // Ensure parent session exists before inserting task foreign key
@@ -390,9 +416,7 @@ export class LegacyMigrator {
 
         // Avoid enqueuing duplicates
         const pendingEvents = this.mailboxRepo.peekPending(item.sessionId);
-        const alreadyPending = pendingEvents.some(
-          (e) => e.task_id === item.message.taskId && e.payload === JSON.stringify(item.message),
-        );
+        const alreadyPending = pendingEvents.some((e) => e.task_id === item.message.taskId);
         if (!alreadyPending) {
           this.mailboxRepo.enqueue({
             parentSessionId: item.sessionId,
@@ -423,6 +447,35 @@ export class LegacyMigrator {
       throw new Error(
         `Post-migration SQLite integrity check failed: ${integrity?.integrity_check}`,
       );
+    }
+
+    // Rename migrated legacy files so subsequent server startups skip quickly
+    for (const file of transcriptFiles) {
+      try {
+        if (fs.existsSync(file)) {
+          fs.renameSync(file, `${file}.migrated`);
+        }
+      } catch {
+        // best effort
+      }
+    }
+    for (const file of mailboxFiles) {
+      try {
+        if (fs.existsSync(file)) {
+          fs.renameSync(file, `${file}.migrated`);
+        }
+      } catch {
+        // best effort
+      }
+    }
+    if (hasOpenSessions) {
+      try {
+        if (fs.existsSync(openSessionsPath)) {
+          fs.renameSync(openSessionsPath, `${openSessionsPath}.migrated`);
+        }
+      } catch {
+        // best effort
+      }
     }
 
     // Save migration diagnostics if any

@@ -4,6 +4,7 @@ import {
   createLogger,
   describeError,
   getConfig,
+  MailboxRepository,
   OpenSessionsRepository,
   SessionRepository,
   SessionStore,
@@ -186,6 +187,14 @@ sessionsRouter.post(
       createdAt: new Date().toISOString(),
     };
     await getSessionStore().save(session);
+    const db = sessionManager.getDb();
+    if (db) {
+      new SessionRepository(db).create({
+        id: session.sessionId,
+        agentName: session.agentName ?? "orchestrator",
+        prompt: session.prompt,
+      });
+    }
     sessionManager.markSessionCreated(session.sessionId);
     hooks.emit("session.created", { sessionId: session.sessionId, agentName: session.agentName });
     res.status(201).json(session);
@@ -207,7 +216,10 @@ sessionsRouter.post(
 
     // Conditional drain (ADR §12.4): wake only when the durable mailbox holds
     // undelivered messages. Otherwise this is a history-only open — no runtime.
-    const pendingCount = session.mailbox?.length ?? 0;
+    const db = sessionManager.getDb();
+    const pendingCount = db
+      ? new MailboxRepository(db).countPending(sessionId)
+      : (session.mailbox?.length ?? 0);
     let woke = false;
     if (pendingCount > 0) {
       const runtime = sessionManager.getOrCreate(sessionId);
@@ -258,6 +270,12 @@ sessionsRouter.patch(
       session.title = title.trim();
     }
     await store.save(session);
+    const db = sessionManager.getDb();
+    if (db) {
+      new SessionRepository(db).update(sessionId, {
+        title: session.title ?? null,
+      });
+    }
     emitAgentEvent("session:updated", session);
     hooks.emit("session.renamed", { sessionId, title: session.title });
     res.json(session);
@@ -274,6 +292,10 @@ sessionsRouter.delete(
     sessionManager.prepareSessionDeletion(sessionId);
     try {
       await getSessionStore().delete(sessionId);
+      const db = sessionManager.getDb();
+      if (db) {
+        new SessionRepository(db).delete(sessionId);
+      }
     } catch (error) {
       sessionManager.markSessionCreated(sessionId);
       throw error;
