@@ -495,52 +495,56 @@ export class SessionRuntime {
       };
       session.completedAt = new Date().toISOString();
 
-      if (this.db && this.runRepo && this.sessionRepo && this.messageRepo) {
-        const runRepo = this.runRepo;
-        const sessionRepo = this.sessionRepo;
-        const messageRepo = this.messageRepo;
-        this.db.immediateTransaction(() => {
-          for (const msg of partial) {
-            const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
-            messageRepo.create({
-              sessionId: this.options.sessionId,
-              runId,
-              role: msg.role,
-              content: msg.content,
-              reasoning: msg.role === "assistant" ? (msg.reasoning ?? null) : null,
-              toolCalls: msg.role === "assistant" ? (msg.toolCalls ?? null) : null,
-              toolCallId: msg.role === "tool" ? (msg.toolCallId ?? null) : null,
-              sequenceNum: nextSeq,
-              createdAt: Date.now(),
+      if (this.isAvailable()) {
+        if (this.db && this.runRepo && this.sessionRepo && this.messageRepo) {
+          const runRepo = this.runRepo;
+          const sessionRepo = this.sessionRepo;
+          const messageRepo = this.messageRepo;
+          this.db.immediateTransaction(() => {
+            for (const msg of partial) {
+              const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
+              messageRepo.create({
+                sessionId: this.options.sessionId,
+                runId,
+                role: msg.role,
+                content: msg.content,
+                reasoning: msg.role === "assistant" ? (msg.reasoning ?? null) : null,
+                toolCalls: msg.role === "assistant" ? (msg.toolCalls ?? null) : null,
+                toolCallId: msg.role === "tool" ? (msg.toolCallId ?? null) : null,
+                sequenceNum: nextSeq,
+                createdAt: Date.now(),
+              });
+            }
+            runRepo.update(runId, {
+              status: isCancelled ? "cancelled" : "failed",
+              errorCode,
+              errorMessage,
+              completedAt: Date.now(),
+            });
+            sessionRepo.update(this.options.sessionId, {
+              completedAt: Date.now(),
+              updatedAt: Date.now(),
+            });
+          })();
+        }
+
+        if (this.sessionStore) {
+          try {
+            await this.sessionStore.save(session);
+            this.emit({ type: "session:updated", session });
+          } catch (persistenceError) {
+            const persistenceMessage =
+              persistenceError instanceof Error
+                ? persistenceError.message
+                : String(persistenceError);
+            this.emit({
+              type: "agent:error",
+              agentName: agentConfig.name,
+              error: `Failed to persist partial run: ${persistenceMessage}`,
+              code: describeError(persistenceError).code,
+              ...correlation,
             });
           }
-          runRepo.update(runId, {
-            status: isCancelled ? "cancelled" : "failed",
-            errorCode,
-            errorMessage,
-            completedAt: Date.now(),
-          });
-          sessionRepo.update(this.options.sessionId, {
-            completedAt: Date.now(),
-            updatedAt: Date.now(),
-          });
-        })();
-      }
-
-      if (this.isAvailable() && this.sessionStore) {
-        try {
-          await this.sessionStore.save(session);
-          this.emit({ type: "session:updated", session });
-        } catch (persistenceError) {
-          const persistenceMessage =
-            persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
-          this.emit({
-            type: "agent:error",
-            agentName: agentConfig.name,
-            error: `Failed to persist partial run: ${persistenceMessage}`,
-            code: describeError(persistenceError).code,
-            ...correlation,
-          });
         }
       }
       this.emit({
@@ -565,37 +569,37 @@ export class SessionRuntime {
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = new Date().toISOString();
 
-    if (this.db && this.runRepo && this.sessionRepo && this.messageRepo) {
-      const runRepo = this.runRepo;
-      const sessionRepo = this.sessionRepo;
-      const messageRepo = this.messageRepo;
-      this.db.immediateTransaction(() => {
-        for (const msg of appended) {
-          const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
-          messageRepo.create({
-            sessionId: this.options.sessionId,
-            runId,
-            role: msg.role,
-            content: msg.content,
-            reasoning: msg.role === "assistant" ? (msg.reasoning ?? null) : null,
-            toolCalls: msg.role === "assistant" ? (msg.toolCalls ?? null) : null,
-            toolCallId: msg.role === "tool" ? (msg.toolCallId ?? null) : null,
-            sequenceNum: nextSeq,
-            createdAt: Date.now(),
-          });
-        }
-        runRepo.update(runId, {
-          status: result.status === "cancelled" ? "cancelled" : "completed",
-          completedAt: Date.now(),
-        });
-        sessionRepo.update(this.options.sessionId, {
-          completedAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-      })();
-    }
-
     if (this.isAvailable()) {
+      if (this.db && this.runRepo && this.sessionRepo && this.messageRepo) {
+        const runRepo = this.runRepo;
+        const sessionRepo = this.sessionRepo;
+        const messageRepo = this.messageRepo;
+        this.db.immediateTransaction(() => {
+          for (const msg of appended) {
+            const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
+            messageRepo.create({
+              sessionId: this.options.sessionId,
+              runId,
+              role: msg.role,
+              content: msg.content,
+              reasoning: msg.role === "assistant" ? (msg.reasoning ?? null) : null,
+              toolCalls: msg.role === "assistant" ? (msg.toolCalls ?? null) : null,
+              toolCallId: msg.role === "tool" ? (msg.toolCallId ?? null) : null,
+              sequenceNum: nextSeq,
+              createdAt: Date.now(),
+            });
+          }
+          runRepo.update(runId, {
+            status: result.status === "cancelled" ? "cancelled" : "completed",
+            completedAt: Date.now(),
+          });
+          sessionRepo.update(this.options.sessionId, {
+            completedAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+        })();
+      }
+
       if (this.sessionStore) {
         await this.sessionStore.save(session);
       }
