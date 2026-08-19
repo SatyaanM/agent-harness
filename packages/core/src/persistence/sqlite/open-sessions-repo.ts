@@ -32,6 +32,22 @@ export class OpenSessionsRepository {
     })();
   }
 
+  upsertAll(sessions: { sessionId: string; tabOrder: number; isActive: boolean }[]): void {
+    this.db.immediateTransaction(() => {
+      const insertStmt = this.db.prepare<[string, number, number]>(
+        `INSERT INTO open_sessions (session_id, tab_order, is_active)
+         VALUES (?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           tab_order = excluded.tab_order,
+           is_active = excluded.is_active`,
+      );
+
+      for (const s of sessions) {
+        insertStmt.run(s.sessionId, s.tabOrder, s.isActive ? 1 : 0);
+      }
+    })();
+  }
+
   add(sessionId: string, tabOrder?: number, isActive = false): void {
     const validated = parseBoundary(
       OpenSessionInputSchema,

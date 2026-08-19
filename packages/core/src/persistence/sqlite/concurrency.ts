@@ -22,9 +22,15 @@ export function isSqliteBusyError(error: unknown): boolean {
 }
 
 function sleepSync(ms: number): void {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    // synchronous spin-wait for lock release
+  if (typeof SharedArrayBuffer !== "undefined" && typeof Atomics !== "undefined") {
+    const sab = new SharedArrayBuffer(4);
+    const int32 = new Int32Array(sab);
+    Atomics.wait(int32, 0, 0, ms);
+  } else {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      // fallback spin-wait if SharedArrayBuffer is unavailable
+    }
   }
 }
 

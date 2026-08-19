@@ -37,6 +37,9 @@ describe("SQLite Performance Benchmarks & Concurrency Stress", () => {
 
     expect(sessionRepo.count()).toBe(10_000);
 
+    // Warm up statement cache
+    sessionRepo.listMeta({ limit: 1 });
+
     // Measure indexed listMeta query latency
     const start = performance.now();
     const results = sessionRepo.listMeta({ limit: 10_000 });
@@ -45,8 +48,8 @@ describe("SQLite Performance Benchmarks & Concurrency Stress", () => {
     expect(results).toHaveLength(10_000);
     expect(results[0]?.id).toBe("bench-sess-0");
 
-    // Performance target: indexed listing executes well within threshold
-    expect(durationMs).toBeLessThan(500);
+    // Performance target: indexed listing executes well within threshold (<100ms across parallel CI runs, <10ms isolated)
+    expect(durationMs).toBeLessThan(100);
 
     db.close();
   });

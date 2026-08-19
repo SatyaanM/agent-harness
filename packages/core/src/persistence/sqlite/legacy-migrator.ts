@@ -235,6 +235,35 @@ export class LegacyMigrator {
     let migratedTasksCount = 0;
     let migratedMailboxCount = 0;
 
+    // Build task-to-parent-session mapping across mailbox events and session transcripts
+    const taskParentMap = new Map<string, string>();
+    for (const item of validMailboxEvents) {
+      taskParentMap.set(item.message.taskId, item.sessionId);
+    }
+    for (const s of validSessions) {
+      if (Array.isArray(s.mailbox)) {
+        for (const mb of s.mailbox) {
+          if (mb && typeof mb.taskId === "string") {
+            taskParentMap.set(mb.taskId, s.sessionId);
+          }
+        }
+      }
+      for (const msg of s.messages) {
+        if (msg.role === "tool" && msg.content && msg.content.includes("taskId")) {
+          try {
+            const parsed = parseJsonBoundary(
+              z.object({ taskId: z.string().min(1) }),
+              msg.content,
+              "tool result taskId extract",
+            );
+            taskParentMap.set(parsed.taskId, s.sessionId);
+          } catch {
+            // ignore non-matching tool contents
+          }
+        }
+      }
+    }
+
     this.db.immediateTransaction(() => {
       // Import sessions and messages
       for (const session of validSessions) {
@@ -242,19 +271,26 @@ export class LegacyMigrator {
         const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : null;
         const updatedAtMs = completedAtMs ?? createdAtMs;
 
-        this.sessionRepo.create({
-          id: session.sessionId,
-          agentName: session.agentName ?? "orchestrator",
-          title: session.title ?? null,
-          prompt: session.prompt,
-          createdAt: Number.isNaN(createdAtMs) ? Date.now() : createdAtMs,
-          updatedAt: Number.isNaN(updatedAtMs) ? Date.now() : updatedAtMs,
-          completedAt: completedAtMs,
-          metadata: session.result ? { result: session.result } : null,
-        });
+        const existingSession = this.sessionRepo.get(session.sessionId);
+        if (!existingSession) {
+          this.sessionRepo.create({
+            id: session.sessionId,
+            agentName: session.agentName ?? "orchestrator",
+            title: session.title ?? null,
+            prompt: session.prompt,
+            createdAt: Number.isNaN(createdAtMs) ? Date.now() : createdAtMs,
+            updatedAt: Number.isNaN(updatedAtMs) ? Date.now() : updatedAtMs,
+            completedAt: completedAtMs,
+            metadata: session.result ? { result: session.result } : null,
+          });
+        }
 
-        // Insert messages
+        // Insert messages idempotently
+        const existingMessages = this.messageRepo.listBySession(session.sessionId);
+        const existingSeqNums = new Set(existingMessages.map((m) => m.sequence_num));
+
         for (let i = 0; i < session.messages.length; i += 1) {
+          if (existingSeqNums.has(i)) continue;
           const msg = session.messages[i];
           if (!msg) continue;
           const msgCreatedMs = msg.createdAt
@@ -275,26 +311,49 @@ export class LegacyMigrator {
           migratedMessagesCount += 1;
         }
 
-        // If worker session, record in tasks table
+        // If worker session, resolve top-level parent session and record in tasks table
         if (session.sessionId.startsWith("worker-")) {
           const taskId = session.taskId || session.sessionId.replace(/^worker-/, "");
-          this.taskRepo.create({
-            taskId,
-            parentSessionId: session.sessionId, // fallback if parent unknown
-            workerSessionId: session.sessionId,
-            description: session.prompt,
-            status:
-              session.result?.status === "done"
-                ? "completed"
-                : session.result?.status === "cancelled"
-                  ? "cancelled"
-                  : session.result?.status === "error"
-                    ? "failed"
-                    : "completed",
-            createdAt: Number.isNaN(createdAtMs) ? Date.now() : createdAtMs,
-            completedAt: completedAtMs,
-          });
-          migratedTasksCount += 1;
+          let parentSessionId =
+            taskParentMap.get(taskId) ??
+            taskParentMap.get(session.sessionId.replace(/^worker-/, ""));
+
+          if (!parentSessionId) {
+            const nonWorker = validSessions.find((s) => !s.sessionId.startsWith("worker-"));
+            parentSessionId = nonWorker ? nonWorker.sessionId : session.sessionId;
+          }
+
+          // Ensure parent session exists before inserting task foreign key
+          const parentRow = this.sessionRepo.get(parentSessionId);
+          if (!parentRow) {
+            this.sessionRepo.create({
+              id: parentSessionId,
+              agentName: "orchestrator",
+              prompt: "Recovered delegating session",
+              createdAt: Date.now(),
+            });
+          }
+
+          const existingTask = this.taskRepo.get(taskId);
+          if (!existingTask) {
+            this.taskRepo.create({
+              taskId,
+              parentSessionId,
+              workerSessionId: session.sessionId,
+              description: session.prompt,
+              status:
+                session.result?.status === "done"
+                  ? "completed"
+                  : session.result?.status === "cancelled"
+                    ? "cancelled"
+                    : session.result?.status === "error"
+                      ? "failed"
+                      : "completed",
+              createdAt: Number.isNaN(createdAtMs) ? Date.now() : createdAtMs,
+              completedAt: completedAtMs,
+            });
+            migratedTasksCount += 1;
+          }
         }
       }
 
@@ -329,14 +388,21 @@ export class LegacyMigrator {
           migratedTasksCount += 1;
         }
 
-        this.mailboxRepo.enqueue({
-          parentSessionId: item.sessionId,
-          taskId: item.message.taskId,
-          eventType: "worker_completed",
-          payload: item.message,
-          createdAt: new Date(item.message.receivedAt).getTime() || Date.now(),
-        });
-        migratedMailboxCount += 1;
+        // Avoid enqueuing duplicates
+        const pendingEvents = this.mailboxRepo.peekPending(item.sessionId);
+        const alreadyPending = pendingEvents.some(
+          (e) => e.task_id === item.message.taskId && e.payload === JSON.stringify(item.message),
+        );
+        if (!alreadyPending) {
+          this.mailboxRepo.enqueue({
+            parentSessionId: item.sessionId,
+            taskId: item.message.taskId,
+            eventType: "worker_completed",
+            payload: item.message,
+            createdAt: new Date(item.message.receivedAt).getTime() || Date.now(),
+          });
+          migratedMailboxCount += 1;
+        }
       }
 
       // Import open sessions
@@ -345,7 +411,7 @@ export class LegacyMigrator {
         const filteredOpenSessions = openSessionsData.filter((s) =>
           Boolean(this.sessionRepo.get(s.sessionId)),
         );
-        this.openSessionsRepo.setAll(filteredOpenSessions);
+        this.openSessionsRepo.upsertAll(filteredOpenSessions);
       }
     })();
 

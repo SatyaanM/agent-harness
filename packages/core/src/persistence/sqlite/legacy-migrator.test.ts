@@ -168,4 +168,110 @@ describe("LegacyMigrator Pipeline & Quarantine", () => {
 
     db.close();
   });
+
+  it("is idempotent when executed multiple times on the same data directory", () => {
+    const dir = createTempDir();
+    const session1 = {
+      sessionId: "sess-idempotent-1",
+      taskId: "task-idempotent-1",
+      prompt: "Idempotent test prompt",
+      messages: [{ role: "user", content: "hello world" }],
+      createdAt: "2026-08-10T00:00:00.000Z",
+    };
+    fs.writeFileSync(path.join(dir, "sess-idempotent-1.json"), JSON.stringify(session1), "utf8");
+
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+
+    const migrator = new LegacyMigrator(db, dir);
+    const result1 = migrator.migrate();
+    expect(result1.migratedSessions).toBe(1);
+    expect(result1.migratedMessages).toBe(1);
+
+    // Re-create the json file since first run archived/backed up or left in place
+    fs.writeFileSync(path.join(dir, "sess-idempotent-1.json"), JSON.stringify(session1), "utf8");
+
+    // Second migration should succeed without unique constraint errors
+    const result2 = migrator.migrate();
+    expect(result2.migratedSessions).toBe(1);
+
+    const sessionRepo = new SessionRepository(db);
+    const messageRepo = new MessageRepository(db);
+
+    expect(sessionRepo.count()).toBe(1);
+    expect(messageRepo.listBySession("sess-idempotent-1")).toHaveLength(1);
+
+    db.close();
+  });
+
+  it("correctly resolves delegating parent session for worker sessions", () => {
+    const dir = createTempDir();
+
+    // 1. Delegating parent session
+    const parentSession = {
+      sessionId: "parent-session-123",
+      taskId: "task-parent-123",
+      agentName: "orchestrator",
+      prompt: "Delegate to worker",
+      messages: [
+        {
+          role: "user",
+          content: "Please run worker task",
+        },
+        {
+          role: "tool",
+          toolCallId: "call-1",
+          content: JSON.stringify({
+            taskId: "worker-task-abc",
+            sessionId: "worker-worker-task-abc",
+          }),
+        },
+      ],
+      createdAt: "2026-08-10T00:00:00.000Z",
+    };
+    fs.writeFileSync(
+      path.join(dir, "parent-session-123.json"),
+      JSON.stringify(parentSession),
+      "utf8",
+    );
+
+    // 2. Worker session
+    const workerSession = {
+      sessionId: "worker-worker-task-abc",
+      taskId: "worker-task-abc",
+      agentName: "worker",
+      prompt: "Subagent worker prompt",
+      messages: [{ role: "assistant", content: "Worker result" }],
+      result: { status: "done", summary: "Worker completed successfully" },
+      createdAt: "2026-08-10T00:01:00.000Z",
+      completedAt: "2026-08-10T00:02:00.000Z",
+    };
+    fs.writeFileSync(
+      path.join(dir, "worker-worker-task-abc.json"),
+      JSON.stringify(workerSession),
+      "utf8",
+    );
+
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+
+    const migrator = new LegacyMigrator(db, dir);
+    migrator.migrate();
+
+    const sessionRepo = new SessionRepository(db);
+    expect(sessionRepo.get("parent-session-123")).toBeDefined();
+    expect(sessionRepo.get("worker-worker-task-abc")).toBeDefined();
+
+    const taskStmt = db.prepare<
+      [string],
+      { task_id: string; parent_session_id: string; worker_session_id: string }
+    >("SELECT task_id, parent_session_id, worker_session_id FROM tasks WHERE task_id = ?");
+    const task = taskStmt.get("worker-task-abc");
+
+    expect(task).toBeDefined();
+    expect(task?.parent_session_id).toBe("parent-session-123");
+    expect(task?.worker_session_id).toBe("worker-worker-task-abc");
+
+    db.close();
+  });
 });
