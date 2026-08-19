@@ -1,3 +1,10 @@
+import {
+  createDatabaseConnection,
+  MailboxRepository,
+  SessionRepository,
+  SqliteMigrator,
+  TaskRepository,
+} from "@agent-harness/core";
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "./session-manager.js";
 
@@ -60,5 +67,54 @@ describe("SessionManager lifecycle ownership", () => {
     expect(manager.isSessionAvailable("session-0")).toBe(true);
     // Recent deleted sessions should remain marked unavailable
     expect(manager.isSessionAvailable("session-5004")).toBe(false);
+  });
+
+  it("reconciles orphaned running tasks to abandoned on startup and enqueues diagnostic mailbox event", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+
+    const sessionRepo = new SessionRepository(db);
+    const taskRepo = new TaskRepository(db);
+    const mailboxRepo = new MailboxRepository(db);
+
+    sessionRepo.create({
+      id: "parent-reconcile",
+      agentName: "orchestrator",
+      prompt: "main task",
+    });
+
+    sessionRepo.create({
+      id: "worker-reconcile",
+      agentName: "researcher",
+      prompt: "background research",
+    });
+
+    taskRepo.create({
+      taskId: "task-orphaned-1",
+      parentSessionId: "parent-reconcile",
+      workerSessionId: "worker-reconcile",
+      description: "orphaned background task",
+      status: "running",
+    });
+
+    const manager = new SessionManager();
+    await manager.initialize(db);
+
+    // Verify task status was transitioned to abandoned
+    const updatedTask = taskRepo.get("task-orphaned-1");
+    expect(updatedTask?.status).toBe("abandoned");
+    expect(updatedTask?.error_code).toBe("TASK_ABANDONED_ON_STARTUP");
+    expect(updatedTask?.completed_at).toBeDefined();
+
+    // Verify diagnostic mailbox event was enqueued
+    const pendingEvents = mailboxRepo.peekPending("parent-reconcile");
+    expect(pendingEvents).toHaveLength(1);
+    expect(pendingEvents[0]?.task_id).toBe("task-orphaned-1");
+    expect(pendingEvents[0]?.event_type).toBe("worker_abandoned");
+    expect(pendingEvents[0]?.payload).toContain(
+      "Task was abandoned due to an ungraceful server termination",
+    );
+
+    db.close();
   });
 });

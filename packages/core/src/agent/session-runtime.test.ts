@@ -6,6 +6,14 @@ import { z } from "zod";
 import { CapabilityRegistry } from "../capability/registry.js";
 import type { LLMChatParams, LLMClient, LLMResponse } from "../llm/client.js";
 import { createSessionData, SessionStore } from "../persistence/session.js";
+import {
+  createDatabaseConnection,
+  MailboxRepository,
+  MessageRepository,
+  SessionRepository,
+  SqliteMigrator,
+  TaskRepository,
+} from "../persistence/sqlite/index.js";
 import { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import { ToolRegistry } from "../tool/registry.js";
 import { SessionRuntime } from "./session-runtime.js";
@@ -483,5 +491,230 @@ describe("SessionRuntime delivery invariants", () => {
     const result = await runtime.deliver("work");
     expect(result.status).toBe("cancelled");
     expect(await store.load("already-deleted")).toBeNull();
+  });
+
+  it("executes transactional mailbox drain atomically in SQLite with rollback safety", async () => {
+    const db = createDatabaseConnection(":memory:");
+    const migrator = new SqliteMigrator(db);
+    migrator.up();
+
+    const sessionRepo = new SessionRepository(db);
+    const taskRepo = new TaskRepository(db);
+    const mailboxRepo = new MailboxRepository(db);
+    const messageRepo = new MessageRepository(db);
+
+    sessionRepo.create({
+      id: "tx-sess",
+      agentName: "orchestrator",
+      prompt: "tx prompt",
+    });
+
+    taskRepo.create({
+      taskId: "tx-task-1",
+      parentSessionId: "tx-sess",
+      description: "tx task description",
+    });
+
+    mailboxRepo.enqueue({
+      parentSessionId: "tx-sess",
+      taskId: "tx-task-1",
+      eventType: "worker_completed",
+      payload: {
+        taskId: "tx-task-1",
+        from: "worker-tx-task-1",
+        agentName: "worker",
+        status: "done",
+        summary: "worker 1 completed successfully",
+        receivedAt: "2026-08-18T00:00:00.000Z",
+      },
+    });
+
+    expect(mailboxRepo.countPending("tx-sess")).toBe(1);
+
+    const runtime = new SessionRuntime({
+      sessionId: "tx-sess",
+      db,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("Handled SQLite completion.");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+    });
+
+    const result = await runtime.deliver("new user prompt");
+    expect(result.status).toBe("success");
+
+    // Verify mailbox event was acknowledged
+    expect(mailboxRepo.countPending("tx-sess")).toBe(0);
+
+    // Verify messages in SQLite table: system message, user message, assistant response
+    const messages = messageRepo.listBySession("tx-sess");
+    expect(messages.length).toBeGreaterThanOrEqual(3);
+    expect(messages[0]?.role).toBe("system");
+    expect(messages[0]?.content).toContain("worker 1 completed successfully");
+    expect(messages[1]?.role).toBe("user");
+    expect(messages[1]?.content).toBe("new user prompt");
+    expect(messages[2]?.role).toBe("assistant");
+    expect(messages[2]?.content).toBe("Handled SQLite completion.");
+
+    db.close();
+  });
+
+  it("materializes multiple concurrent worker completions with strict monotonic sequence numbers", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+
+    const sessionRepo = new SessionRepository(db);
+    const taskRepo = new TaskRepository(db);
+    const mailboxRepo = new MailboxRepository(db);
+    const messageRepo = new MessageRepository(db);
+
+    sessionRepo.create({
+      id: "multi-worker-sess",
+      agentName: "orchestrator",
+      prompt: "Delegated multi tasks",
+    });
+
+    for (let i = 1; i <= 3; i += 1) {
+      taskRepo.create({
+        taskId: `multi-task-${i}`,
+        parentSessionId: "multi-worker-sess",
+        description: `Multi task ${i}`,
+      });
+      mailboxRepo.enqueue({
+        parentSessionId: "multi-worker-sess",
+        taskId: `multi-task-${i}`,
+        eventType: "worker_completed",
+        payload: {
+          taskId: `multi-task-${i}`,
+          from: `worker-multi-task-${i}`,
+          agentName: `worker-${i}`,
+          status: "done",
+          summary: `Summary of task ${i}`,
+          receivedAt: "2026-08-18T00:00:00.000Z",
+        },
+      });
+    }
+
+    expect(mailboxRepo.countPending("multi-worker-sess")).toBe(3);
+
+    const runtime = new SessionRuntime({
+      sessionId: "multi-worker-sess",
+      db,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("Handled 3 worker completions.");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+    });
+
+    const result = await runtime.deliver("user follow-up");
+    expect(result.status).toBe("success");
+    expect(mailboxRepo.countPending("multi-worker-sess")).toBe(0);
+
+    const messages = messageRepo.listBySession("multi-worker-sess");
+    expect(messages).toHaveLength(5); // 3 worker system msgs + 1 user msg + 1 assistant msg
+
+    // Verify monotonic sequence numbering
+    for (let i = 0; i < messages.length; i += 1) {
+      expect(messages[i]?.sequence_num).toBe(i);
+    }
+
+    expect(messages[0]?.role).toBe("system");
+    expect(messages[0]?.content).toContain("Summary of task 1");
+    expect(messages[1]?.role).toBe("system");
+    expect(messages[1]?.content).toContain("Summary of task 2");
+    expect(messages[2]?.role).toBe("system");
+    expect(messages[2]?.content).toContain("Summary of task 3");
+    expect(messages[3]?.role).toBe("user");
+    expect(messages[3]?.content).toBe("user follow-up");
+    expect(messages[4]?.role).toBe("assistant");
+    expect(messages[4]?.content).toBe("Handled 3 worker completions.");
+
+    db.close();
+  });
+
+  it("deduplicates duplicate taskId deliveries idempotently during mailbox drain", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+
+    const sessionRepo = new SessionRepository(db);
+    const taskRepo = new TaskRepository(db);
+    const mailboxRepo = new MailboxRepository(db);
+    const messageRepo = new MessageRepository(db);
+
+    sessionRepo.create({
+      id: "dedup-sess",
+      agentName: "orchestrator",
+      prompt: "Dedup prompt",
+    });
+
+    taskRepo.create({
+      taskId: "dup-task-1",
+      parentSessionId: "dedup-sess",
+      description: "Duplicate task",
+    });
+
+    // Enqueue two events for the exact same taskId
+    mailboxRepo.enqueue({
+      parentSessionId: "dedup-sess",
+      taskId: "dup-task-1",
+      eventType: "worker_completed",
+      payload: {
+        taskId: "dup-task-1",
+        from: "worker-dup-task-1",
+        agentName: "worker",
+        status: "done",
+        summary: "First delivery",
+        receivedAt: "2026-08-18T00:00:00.000Z",
+      },
+    });
+
+    mailboxRepo.enqueue({
+      parentSessionId: "dedup-sess",
+      taskId: "dup-task-1",
+      eventType: "worker_completed",
+      payload: {
+        taskId: "dup-task-1",
+        from: "worker-dup-task-1",
+        agentName: "worker",
+        status: "done",
+        summary: "Duplicate second delivery",
+        receivedAt: "2026-08-18T00:01:00.000Z",
+      },
+    });
+
+    expect(mailboxRepo.countPending("dedup-sess")).toBe(1);
+
+    const runtime = new SessionRuntime({
+      sessionId: "dedup-sess",
+      db,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("Handled deduplicated completion.");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+    });
+
+    const result = await runtime.deliver("user prompt");
+    expect(result.status).toBe("success");
+    expect(mailboxRepo.countPending("dedup-sess")).toBe(0);
+
+    const messages = messageRepo.listBySession("dedup-sess");
+    // Should contain exactly 1 system message for dup-task-1, not duplicate messages
+    const systemMsgs = messages.filter((m) => m.role === "system");
+    expect(systemMsgs).toHaveLength(1);
+    expect(systemMsgs[0]?.content).toContain("Duplicate second delivery");
+
+    db.close();
   });
 });

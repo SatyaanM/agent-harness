@@ -6,6 +6,7 @@ import type express from "express";
 import { Server as SocketIOServer } from "socket.io";
 import { createApp } from "./app.js";
 import { parseServerConfig } from "./server-config.js";
+import { sessionManager } from "./session-manager.js";
 import { initWebSocket } from "./ws/events.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -28,6 +29,8 @@ export function createServer(app: express.Express): { server: HTTPServer; io: So
 
   return { server, io };
 }
+
+await sessionManager.initialize();
 
 const app: express.Express = createApp();
 const { server } = createServer(app);

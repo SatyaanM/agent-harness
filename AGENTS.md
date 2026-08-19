@@ -46,3 +46,9 @@ git diff --check
 ```
 
 Use `corepack pnpm run check` for the complete credential-free handoff suite and `corepack pnpm run test:coverage` when test scope or coverage changes. Run focused package tests while iterating, then proportional root checks before completion. Next.js-generated type files and build output are ignored and must not be force-added.
+
+## Pull Requests, Remotes & Shell Safety
+
+- **Never Push to Upstream / Damain**: NEVER push, branch, or create Pull Requests to `damain/agent-harness` or any `upstream` remote. Pushes and Pull Requests must strictly and exclusively target `SatyaanM/agent-harness` (`origin`).
+- **Target Repository & Base**: When creating Pull Requests via CLI, always explicitly target `SatyaanM/agent-harness` with `--repo SatyaanM/agent-harness` and base branch `development` (`--base development`).
+- **Markdown & Shell Escaping**: Never pass multi-line markdown bodies or backtick code spans directly as inline double-quoted strings in PowerShell (e.g. `gh pr create -b "..."`). PowerShell strips backticks as escape characters and corrupts formatting (`\b` -> backspace, `\a` -> bell, etc.). Always write the body to a temporary file, pass `--body-file <file>`, and clean up the file afterwards.
