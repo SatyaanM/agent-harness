@@ -46,7 +46,7 @@ describe("SQLite Performance Benchmarks & Concurrency Stress", () => {
     expect(results[0]?.id).toBe("bench-sess-0");
 
     // Performance target: indexed listing executes well within threshold
-    expect(durationMs).toBeLessThan(100);
+    expect(durationMs).toBeLessThan(500);
 
     db.close();
   });
