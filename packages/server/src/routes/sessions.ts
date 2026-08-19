@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { SessionData } from "@agent-harness/core";
-import { createLogger, describeError, getConfig, SessionStore } from "@agent-harness/core";
+import {
+  createLogger,
+  describeError,
+  getConfig,
+  OpenSessionsRepository,
+  SessionRepository,
+  SessionStore,
+} from "@agent-harness/core";
 import { Router } from "express";
 import { z } from "zod";
 import { hooks } from "../hooks.js";
@@ -43,6 +50,24 @@ function getSessionStore() {
 sessionsRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
+    const db = sessionManager.getDb();
+    if (db) {
+      const sessionRepo = new SessionRepository(db);
+      const metas = sessionRepo.listMeta();
+      res.json(
+        metas.map((m) => ({
+          sessionId: m.id,
+          prompt: m.prompt,
+          agentName: m.agentName,
+          title: m.title ?? undefined,
+          createdAt: new Date(m.createdAt).toISOString(),
+          updatedAt: new Date(m.updatedAt).toISOString(),
+          completedAt: m.completedAt ? new Date(m.completedAt).toISOString() : undefined,
+          messageCount: m.messageCount,
+        })),
+      );
+      return;
+    }
     const store = getSessionStore();
     await store.ensureIndexBuilt();
     res.json(await sortedSessionMeta(store));
@@ -50,12 +75,41 @@ sessionsRouter.get(
 );
 
 sessionsRouter.get("/open", (_req, res) => {
+  const db = sessionManager.getDb();
+  if (db) {
+    const openRepo = new OpenSessionsRepository(db);
+    const rows = openRepo.getAll();
+    const active = rows.find((r) => r.is_active === 1)?.session_id ?? null;
+    res.json({
+      activeSessionId: active,
+      openSessionIds: rows.map((r) => r.session_id),
+    });
+    return;
+  }
   res.json(loadOpenSessions());
 });
 
 sessionsRouter.get(
   "/meta",
   asyncHandler(async (_req, res) => {
+    const db = sessionManager.getDb();
+    if (db) {
+      const sessionRepo = new SessionRepository(db);
+      const metas = sessionRepo.listMeta();
+      res.json(
+        metas.map((m) => ({
+          sessionId: m.id,
+          prompt: m.prompt,
+          agentName: m.agentName,
+          title: m.title ?? undefined,
+          createdAt: new Date(m.createdAt).toISOString(),
+          updatedAt: new Date(m.updatedAt).toISOString(),
+          completedAt: m.completedAt ? new Date(m.completedAt).toISOString() : undefined,
+          messageCount: m.messageCount,
+        })),
+      );
+      return;
+    }
     const store = getSessionStore();
     await store.ensureIndexBuilt();
     res.json(await sortedSessionMeta(store));
@@ -90,7 +144,19 @@ sessionsRouter.put(
     for (const sessionId of removed) {
       await hooks.runBefore("session.beforeClose", { sessionId });
     }
+
+    const db = sessionManager.getDb();
+    if (db) {
+      const openRepo = new OpenSessionsRepository(db);
+      const rows = next.openSessionIds.map((id, idx) => ({
+        sessionId: id,
+        tabOrder: idx,
+        isActive: id === next.activeSessionId,
+      }));
+      openRepo.setAll(rows);
+    }
     saveOpenSessions(next);
+
     for (const sessionId of removed) {
       sessionManager.unload(sessionId);
       hooks.emit("session.closed", { sessionId });
@@ -187,7 +253,7 @@ sessionsRouter.patch(
       return;
     }
     if (title.trim() === "") {
-      delete session.title;
+      session.title = undefined;
     } else {
       session.title = title.trim();
     }

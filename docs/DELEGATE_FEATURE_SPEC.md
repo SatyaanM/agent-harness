@@ -67,22 +67,19 @@ The defining property: an agent is an *orchestrator if and only if it holds the 
 1. An agent calls `delegate({ task, model? })`. `model` is optional: when omitted, the worker **inherits the delegating agent's model** (guaranteed supported since that agent is running on it). The system creates a **worker session** (`worker-<taskId>`), spawns a `Worker` in the background, and returns the `taskId` immediately (fire-and-forget).
 2. When the worker completes (success or error), the **system posts a completion message to the delegating session's mailbox** — summary + status + taskId (+ sender). The agent does not poll.
 3. The mailbox is **durable** (persisted with the session).
-4. When the delegating session next processes (a new message arrives, or its loaded runtime is signaled), the runtime peeks the entire mailbox, materializes all pending messages **together**, durably persists them, and only then acknowledges the batch.
+4. When the delegating session next processes (a new message arrives, or its loaded runtime is signaled), the runtime executes an atomic `BEGIN IMMEDIATE` SQLite transaction: peeks pending `mailbox_events`, materializes system messages into `messages` with monotonic sequence numbering, acknowledges the mailbox events, and commits atomically. Any interruption or error triggers a transaction rollback, leaving zero uncommitted messages and preserving pending mailbox events.
 5. The agent sees, e.g.: *"Worker `worker-<id>` (task you delegated) completed: done. Summary: … You may call `readSession(<taskId>)` for the full transcript."*
 6. Full transcripts remain available on demand via the `readSession` tool.
 
-Phase 1 simplifies step 4: the mailbox is drained at the start of the next run triggered by a user message (no wake-on-idle yet). Phases 2+ add `SessionRuntime` wake-on-signal, WebSocket events, and the live UI.
+## 6. Durable storage (target & implementation)
 
-## 6. Durable storage (target)
+See ADR 0004 & §10.7–10.9. Summary:
 
-See ADR §10.7–10.9. Summary:
-
-- **Single writer:** one code path owns all session file I/O; callers submit full-state snapshots.
-- **Per-session write queue:** serialized writes per session file; different sessions write in parallel.
-- **Atomic writes:** temp file + rename.
-- **Immediate flush, whole-queue acknowledgement:** no debounce by default; delivery persists the transcript projection before atomically removing acknowledged mailbox records. Debounce/coalesce is transcript-only.
-- **Two stores:** the transcript (latest-state-wins) and the mailbox (lossless, ordered, never coalesced, removal tied to delivery).
-- Both may live in one session file under the same writer; the mailbox may alternatively be a separate append-only log.
+- **Relational ACID Storage:** Embedded SQLite WAL database under `.harness/harness.db`.
+- **Atomic Mailbox Drain:** Draining mailbox events and materializing system messages commit together in an immediate transaction (`BEGIN IMMEDIATE`).
+- **Startup Worker Reconciliation:** On server restart, `SessionManager.initialize()` queries orphaned `running`/`queued` tasks, transitions them to `abandoned`, and enqueues diagnostic failure cards for delivery upon parent wake.
+- **Single-Writer / Concurrency Retries:** SQLite WAL mode with 5000ms busy timeout and `withDbRetry` jittered exponential backoff.
+- **Monotonic Sequence Numbering:** Message order is strictly enforced by relational sequence integers (`sequence_num`).
 
 ## 7. Agent-scope UI
 

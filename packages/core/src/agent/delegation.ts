@@ -6,6 +6,10 @@ import { createLogger } from "../contracts/logging.js";
 import type { LLMClient } from "../llm/client.js";
 import type { PendingMessage } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
+import { MailboxRepository } from "../persistence/sqlite/mailbox-repo.js";
+import { SessionRepository } from "../persistence/sqlite/session-repo.js";
+import { TaskRepository } from "../persistence/sqlite/task-repo.js";
+import type { ISqliteDatabase } from "../persistence/sqlite/types.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { Tool, ToolRegistry } from "../tool/types.js";
 import { type AgentConfig, type TaskId, TaskIdSchema } from "./types.js";
@@ -13,6 +17,7 @@ import { Worker } from "./worker.js";
 
 export interface DelegationDeps {
   sessionsDir: string;
+  db?: ISqliteDatabase;
   sessionId: string;
   resolveConfig: (agentName: string | undefined) => AgentConfig;
   toolRegistry: ToolRegistry;
@@ -87,6 +92,28 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         createdAt,
       });
 
+      if (deps.db) {
+        const taskRepo = new TaskRepository(deps.db);
+        const sessionRepo = new SessionRepository(deps.db);
+        taskRepo.create({
+          taskId,
+          parentSessionId: deps.sessionId,
+          workerSessionId: sessionId,
+          description: task,
+          status: "running",
+          createdAt: Date.now(),
+        });
+        const existingWorkerSession = sessionRepo.get(sessionId);
+        if (!existingWorkerSession) {
+          sessionRepo.create({
+            id: sessionId,
+            agentName: workerConfig.name,
+            prompt: task,
+            createdAt: Date.now(),
+          });
+        }
+      }
+
       const controller = new AbortController();
       const worker = new Worker(
         taskId,
@@ -156,6 +183,26 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
           summary: result.summary,
           receivedAt: new Date().toISOString(),
         };
+
+        if (deps.db) {
+          const taskRepo = new TaskRepository(deps.db);
+          const mailboxRepo = new MailboxRepository(deps.db);
+          taskRepo.update(taskId, {
+            status:
+              result.status === "done"
+                ? "completed"
+                : result.status === "cancelled"
+                  ? "cancelled"
+                  : "failed",
+            completedAt: Date.now(),
+          });
+          mailboxRepo.enqueue({
+            parentSessionId: deps.sessionId,
+            taskId,
+            payload: pending,
+          });
+        }
+
         await store.appendMailbox(deps.sessionId, pending);
         if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
           await store.acknowledgeMailbox(deps.sessionId, [pending.taskId]);

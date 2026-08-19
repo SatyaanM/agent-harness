@@ -1,7 +1,13 @@
 import path from "node:path";
-import type { AgentConfig, PendingMessage, SessionRuntimeEvent } from "@agent-harness/core";
+import type {
+  AgentConfig,
+  ISqliteDatabase,
+  PendingMessage,
+  SessionRuntimeEvent,
+} from "@agent-harness/core";
 import {
   CapabilityRegistry,
+  createDatabaseConnection,
   createDelegateTool,
   createEditFileTool,
   createListDirectoryTool,
@@ -15,9 +21,14 @@ import {
   getConfig,
   globTool,
   grepTool,
+  LegacyMigrator,
   loadAgentConfig,
+  MailboxRepository,
   runCommandTool,
+  SessionRepository,
   SessionRuntime,
+  SqliteMigrator,
+  TaskRepository,
   ToolRegistry,
   webFetchTool,
 } from "@agent-harness/core";
@@ -61,6 +72,76 @@ export class SessionManager {
   >();
   private deletedSessions = new Set<string>();
   private executionLimiter: ExecutionLimiter | undefined;
+  private db: ISqliteDatabase | undefined;
+
+  async initialize(customDb?: ISqliteDatabase): Promise<void> {
+    const config = getConfig();
+    if (customDb) {
+      this.db = customDb;
+    } else {
+      const dbPath = path.join(config.SESSIONS_DIR, ".harness", "harness.db");
+      this.db = createDatabaseConnection(dbPath);
+    }
+
+    // Run schema migrations
+    const migrator = new SqliteMigrator(this.db);
+    migrator.up();
+
+    // Run legacy data migration if needed
+    const legacyMigrator = new LegacyMigrator(this.db, config.SESSIONS_DIR);
+    legacyMigrator.migrate();
+
+    // Startup worker reconciliation protocol
+    this.reconcileOrphanedTasks();
+  }
+
+  getDb(): ISqliteDatabase | undefined {
+    return this.db;
+  }
+
+  private reconcileOrphanedTasks(): void {
+    if (!this.db) return;
+
+    const taskRepo = new TaskRepository(this.db);
+    const mailboxRepo = new MailboxRepository(this.db);
+    const sessionRepo = new SessionRepository(this.db);
+
+    const orphaned = taskRepo.listByStatus(["running", "queued"]);
+    for (const task of orphaned) {
+      const now = Date.now();
+      taskRepo.update(task.task_id, {
+        status: "abandoned",
+        completedAt: now,
+        updatedAt: now,
+        errorCode: "TASK_ABANDONED_ON_STARTUP",
+        errorMessage:
+          "Task was abandoned due to an ungraceful server termination or process crash.",
+      });
+
+      const workerSession = task.worker_session_id
+        ? sessionRepo.get(task.worker_session_id)
+        : undefined;
+
+      const pending: PendingMessage = {
+        taskId: task.task_id,
+        from: task.worker_session_id ?? `worker-${task.task_id}`,
+        agentName: workerSession?.agent_name ?? "worker",
+        status: "error",
+        summary: "Task was abandoned due to an ungraceful server termination or process crash.",
+        receivedAt: new Date(now).toISOString(),
+      };
+
+      mailboxRepo.enqueue({
+        parentSessionId: task.parent_session_id,
+        taskId: task.task_id,
+        eventType: "worker_abandoned",
+        payload: pending,
+        createdAt: now,
+      });
+
+      this.onWorkerCompleted(task.parent_session_id, pending);
+    }
+  }
 
   getOrCreate(sessionId: string): SessionRuntime {
     if (!this.isSessionAvailable(sessionId)) {
@@ -78,6 +159,7 @@ export class SessionManager {
       runtime = new SessionRuntime({
         sessionId,
         sessionsDir: config.SESSIONS_DIR,
+        db: this.db,
         resolveConfig: resolveAgentConfig,
         toolRegistry: this.buildToolRegistry(
           sessionId,
@@ -231,6 +313,7 @@ export class SessionManager {
     registry.register(
       createDelegateTool({
         sessionsDir: config.SESSIONS_DIR,
+        db: this.db,
         sessionId,
         resolveConfig: resolveAgentConfig,
         toolRegistry: registry,

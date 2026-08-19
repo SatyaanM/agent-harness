@@ -2,12 +2,18 @@ import { v4 as uuidv4 } from "uuid";
 import type { CapabilityRegistry } from "../capability/registry.js";
 import { describeError } from "../contracts/errors.js";
 import { createLogger, type Logger } from "../contracts/logging.js";
+import { type PendingMessage, PendingMessageSchema } from "../contracts/session.js";
 import type { LLMClient } from "../llm/client.js";
 import type { SessionData } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
+import { MailboxRepository } from "../persistence/sqlite/mailbox-repo.js";
+import { MessageRepository } from "../persistence/sqlite/message-repo.js";
+import { RunRepository } from "../persistence/sqlite/run-repo.js";
+import { SessionRepository } from "../persistence/sqlite/session-repo.js";
+import type { ISqliteDatabase } from "../persistence/sqlite/types.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
-import { isRecord } from "../validation.js";
+import { isRecord, parseJsonBoundary } from "../validation.js";
 import { Agent } from "./agent.js";
 import {
   AgentBudgetExceededError,
@@ -90,7 +96,8 @@ export interface RunCorrelation {
 
 export interface SessionRuntimeOptions {
   sessionId: string;
-  sessionsDir: string;
+  sessionsDir?: string;
+  db?: ISqliteDatabase;
   resolveConfig: (agentName: string | undefined) => AgentConfig;
   toolRegistry: ToolRegistry;
   llmClient: LLMClient;
@@ -102,11 +109,25 @@ export interface SessionRuntimeOptions {
 
 export class SessionRuntime {
   private queue: Promise<unknown> = Promise.resolve();
-  private readonly sessionStore: SessionStore;
+  private readonly sessionStore?: SessionStore;
+  private readonly db?: ISqliteDatabase;
+  private readonly sessionRepo?: SessionRepository;
+  private readonly messageRepo?: MessageRepository;
+  private readonly runRepo?: RunRepository;
+  private readonly mailboxRepo?: MailboxRepository;
   private readonly logger: Logger;
 
   constructor(private readonly options: SessionRuntimeOptions) {
-    this.sessionStore = new SessionStore(options.sessionsDir);
+    if (options.sessionsDir) {
+      this.sessionStore = new SessionStore(options.sessionsDir);
+    }
+    if (options.db) {
+      this.db = options.db;
+      this.sessionRepo = new SessionRepository(options.db);
+      this.messageRepo = new MessageRepository(options.db);
+      this.runRepo = new RunRepository(options.db);
+      this.mailboxRepo = new MailboxRepository(options.db);
+    }
     this.logger = createLogger("core.session-runtime").child({ sessionId: options.sessionId });
   }
 
@@ -176,7 +197,11 @@ export class SessionRuntime {
 
     const now = new Date().toISOString();
 
-    let session = await this.sessionStore.load(this.options.sessionId);
+    let session: SessionData | null = null;
+    if (this.sessionStore) {
+      session = await this.sessionStore.load(this.options.sessionId);
+    }
+
     if (!session) {
       session = {
         sessionId: this.options.sessionId,
@@ -219,10 +244,118 @@ export class SessionRuntime {
             ...persistedHistory.slice(replayedUserIndex + 1),
           ];
 
-    // Materialize before acknowledgement. If the process fails after the
-    // transcript save but before acknowledgement, taskId makes recovery
-    // idempotent and prevents duplicate system messages.
-    const pending = await this.sessionStore.peekMailbox(this.options.sessionId);
+    // Transactional Mailbox Drain Protocol
+    let pending: PendingMessage[] = [];
+    if (this.db && this.mailboxRepo && this.sessionRepo && this.messageRepo && this.runRepo) {
+      const db = this.db;
+      const mailboxRepo = this.mailboxRepo;
+      const sessionRepo = this.sessionRepo;
+      const messageRepo = this.messageRepo;
+      const runRepo = this.runRepo;
+
+      db.immediateTransaction(() => {
+        // 1. Ensure session row exists in SQLite
+        const existingSession = sessionRepo.get(this.options.sessionId);
+        if (!existingSession) {
+          sessionRepo.create({
+            id: this.options.sessionId,
+            agentName: session?.agentName ?? "orchestrator",
+            prompt: message ?? "",
+            createdAt: Date.now(),
+          });
+        }
+
+        // 2. Peek pending mailbox events from SQLite
+        const pendingEvents = mailboxRepo.peekPending(this.options.sessionId);
+        const parsedPending: PendingMessage[] = [];
+        for (const evt of pendingEvents) {
+          const parsed = parseJsonBoundary(
+            PendingMessageSchema,
+            evt.payload,
+            `mailbox_event ${evt.id}`,
+          );
+          parsedPending.push(parsed);
+        }
+        pending = parsedPending;
+
+        // 3. Materialize system messages and acknowledge mailbox events atomically
+        const existingTaskIds = new Set(
+          baseHistory.flatMap((existing) => {
+            if (!isRecord(existing.meta) || existing.meta.kind !== "worker_completed") return [];
+            return typeof existing.meta.taskId === "string" ? [existing.meta.taskId] : [];
+          }),
+        );
+
+        for (const evt of pendingEvents) {
+          const parsed = parseJsonBoundary(
+            PendingMessageSchema,
+            evt.payload,
+            `mailbox_event ${evt.id}`,
+          );
+          if (!existingTaskIds.has(parsed.taskId)) {
+            const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
+            messageRepo.create({
+              sessionId: this.options.sessionId,
+              role: "system",
+              content:
+                `Worker "${parsed.agentName}" (task ${parsed.taskId}) ` +
+                `${
+                  parsed.status === "done"
+                    ? "completed with the result below"
+                    : parsed.status === "cancelled"
+                      ? "was cancelled by the user"
+                      : "failed with the error below"
+                }. ` +
+                `${parsed.summary}\n\n` +
+                `This is the final result of the task you delegated. Present it to the user. Do not delegate this task again.`,
+              sequenceNum: nextSeq,
+              createdAt: Date.now(),
+              metadata: {
+                meta: {
+                  kind: "worker_completed",
+                  taskId: parsed.taskId,
+                  agentName: parsed.agentName,
+                  status: parsed.status,
+                  summary: parsed.summary,
+                },
+              },
+            });
+            existingTaskIds.add(parsed.taskId);
+          }
+          mailboxRepo.acknowledge(evt.id);
+        }
+
+        // 4. Insert user message into SQLite messages table if present and not replayed
+        if (message && !replayExistingUser) {
+          const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
+          messageRepo.create({
+            sessionId: this.options.sessionId,
+            role: "user",
+            content: message,
+            sequenceNum: nextSeq,
+            createdAt: Date.now(),
+          });
+        }
+
+        // 5. Create run record in SQLite
+        runRepo.create({
+          runId,
+          sessionId: this.options.sessionId,
+          requestId: requestId ?? null,
+          status: "running",
+          startedAt: Date.now(),
+        });
+
+        // 6. Update sessions.updated_at
+        sessionRepo.update(this.options.sessionId, {
+          updatedAt: Date.now(),
+          prompt: message ?? undefined,
+        });
+      })();
+    } else if (this.sessionStore) {
+      pending = (await this.sessionStore.peekMailbox(this.options.sessionId)) ?? [];
+    }
+
     const materializedTaskIds = new Set(
       baseHistory.flatMap((existing) => {
         if (!isRecord(existing.meta) || existing.meta.kind !== "worker_completed") return [];
@@ -269,16 +402,18 @@ export class SessionRuntime {
       };
     }
 
-    await this.sessionStore.save(session);
-    if (pending.length > 0 && this.isAvailable()) {
-      try {
-        await this.sessionStore.acknowledgeMailbox(
-          this.options.sessionId,
-          pending.map((entry) => entry.taskId),
-        );
-        session.mailbox = [];
-      } catch (ackError) {
-        logger.warn("Failed to acknowledge mailbox", { ...describeError(ackError) });
+    if (this.sessionStore) {
+      await this.sessionStore.save(session);
+      if (pending.length > 0 && this.isAvailable()) {
+        try {
+          await this.sessionStore.acknowledgeMailbox(
+            this.options.sessionId,
+            pending.map((entry) => entry.taskId),
+          );
+          session.mailbox = [];
+        } catch (ackError) {
+          logger.warn("Failed to acknowledge mailbox", { ...describeError(ackError) });
+        }
       }
     }
 
@@ -364,7 +499,39 @@ export class SessionRuntime {
       };
       session.completedAt = new Date().toISOString();
 
-      if (this.isAvailable()) {
+      if (this.db && this.runRepo && this.sessionRepo && this.messageRepo) {
+        const runRepo = this.runRepo;
+        const sessionRepo = this.sessionRepo;
+        const messageRepo = this.messageRepo;
+        this.db.immediateTransaction(() => {
+          for (const msg of partial) {
+            const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
+            messageRepo.create({
+              sessionId: this.options.sessionId,
+              runId,
+              role: msg.role,
+              content: msg.content,
+              reasoning: msg.role === "assistant" ? (msg.reasoning ?? null) : null,
+              toolCalls: msg.role === "assistant" ? (msg.toolCalls ?? null) : null,
+              toolCallId: msg.role === "tool" ? (msg.toolCallId ?? null) : null,
+              sequenceNum: nextSeq,
+              createdAt: Date.now(),
+            });
+          }
+          runRepo.update(runId, {
+            status: isCancelled ? "cancelled" : "failed",
+            errorCode,
+            errorMessage,
+            completedAt: Date.now(),
+          });
+          sessionRepo.update(this.options.sessionId, {
+            completedAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+        })();
+      }
+
+      if (this.isAvailable() && this.sessionStore) {
         try {
           await this.sessionStore.save(session);
           this.emit({ type: "session:updated", session });
@@ -402,8 +569,40 @@ export class SessionRuntime {
     session.result = { status: result.status, summary: result.summary };
     session.completedAt = new Date().toISOString();
 
+    if (this.db && this.runRepo && this.sessionRepo && this.messageRepo) {
+      const runRepo = this.runRepo;
+      const sessionRepo = this.sessionRepo;
+      const messageRepo = this.messageRepo;
+      this.db.immediateTransaction(() => {
+        for (const msg of appended) {
+          const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
+          messageRepo.create({
+            sessionId: this.options.sessionId,
+            runId,
+            role: msg.role,
+            content: msg.content,
+            reasoning: msg.role === "assistant" ? (msg.reasoning ?? null) : null,
+            toolCalls: msg.role === "assistant" ? (msg.toolCalls ?? null) : null,
+            toolCallId: msg.role === "tool" ? (msg.toolCallId ?? null) : null,
+            sequenceNum: nextSeq,
+            createdAt: Date.now(),
+          });
+        }
+        runRepo.update(runId, {
+          status: result.status === "cancelled" ? "cancelled" : "completed",
+          completedAt: Date.now(),
+        });
+        sessionRepo.update(this.options.sessionId, {
+          completedAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      })();
+    }
+
     if (this.isAvailable()) {
-      await this.sessionStore.save(session);
+      if (this.sessionStore) {
+        await this.sessionStore.save(session);
+      }
       this.emit({
         type: "agent:completed",
         agentName: agentConfig.name,

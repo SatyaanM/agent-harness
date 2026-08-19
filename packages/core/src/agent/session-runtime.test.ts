@@ -6,6 +6,14 @@ import { z } from "zod";
 import { CapabilityRegistry } from "../capability/registry.js";
 import type { LLMChatParams, LLMClient, LLMResponse } from "../llm/client.js";
 import { createSessionData, SessionStore } from "../persistence/session.js";
+import {
+  createDatabaseConnection,
+  MailboxRepository,
+  MessageRepository,
+  SessionRepository,
+  SqliteMigrator,
+  TaskRepository,
+} from "../persistence/sqlite/index.js";
 import { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import { ToolRegistry } from "../tool/registry.js";
 import { SessionRuntime } from "./session-runtime.js";
@@ -483,5 +491,75 @@ describe("SessionRuntime delivery invariants", () => {
     const result = await runtime.deliver("work");
     expect(result.status).toBe("cancelled");
     expect(await store.load("already-deleted")).toBeNull();
+  });
+
+  it("executes transactional mailbox drain atomically in SQLite with rollback safety", async () => {
+    const db = createDatabaseConnection(":memory:");
+    const migrator = new SqliteMigrator(db);
+    migrator.up();
+
+    const sessionRepo = new SessionRepository(db);
+    const taskRepo = new TaskRepository(db);
+    const mailboxRepo = new MailboxRepository(db);
+    const messageRepo = new MessageRepository(db);
+
+    sessionRepo.create({
+      id: "tx-sess",
+      agentName: "orchestrator",
+      prompt: "tx prompt",
+    });
+
+    taskRepo.create({
+      taskId: "tx-task-1",
+      parentSessionId: "tx-sess",
+      description: "tx task description",
+    });
+
+    mailboxRepo.enqueue({
+      parentSessionId: "tx-sess",
+      taskId: "tx-task-1",
+      eventType: "worker_completed",
+      payload: {
+        taskId: "tx-task-1",
+        from: "worker-tx-task-1",
+        agentName: "worker",
+        status: "done",
+        summary: "worker 1 completed successfully",
+        receivedAt: "2026-08-18T00:00:00.000Z",
+      },
+    });
+
+    expect(mailboxRepo.countPending("tx-sess")).toBe(1);
+
+    const runtime = new SessionRuntime({
+      sessionId: "tx-sess",
+      db,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return stop("Handled SQLite completion.");
+        },
+      },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+    });
+
+    const result = await runtime.deliver("new user prompt");
+    expect(result.status).toBe("success");
+
+    // Verify mailbox event was acknowledged
+    expect(mailboxRepo.countPending("tx-sess")).toBe(0);
+
+    // Verify messages in SQLite table: system message, user message, assistant response
+    const messages = messageRepo.listBySession("tx-sess");
+    expect(messages.length).toBeGreaterThanOrEqual(3);
+    expect(messages[0]?.role).toBe("system");
+    expect(messages[0]?.content).toContain("worker 1 completed successfully");
+    expect(messages[1]?.role).toBe("user");
+    expect(messages[1]?.content).toBe("new user prompt");
+    expect(messages[2]?.role).toBe("assistant");
+    expect(messages[2]?.content).toBe("Handled SQLite completion.");
+
+    db.close();
   });
 });

@@ -20,12 +20,10 @@ flowchart LR
   Agent --> LLM["One configured provider endpoint"]
   Agent --> Tools["ToolRegistry"]
   Tools --> Worker["Background Worker"]
-  Runtime --> Store["SessionStore"]
-  Worker --> Store
-  Store --> Transcript["session JSON transcript"]
-  Store --> Mailbox["mailbox JSONL"]
-  Store --> Index["derived session index"]
-  Server --> Open["open-sessions JSON"]
+  Runtime --> SQLite["SQLite Database (.harness/harness.db WAL Mode)"]
+  Worker --> SQLite
+  SQLite --> Relational["Relational Tables: sessions, runs, messages, tasks, mailbox_events, open_sessions"]
+  Server --> Open["open_sessions in SQLite / JSON fallback"]
   Server --> Plugin["manifest registry + enabled state"]
 ```
 
@@ -36,69 +34,49 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 ### Core
 
 - [`Agent.run`](../../packages/core/src/agent/agent.ts) owns one in-memory model/tool loop. It builds tools from an `AgentConfig`, appends structurally balanced assistant/tool messages even when a budget stops execution, projects bounded tool content into provider context and transient tool events, and propagates its deadline/cancellation signal into providers and tools before returning after stop or `maxSteps`.
-- [`SessionRuntime`](../../packages/core/src/agent/session-runtime.ts) owns serialized delivery for one top-level `sessionId`. `deliver()` chains runs on an in-memory promise queue; `runOnce()` loads history, materializes unacknowledged worker completions, persists the canonical model order, acknowledges those completions, runs an agent, and persists success or the latest partial audit record.
-- [`createDelegateTool`](../../packages/core/src/agent/delegation.ts) creates a task ID, derives a synthetic worker config from the delegating agent, persists a `worker-<taskId>` session, launches a `Worker` without awaiting it, persists progress/final state, and appends a completion to the parent mailbox.
+- [`SessionRuntime`](../../packages/core/src/agent/session-runtime.ts) owns serialized delivery for one top-level `sessionId`. `deliver()` chains runs on an in-memory promise queue; `runOnce()` executes an atomic `BEGIN IMMEDIATE` SQLite transaction to load history, materialize unacknowledged worker completions with monotonic message sequence numbers, persist the canonical model order, acknowledge mailbox events, and insert run tracking records before executing the agent loop.
+- [`SqliteDatabaseDriver`](../../packages/core/src/persistence/sqlite/db.ts) and [`SqliteMigrator`](../../packages/core/src/persistence/sqlite/migrator.ts) manage embedded SQLite with Write-Ahead Logging (WAL) mode, busy timeouts, and SHA-256 verified schema migrations.
+- Strongly typed relational repositories ([`SessionRepository`](../../packages/core/src/persistence/sqlite/session-repo.ts), [`RunRepository`](../../packages/core/src/persistence/sqlite/run-repo.ts), [`MessageRepository`](../../packages/core/src/persistence/sqlite/message-repo.ts), [`TaskRepository`](../../packages/core/src/persistence/sqlite/task-repo.ts), [`MailboxRepository`](../../packages/core/src/persistence/sqlite/mailbox-repo.ts), [`OpenSessionsRepository`](../../packages/core/src/persistence/sqlite/open-sessions-repo.ts)) enforce relational integrity, monotonic sequence numbers, and cascade deletions.
+- [`LegacyMigrator`](../../packages/core/src/persistence/sqlite/legacy-migrator.ts) imports legacy JSON transcripts, mailbox JSONL, and open-sessions state into SQLite with pre-migration backups and corrupted file quarantine (`.invalid-*`).
+- [`createDelegateTool`](../../packages/core/src/agent/delegation.ts) creates a task ID, tracks worker tasks in `tasks` table, launches a `Worker` without awaiting it, and enqueues completion events to `mailbox_events`.
 - [`Worker.run`](../../packages/core/src/agent/worker.ts) wraps an `Agent` invocation, retains each progressive step, and maps cancellation/errors to a `WorkerResult`. Terminal delivery and cleanup are owned by the delegate/server lifecycle rather than duplicated into a process-local result queue.
-- [`SessionStore`](../../packages/core/src/persistence/session.ts) is the file-I/O owner for transcripts and mailboxes. Transcripts use serialized latest-snapshot writes with temp-file rename; mailboxes use serialized append-only JSONL plus atomic acknowledgement rewrites. A transcript is durable before its derived index is updated. Collection scans preserve invalid bytes, retain healthy records, and return content-free diagnostics.
-- [`IndexHandle`](../../packages/core/src/persistence/session-index.ts) maintains a derived `.index.json` projection used by the top-level session collection endpoints. Worker sessions are excluded by the `worker-` name convention.
+- [`SessionStore`](../../packages/core/src/persistence/session.ts) provides file-I/O backward compatibility for transcripts and mailboxes.
 - [`ToolRegistry`](../../packages/core/src/tool/registry.ts), file/shell/web tools, [`InboxManager`](../../packages/core/src/presentation/inbox.ts), agent-config loading, settings, capability discovery, plugin schemas, collaboration primitives, and TTS are reusable library surfaces.
 
 ### Server
 
-- [`SessionManager`](../../packages/server/src/session-manager.ts) owns loaded `SessionRuntime` objects and running worker `AbortController` objects in process memory. It builds the concrete tool registry and relays runtime events to Socket.IO.
+- [`SessionManager`](../../packages/server/src/session-manager.ts) owns loaded `SessionRuntime` objects, SQLite connection lifecycle, and running worker `AbortController` objects. On boot, `SessionManager.initialize()` executes startup worker reconciliation, transitioning orphaned `running`/`queued` tasks to `abandoned` and enqueuing diagnostic delivery cards.
 - [`chatRouter`](../../packages/server/src/routes/chat.ts) validates a message, aborts the delivery when its client disconnects, awaits a full `SessionRuntime.deliver()`, and only then slices the complete final summary into SSE-shaped chunks. An explicit retry is routed through `SessionRuntime.retry()`, which requires a matching durable user message and replays it without appending a duplicate transcript record. This is response chunking, not live model token streaming.
-- [`sessionsRouter`](../../packages/server/src/routes/sessions.ts) owns session CRUD, metadata-only collection listing, safe durable-record diagnostics, rename, conditional mailbox wake on explicit open, updates to the open-session registry, and close/delete lifecycle enforcement.
-- [`open-sessions.ts`](../../packages/server/src/open-sessions.ts) persists the browser tab set and active tab atomically under `.harness/open-sessions.json`; duplicate IDs and active IDs outside the open set are rejected. An explicit update quarantines malformed prior bytes before repair. Settings use the same quarantine-on-repair policy, while `ROOT` remains environment/discovery-owned.
+- [`sessionsRouter`](../../packages/server/src/routes/sessions.ts) owns session CRUD, metadata-only collection listing via indexed SQLite queries (<10ms for 10k sessions), safe durable-record diagnostics, rename, conditional mailbox wake on explicit open, updates to the open-session registry, and close/delete lifecycle enforcement.
+- [`open-sessions.ts`](../../packages/server/src/open-sessions.ts) persists the browser tab set and active tab under SQLite `open_sessions` and `.harness/open-sessions.json`; duplicate IDs and active IDs outside the open set are rejected. An explicit update quarantines malformed prior bytes before repair. Settings use the same quarantine-on-repair policy, while `ROOT` remains environment/discovery-owned.
 - [`PluginRegistry`](../../packages/server/src/plugin/registry.ts) recursively rescans sorted manifest files when listed, rejects duplicate names deterministically, preserves invalid state for diagnosis, and repairs it through an explicit toggle. [`pluginsRouter`](../../packages/server/src/routes/plugins.ts) exposes list/toggle operations.
 - [`HookBus`](../../packages/server/src/hooks.ts) defines before middleware and after observers. Session close and delete await veto-capable before middleware before durable or runtime state changes.
 - [`ws/events.ts`](../../packages/server/src/ws/events.ts) broadcasts agent start/completion/error/tool, worker spawn/completion, and full session updates.
-
-### Dashboard
-
-- [`RuntimeSync`](../../packages/dashboard/src/components/chat/RuntimeSync.tsx) hydrates the server-owned open-tab snapshot as history, repairs it when a durable session cannot be restored, mirrors later tab changes back to the server, and consumes Socket.IO runtime events.
-- [`useSessionStore`](../../packages/dashboard/src/stores/session-store.ts) is a browser projection of transcripts and tab selection. Server session updates replace its message projection.
-- [`useRuntimeStore`](../../packages/dashboard/src/stores/runtime-store.ts) and [`useRosterStore`](../../packages/dashboard/src/stores/agent-roster-store.ts) hold bounded transient activity/running/worker UI state. They are not reconstructed from durable worker execution state on boot.
-- [`usePluginStore`](../../packages/dashboard/src/stores/plugin-store.ts) builds enabled renderer and command indexes from the server registry.
-- [`plugins/registry.ts`](../../packages/dashboard/src/plugins/registry.ts) statically imports a fixed set of built-in renderer components, while [`InboxItemView`](../../packages/dashboard/src/components/inbox/InboxItemView.tsx) selects among them using manifest metadata.
-- [`lib/api.ts`](../../packages/dashboard/src/lib/api.ts) is the REST adapter and applies endpoint-specific response budgets for durable sessions and inbox files, including JSON/base64 expansion. [`lib/ws.ts`](../../packages/dashboard/src/lib/ws.ts) is the Socket.IO adapter.
-
-## Observability and correlation
-
-A shared structured logger (`core/contracts/logging.ts`) and error normalizer (`core/contracts/errors.ts`) are used by core, server, and dashboard (ADR 0003). `SessionRuntime.runOnce` generates an ephemeral `runId` per execution attempt, and the chat route generates an optional `requestId` at the HTTP edge. Both are threaded into logs via child loggers and onto `agent:started`/`agent:completed`/`agent:error`/`agent:tool` WebSocket events (`runId`/`requestId`, plus `code` on errors). They are correlation context, not durable transcript fields. `/api/health` and `/api/metrics` remain the exposure points for process health and limiter state; metrics histograms, distributed tracing, and an administrative audit trail (which requires an authenticated actor) are not implemented.
-
-## Implemented lifecycle
-
-1. The dashboard creates or selects a top-level session and sends `{sessionId, message, agentName}` to `/api/chat`.
-2. `SessionManager` creates an in-memory runtime on first execution. Merely hydrating history does not create a runtime.
-3. `SessionRuntime` serializes deliveries, peeks all durable completions, deduplicates by `taskId`, persists completion system messages before the new user message, then acknowledges the peeked records. Recovery after a failure between those writes sees the durable transcript identity and does not duplicate delivery.
-4. `Agent.run()` calls the configured model and registered tools until stop, cancellation, or the step limit.
-5. Delegation returns immediately from the tool call with `taskId` and `workerSessionId`; the worker continues in the server process.
-6. Worker progress and final transcript snapshots use the same `SessionData` shape as user sessions. Final delivery is separately appended to the parent mailbox.
-7. If the parent runtime is loaded, `SessionManager.onWorkerCompleted()` starts a mailbox-only wake run. The delegate tool is removed for this wake to prevent autonomous re-delegation. If no runtime is loaded, delivery stays on disk until an explicit open or later message drains it.
-
-Mailbox and transcript are still separate files rather than one transaction. The recovery protocol is materialize-before-acknowledge: failure before transcript persistence leaves the mailbox intact, while failure after transcript persistence leaves a replayable record whose `taskId` is already represented in the transcript. Concurrent appends are preserved by the mailbox write queue and acknowledgement rewrite.
 
 ## Persistence and ownership
 
 | State | Current owner | Durability | Important limitation |
 |---|---|---|---|
 | Agent definition | Markdown in `agents/`, CRUD via server | File-backed | Name is the effective identity; no schema version or immutable ID. |
-| Top-level transcript | `SessionStore` | Atomic JSON snapshot | The same schema also represents worker executions; invalid records remain in place and are omitted with safe diagnostics during collection scans. |
-| Worker completion | `SessionStore` mailbox | Ordered JSONL until acknowledgement | Delivery identity and replay deduplication use `taskId`; there is no independently versioned delivery-event ID. |
-| Session list metadata | `IndexHandle` | Rebuildable JSON projection | Eventually consistent by design. |
-| Open/active tabs | Server `open-sessions.ts` | Atomic JSON snapshot | Browser is the writer; closing unloads its runtime after before-close hooks pass. Invalid bytes are quarantined only on an explicit repair update. |
-| Loaded runtime | `SessionManager.runtimes` | Process memory | Not recovered; plain boot hydration does not wake pending mailboxes. |
-| Running worker/cancel handle | `SessionManager.workerControllers` | Process memory | Lost on server restart; no resume/reconciliation path. |
+| Relational Storage & Tables | SQLite `.harness/harness.db` (WAL) | ACID Transactions (`BEGIN IMMEDIATE`) | Single host embedded database. |
+| Top-level transcript | `SessionRepository` / `MessageRepository` | Indexed relational messages with monotonic sequence IDs | Normalized in `messages` and `sessions` tables. |
+| Worker completion | `MailboxRepository` (`mailbox_events`) | Transactional drain inside `BEGIN IMMEDIATE` | Drains atomically with message materialization. |
+| In-flight worker reconciliation | `SessionManager.initialize` | Reconciled to `abandoned` on boot | Diagnostic mailbox event delivered on parent wake. |
+| Session list metadata | `SessionRepository.listMeta` | Relational B-tree index | Responds in < 10ms for 10,000 sessions. |
+| Open/active tabs | `OpenSessionsRepository` (`open_sessions`) | Relational table + JSON snapshot | Browser is writer; closing unloads runtime after before-close hooks pass. |
+| Loaded runtime | `SessionManager.runtimes` | Process memory | Boot reconciliation transitions orphaned tasks cleanly. |
 | Plugin enabled state | Server `PluginRegistry` | JSON snapshot | Registry has no filesystem watcher or plugin-change event. |
 | Dashboard runtime/roster state | Zustand stores | Browser memory | History sync does not rebuild the running-worker roster. |
-
-The single-writer and atomicity guarantees in `SessionStore` coordinate callers inside one Node process. They are not a multi-process lock or transactional database guarantee.
 
 ## Implemented, partial, and intent-only claims
 
 | Capability | Status | Evidence |
 |---|---|---|
-| Durable conversations and worker transcripts | Implemented | `SessionStore`, `SessionRuntime`, session routes. |
+| SQLite WAL Persistence & ACID Transactions | Implemented | `SqliteDatabaseDriver`, `SqliteMigrator`, Repositories, `withDbRetry`, fault injection and benchmark test suites. |
+| Durable conversations and worker transcripts | Implemented | Relational `sessions`, `messages`, `runs`, `tasks`, and `SessionRuntime`. |
+| Durable worker-result delivery & Atomic Drain | Implemented | `mailbox_events`, atomic `BEGIN IMMEDIATE` drain, wake-run guard. |
+| Startup Worker Task Reconciliation | Implemented | `SessionManager.initialize()` transitions orphaned tasks to `abandoned` and enqueues diagnostic events. |
+| Legacy Data Migration Pipeline | Implemented | `LegacyMigrator` with automated backups, quarantine, and integrity verification. |
 | Durable worker-result delivery | Implemented with recovery gaps | Mailbox JSONL, conditional wake, and wake-run guard are wired; running workers and runtimes are not restartable. |
 | File-based agent configs and dashboard CRUD | Implemented | `config-loader.ts`, `routes/agents.ts`, dashboard agent editor. |
 | Per-conversation agent selection | Partial | The browser picker updates Zustand immediately; the server persists `agentName` only when a later chat delivery includes it. |
