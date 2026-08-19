@@ -34,10 +34,16 @@ function sleepSync(ms: number): void {
   }
 }
 
+/**
+ * Synchronous database retry helper for synchronous transaction blocks.
+ *
+ * NOTE: For asynchronous callers (Express routes, SessionRuntime deliveries, SessionManager),
+ * prefer `withDbRetryAsync` to avoid blocking the Node.js event loop during lock contention.
+ */
 export function withDbRetry<T>(fn: () => T, options: RetryOptions = {}): T {
   const maxRetries = options.maxRetries ?? 5;
-  const initialDelay = options.initialDelayMs ?? 10;
-  const maxDelay = options.maxDelayMs ?? 200;
+  const initialDelay = options.initialDelayMs ?? 5;
+  const maxDelay = options.maxDelayMs ?? 100;
 
   let attempt = 0;
   while (true) {

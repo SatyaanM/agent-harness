@@ -267,16 +267,17 @@ export class SessionRuntime {
 
         // 2. Peek pending mailbox events from SQLite
         const pendingEvents = mailboxRepo.peekPending(this.options.sessionId);
-        const parsedPending: PendingMessage[] = [];
+        const parsedPendingEvents: { evt: (typeof pendingEvents)[0]; parsed: PendingMessage }[] =
+          [];
         for (const evt of pendingEvents) {
           const parsed = parseJsonBoundary(
             PendingMessageSchema,
             evt.payload,
             `mailbox_event ${evt.id}`,
           );
-          parsedPending.push(parsed);
+          parsedPendingEvents.push({ evt, parsed });
         }
-        pending = parsedPending;
+        pending = parsedPendingEvents.map((p) => p.parsed);
 
         // 3. Materialize system messages and acknowledge mailbox events atomically
         const existingTaskIds = new Set(
@@ -286,12 +287,7 @@ export class SessionRuntime {
           }),
         );
 
-        for (const evt of pendingEvents) {
-          const parsed = parseJsonBoundary(
-            PendingMessageSchema,
-            evt.payload,
-            `mailbox_event ${evt.id}`,
-          );
+        for (const { evt, parsed } of parsedPendingEvents) {
           if (!existingTaskIds.has(parsed.taskId)) {
             const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
             messageRepo.create({

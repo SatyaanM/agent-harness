@@ -56,7 +56,7 @@ While individual file renames are atomic within a single Node.js process, multi-
 - Single-transaction mailbox drain completely eliminates mailbox duplicate delivery and lost completion edge cases.
 - Fast metadata indexing and queries without directory traversal overhead.
 - Single file storage (`.harness/harness.db`) simplifies backups, migrations, and export/import workflows.
-- Core persistence requires a native or WASM-compatible SQLite binding (`better-sqlite3` / `libsql`).
+- Core persistence utilizes native embedded `node:sqlite` (`DatabaseSync`), requiring zero native C++ compiler toolchains while defining `ISqliteDatabase` driver interfaces for future pluggability.
 
 ## Evidence and supersession
 
