@@ -149,6 +149,9 @@ These are read from the environment or the dashboard **Settings** page (persiste
 | `ENABLE_WEB_FETCH` | `false` | Explicitly enable the public-network fetch tool |
 | `PLUGINS_DIR` | dashboard plugin directory | Optional absolute directory containing plugin manifests |
 | `GEMINI_API_KEY` | — | Optional — enables Gemini TTS voice output |
+| `OTEL_ENABLED` | `false` | Enable OpenTelemetry distributed tracing |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Optional OTLP HTTP collector endpoint (e.g. `http://localhost:4318/v1/traces`) |
+| `OTEL_SERVICE_NAME` | `agent-harness` | OpenTelemetry service name |
 
 ## Architecture
 
@@ -257,7 +260,7 @@ GET    /api/settings                # Get settings
 PUT    /api/settings                # Update settings
 POST   /api/tts                     # Text-to-speech
 GET    /api/health                  # Health check
-GET    /api/metrics                 # Active/queued execution and runtime counts
+GET    /api/metrics                 # Prometheus, OpenMetrics, and JSON runtime & execution metrics
 ```
 
 ### WebSocket Events
@@ -281,20 +284,23 @@ Pure TypeScript library with no HTTP/UI dependencies:
 - `agent/` — Agent, session runtime, delegation, and Worker execution
 - `capability/` — 4-tier capability registry
 - `collaboration/` — MessageBus, Council, Supervision
+- `crypto/` — Canonical JSON (RFC 8785), SHA-256 audit hash chaining, redaction
 - `tool/` — Tool implementations (readFile, writeFile, etc.)
 - `llm/` — Vercel AI SDK adapter
 - `plugin/` — Plugin manifest types
-- `persistence/` — Session storage, config loader, capability cache
+- `persistence/` — SQLite WAL database, repositories, schema migrator, legacy migrator
 - `presentation/` — Inbox manager
+- `telemetry/` — OpenTelemetry W3C trace context, spans, and tracer contracts
 - `tts/` — Text-to-speech (Gemini)
 
 ### Server Package (`packages/server`)
 
 Express + socket.io HTTP server:
 
-- `routes/` — REST API endpoints
+- `routes/` — REST API endpoints (chat, sessions, agents, inbox, plugins, settings, metrics, tts)
 - `ws/` — WebSocket event handlers
 - `plugin/` — Server-side plugin registry
+- `telemetry/` — ServerTracer, batched OTLP exporter, Prometheus/OpenMetrics registry
 
 ### Dashboard Package (`packages/dashboard`)
 
@@ -324,6 +330,7 @@ The root scripts are the supported entry points for local development and coding
 | `corepack pnpm run test:ui` | Open the local Vitest UI |
 | `corepack pnpm run test:coverage` | Run V8 coverage and write text, HTML, and LCOV reports under `coverage/` |
 | `corepack pnpm run test:e2e` | Run Playwright end-to-end browser test suite |
+| `corepack pnpm run audit:verify` | Verify SHA-256 hash-chain continuity of the SQLite audit log in $O(1)$ memory |
 | `corepack pnpm run check:fast` | Run local static checks, typecheck, and tests without a production build |
 | `corepack pnpm run check` | Run the complete credential-free repository verification suite |
 | `corepack pnpm run check:ci` | Run authoritative CI checks, coverage, builds, and the production audit |
