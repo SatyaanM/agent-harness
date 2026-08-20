@@ -7,7 +7,7 @@ read_when:
 
 # ADR 0005: Tamper-Evident Audit Ledger and OpenTelemetry Observability
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-20
 
 ## Context

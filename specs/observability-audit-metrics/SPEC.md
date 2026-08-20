@@ -7,7 +7,7 @@ read_when:
 
 # Observability, Audit Trails, and Metrics Specification
 
-Status: Proposed
+Status: Implemented
 
 ## Problem and evidence
 

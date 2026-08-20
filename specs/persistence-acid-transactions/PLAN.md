@@ -7,7 +7,7 @@ read_when:
 
 # Persistence and ACID Transactions Implementation Plan
 
-Status: Approved
+Status: Completed
 
 ## Inputs
 

@@ -15,4 +15,4 @@ Use zero-padded sequential filenames. Status values are Proposed, Accepted, Supe
 - [0002 - Parse once at trust boundaries and enforce quality in layers](0002-boundary-validation-and-quality-gates.md) - Accepted
 - [0003 - Standardize runtime correlation, structured logging, and error envelopes](0003-structured-logging-correlation-error-envelope.md) - Accepted
 - [0004 - Adopt embedded SQLite with WAL mode for ACID persistence and delivery](0004-acid-storage-and-relational-persistence.md) - Accepted
-- [0005 - Tamper-evident audit ledger and OpenTelemetry observability](0005-tamper-evident-audit-and-opentelemetry-observability.md) - Proposed
+- [0005 - Tamper-evident audit ledger and OpenTelemetry observability](0005-tamper-evident-audit-and-opentelemetry-observability.md) - Accepted
