@@ -1,4 +1,6 @@
+export * from "./audit-repo.js";
 export * from "./concurrency.js";
+
 export * from "./db.js";
 export * from "./legacy-migrator.js";
 export * from "./mailbox-repo.js";

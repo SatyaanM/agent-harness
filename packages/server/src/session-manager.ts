@@ -1,11 +1,13 @@
 import path from "node:path";
 import type {
   AgentConfig,
+  AppendAuditEventInput,
   ISqliteDatabase,
   PendingMessage,
   SessionRuntimeEvent,
 } from "@agent-harness/core";
 import {
+  AuditRepository,
   CapabilityRegistry,
   createDatabaseConnection,
   createDelegateTool,
@@ -21,6 +23,7 @@ import {
   getConfig,
   globTool,
   grepTool,
+  isRecord,
   LegacyMigrator,
   loadAgentConfig,
   MailboxRepository,
@@ -97,6 +100,24 @@ export class SessionManager {
 
   getDb(): ISqliteDatabase | undefined {
     return this.db;
+  }
+
+  getAuditRepo(): AuditRepository | undefined {
+    return this.db ? new AuditRepository(this.db) : undefined;
+  }
+
+  audit(input: AppendAuditEventInput): void {
+    if (!this.db) return;
+    try {
+      const repo = new AuditRepository(this.db);
+      repo.append(input);
+    } catch (err) {
+      logger.error("Failed to append audit event", {
+        action: input.action,
+        actorId: input.actorId,
+        ...describeError(err),
+      });
+    }
   }
 
   close(): void {
@@ -355,6 +376,20 @@ export class SessionManager {
             agentName: workerSessionId,
             tool,
           });
+          if (event.type === "tool:called") {
+            this.audit({
+              actorType: "agent",
+              actorId: workerSessionId,
+              action: `tool.exec.${mapToolAction(event.toolName)}`,
+              resourceType: "tool",
+              resourceId: event.toolName,
+              payload: {
+                sessionId,
+                workerSessionId,
+                args: isRecord(event.args) ? event.args : { raw: event.args },
+              },
+            });
+          }
         },
       }),
     );
@@ -384,11 +419,50 @@ export class SessionManager {
         break;
       case "agent:tool":
         emitAgentEvent("agent:tool", event);
+        if (event.tool.type === "called") {
+          this.audit({
+            actorType: "agent",
+            actorId: event.agentName,
+            action: `tool.exec.${mapToolAction(event.tool.toolName)}`,
+            resourceType: "tool",
+            resourceId: event.tool.toolName,
+            payload: {
+              sessionId: event.sessionId,
+              runId: event.runId,
+              ...(event.requestId ? { requestId: event.requestId } : {}),
+              args: isRecord(event.tool.args) ? event.tool.args : { raw: event.tool.args },
+            },
+          });
+        }
         break;
       case "session:updated":
         emitAgentEvent("session:updated", event.session);
         break;
     }
+  }
+}
+
+function mapToolAction(toolName: string): string {
+  switch (toolName) {
+    case "runCommand":
+      return "shell";
+    case "writeFile":
+    case "editFile":
+      return "file_write";
+    case "readFile":
+    case "readSession":
+      return "file_read";
+    case "webFetch":
+      return "network";
+    case "listDirectory":
+    case "glob":
+      return "file_list";
+    case "grep":
+      return "search";
+    case "delegate":
+      return "delegate";
+    default:
+      return toolName;
   }
 }
 

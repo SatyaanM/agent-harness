@@ -18,6 +18,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
+import { sessionManager } from "../session-manager.js";
 
 const logger = createLogger("server.settings");
 
@@ -122,6 +123,14 @@ settingsRouter.put("/", (req, res) => {
     const parsed = parseBoundary(ConfigSchema, updated, "settings update");
     savePersistedSettings(parsed);
     resetConfig();
+    sessionManager.audit({
+      actorType: "user",
+      actorId: "user",
+      action: "settings.update",
+      resourceType: "system",
+      resourceId: "settings",
+      payload: body,
+    });
     res.json(parsed);
   } catch (error) {
     logger.error("Failed to save settings", { ...describeError(error) });

@@ -3,6 +3,8 @@ import { z } from "zod";
 import type { CapabilityRegistry } from "../capability/registry.js";
 import { describeError } from "../contracts/errors.js";
 import { createLogger } from "../contracts/logging.js";
+import { getTracer, W3CTraceContext } from "../contracts/tracing.js";
+
 import type { LLMClient } from "../llm/client.js";
 import type { PendingMessage } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
@@ -169,10 +171,18 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         throw spawnError;
       }
 
+      const tracer = getTracer();
+      const currentCtx = tracer.currentContext();
+      const traceCarrier: Record<string, string> = {};
+      if (currentCtx) {
+        W3CTraceContext.inject(currentCtx, traceCarrier);
+      }
+
       const finishWorker = async () => {
         try {
-          const result = await worker.run(task);
+          const result = await worker.run(task, traceCarrier);
           const existing = await store.load(sessionId);
+
           await store.save({
             sessionId,
             taskId,

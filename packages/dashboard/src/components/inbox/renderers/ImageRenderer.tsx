@@ -48,7 +48,7 @@ export function ImageRenderer({ content, item }: ImageRendererProps) {
           className="flex max-h-full max-w-full cursor-zoom-in items-center justify-center"
           onClick={handleClick}
         >
-          {/* biome-ignore lint/performance/noImgElement: Inbox previews use user-provided data/blob URLs with unknown dimensions. */}
+          {/* Inbox previews use user-provided data/blob URLs with unknown dimensions. */}
           <img
             src={content}
             alt={item?.name ?? ""}
@@ -85,7 +85,7 @@ export function ImageRenderer({ content, item }: ImageRendererProps) {
           >
             <X className="h-5 w-5" />
           </button>
-          {/* biome-ignore lint/performance/noImgElement: The lightbox preserves the original user-provided image without Next.js optimization. */}
+          {/* The lightbox preserves the original user-provided image without Next.js optimization. */}
           <img
             src={content}
             alt={item?.name ?? ""}

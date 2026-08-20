@@ -18,9 +18,11 @@ const commonChecks = [
   [corepack, [pkgManager, "run", "skills:validate"]],
   [corepack, [pkgManager, "run", "docs:check"]],
   [corepack, [pkgManager, "run", "secrets:check"]],
+  [corepack, [pkgManager, "run", "audit:verify"]],
   [corepack, [pkgManager, "run", "typecheck"]],
   [corepack, [pkgManager, "run", "knip"]],
 ];
+
 const modeChecks = {
   default: [
     [corepack, [pkgManager, "test"]],

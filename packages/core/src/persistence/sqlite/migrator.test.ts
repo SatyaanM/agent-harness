@@ -13,17 +13,20 @@ describe("SqliteMigrator", () => {
     const migrator = new SqliteMigrator(db);
 
     const pending = migrator.getPendingMigrations();
-    expect(pending).toHaveLength(1);
+    expect(pending).toHaveLength(2);
     expect(pending[0]?.version).toBe(1);
+    expect(pending[1]?.version).toBe(2);
 
     const result = migrator.up();
-    expect(result.appliedCount).toBe(1);
-    expect(result.versions).toEqual([1]);
+    expect(result.appliedCount).toBe(2);
+    expect(result.versions).toEqual([1, 2]);
 
     const applied = migrator.getAppliedMigrations();
-    expect(applied).toHaveLength(1);
+    expect(applied).toHaveLength(2);
     expect(applied[0]?.version).toBe(1);
     expect(applied[0]?.name).toBe("001_initial_schema");
+    expect(applied[1]?.version).toBe(2);
+    expect(applied[1]?.name).toBe("002_audit_events");
 
     // Verify tables exist
     const tables = db
@@ -40,6 +43,7 @@ describe("SqliteMigrator", () => {
     expect(tableNames).toContain("tasks");
     expect(tableNames).toContain("mailbox_events");
     expect(tableNames).toContain("open_sessions");
+    expect(tableNames).toContain("audit_events");
 
     // Re-running up is a no-op
     const reUp = migrator.up();
@@ -54,12 +58,12 @@ describe("SqliteMigrator", () => {
 
     // 1. Up
     migrator.up();
-    expect(migrator.getAppliedMigrations()).toHaveLength(1);
+    expect(migrator.getAppliedMigrations()).toHaveLength(2);
 
     // 2. Down
     const downRes = migrator.down(0);
-    expect(downRes.rolledBackCount).toBe(1);
-    expect(downRes.versions).toEqual([1]);
+    expect(downRes.rolledBackCount).toBe(2);
+    expect(downRes.versions).toEqual([2, 1]);
 
     // Check tables dropped
     const tablesAfterDown = db
@@ -71,8 +75,8 @@ describe("SqliteMigrator", () => {
 
     // 3. Up again
     const reUpRes = migrator.up();
-    expect(reUpRes.appliedCount).toBe(1);
-    expect(migrator.getAppliedMigrations()).toHaveLength(1);
+    expect(reUpRes.appliedCount).toBe(2);
+    expect(migrator.getAppliedMigrations()).toHaveLength(2);
 
     db.close();
   });

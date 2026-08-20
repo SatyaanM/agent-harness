@@ -166,12 +166,54 @@ DROP TABLE IF EXISTS sessions;
 
 DROP TABLE IF EXISTS schema_migrations;`;
 
+export const AUDIT_EVENTS_UP = `-- Migration 002: Tamper-Evident Cryptographic Audit Ledger Table
+CREATE TABLE IF NOT EXISTS audit_events (
+  seq_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  prev_hash TEXT NOT NULL,
+  current_hash TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('user', 'agent', 'system')),
+  actor_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  signature TEXT,
+  CONSTRAINT chk_audit_seq_id_positive CHECK (seq_id > 0),
+  CONSTRAINT chk_audit_prev_hash_len CHECK (length(prev_hash) = 64),
+  CONSTRAINT chk_audit_current_hash_len CHECK (length(current_hash) = 64),
+  CONSTRAINT chk_audit_actor_id_nonempty CHECK (length(actor_id) > 0),
+  CONSTRAINT chk_audit_action_nonempty CHECK (length(action) > 0),
+  CONSTRAINT chk_audit_resource_type_nonempty CHECK (length(resource_type) > 0),
+  CONSTRAINT chk_audit_resource_id_nonempty CHECK (length(resource_id) > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_current_hash ON audit_events(current_hash);
+CREATE INDEX IF NOT EXISTS idx_audit_events_action_ts ON audit_events(action, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_resource ON audit_events(resource_type, resource_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_type, actor_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp ON audit_events(timestamp DESC);`;
+
+export const AUDIT_EVENTS_DOWN = `-- Reversible down migration for audit events
+DROP INDEX IF EXISTS idx_audit_events_timestamp;
+DROP INDEX IF EXISTS idx_audit_events_actor;
+DROP INDEX IF EXISTS idx_audit_events_resource;
+DROP INDEX IF EXISTS idx_audit_events_action_ts;
+DROP INDEX IF EXISTS idx_audit_events_current_hash;
+DROP TABLE IF EXISTS audit_events;`;
+
 export const BUILTIN_MIGRATIONS: readonly MigrationFile[] = Object.freeze([
   {
     version: 1,
     name: "001_initial_schema",
     upSql: INITIAL_SCHEMA_UP,
     downSql: INITIAL_SCHEMA_DOWN,
+  },
+  {
+    version: 2,
+    name: "002_audit_events",
+    upSql: AUDIT_EVENTS_UP,
+    downSql: AUDIT_EVENTS_DOWN,
   },
 ]);
 
