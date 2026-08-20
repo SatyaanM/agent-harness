@@ -1,8 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-test.describe("Live Dashboard Smoke", () => {
+test.describe("Live Dashboard Smoke (Mocked)", () => {
   test("loads root page and renders shell navigation", async ({ page }) => {
-    // Mock minimal settings to render shell cleanly
     await page.route("**/api/settings", async (route) => {
       await route.fulfill({
         status: 200,

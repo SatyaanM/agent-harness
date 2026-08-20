@@ -6,6 +6,7 @@ export default defineConfig({
     restoreMocks: true,
     projects: [
       "vitest.tooling.config.mts",
+      "vitest.test-infra.config.mts",
       "packages/core/vitest.config.ts",
       "packages/server/vitest.config.ts",
       "packages/dashboard/vitest.config.mts",

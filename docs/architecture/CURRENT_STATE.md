@@ -107,7 +107,7 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 
 ## Verification reality
 
-The root Vitest project matrix includes core, server, dashboard, and repository-tooling projects. The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. Production and test sources are both typechecked under strict mode. Coverage includes:
+The root Vitest project matrix includes core, server, dashboard, repository-tooling, and test-infra projects. The test-infra project runs zero-cost deterministic wire-compatible Fake LLM provider tests (`test/fake-provider/`), ephemeral full-stack integration suites (`test/helpers/`), chaos crash recovery tests (`test/chaos/`), load/concurrency stress tests (`test/load/`), and adversarial security red-team tests (`test/security/`). Full-stack browser interactions are validated through Playwright E2E suites (`packages/dashboard/e2e/fullstack/`). The tooling project tests executable TypeScript, trust-boundary, workflow supply-chain, and dependency-audit policies with negative fixtures. Production and test sources are both typechecked under strict mode. Coverage includes:
 
 - malformed persisted configuration, read-only root ownership, and quarantine-on-repair behavior;
 - valid and invalid session transcript/mailbox records, including byte preservation, content-free diagnostics, and healthy-record listing;
