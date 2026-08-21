@@ -43,6 +43,39 @@ export function resolveLanguage(language?: string, itemName?: string): string {
   return "text";
 }
 
+let textHighlighterPromise: Promise<Highlighter> | null = null;
+
+const SUPPORTED_LANGS = [
+  "typescript",
+  "javascript",
+  "json",
+  "yaml",
+  "python",
+  "ruby",
+  "rust",
+  "go",
+  "html",
+  "css",
+  "scss",
+  "markdown",
+  "shell",
+  "xml",
+  "sql",
+  "graphql",
+  "toml",
+  "ini",
+];
+
+function getTextHighlighter(): Promise<Highlighter> {
+  if (!textHighlighterPromise) {
+    textHighlighterPromise = createHighlighter({
+      themes: ["github-dark"],
+      langs: SUPPORTED_LANGS,
+    });
+  }
+  return textHighlighterPromise;
+}
+
 export function TextRenderer({ content, language, item }: TextRendererProps) {
   const [highlighter, setHighlighter] = useState<Highlighter | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,11 +83,11 @@ export function TextRenderer({ content, language, item }: TextRendererProps) {
   const resolvedLang = useMemo(() => resolveLanguage(language, item?.name), [language, item?.name]);
 
   useEffect(() => {
+    if (content.length === 0 || resolvedLang === "text") {
+      return;
+    }
     let cancelled = false;
-    createHighlighter({
-      themes: ["github-dark"],
-      langs: [resolvedLang === "text" ? "typescript" : resolvedLang],
-    })
+    getTextHighlighter()
       .then((h) => {
         if (!cancelled) setHighlighter(h);
       })
@@ -64,7 +97,7 @@ export function TextRenderer({ content, language, item }: TextRendererProps) {
     return () => {
       cancelled = true;
     };
-  }, [resolvedLang]);
+  }, [resolvedLang, content.length]);
 
   const lines = useMemo(() => content.split("\n"), [content]);
 
@@ -84,7 +117,7 @@ export function TextRenderer({ content, language, item }: TextRendererProps) {
     );
   }
 
-  if (!highlighter) {
+  if (resolvedLang !== "text" && !highlighter) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-400 text-sm">
         Loading...
@@ -93,7 +126,7 @@ export function TextRenderer({ content, language, item }: TextRendererProps) {
   }
 
   const highlighted =
-    resolvedLang === "text"
+    resolvedLang === "text" || !highlighter
       ? null
       : (() => {
           try {

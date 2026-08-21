@@ -5,14 +5,14 @@ import { canonicalJsonStringify } from "./canonical-json.js";
 export const MAX_AUDIT_PAYLOAD_BYTES = 65_536;
 
 const SENSITIVE_KEY_REGEX =
-  /password|secret|token|api_key|authorization|bearer|private_key|credential/i;
+  /password|secret|token|api[-_]?key|authorization|bearer|private[-_]?key|credential/i;
 
 const SENSITIVE_VALUE_PATTERNS = [
   /sk-[a-zA-Z0-9_-]{20,}/g, // OpenAI/Anthropic keys
   /AIza[0-9A-Za-z-_]{35}/g, // Google API keys
   /ghp_[0-9a-zA-Z]{36}/g, // GitHub PATs
   /Bearer\s+[a-zA-Z0-9._~+/-]+=*/gi, // Bearer headers
-  /-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g,
+  /-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----(?:(?!-----BEGIN)[\s\S])+?-----END (?:[A-Z0-9_-]+ )?PRIVATE KEY-----/g,
 ];
 
 export function redactSecretsRecursive(val: unknown): unknown {
