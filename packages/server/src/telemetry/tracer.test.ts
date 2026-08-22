@@ -1,6 +1,8 @@
-import { getTracer, SpanKind, SpanStatusCode } from "@agent-harness/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getTracer, parseJsonBoundary, SpanKind, SpanStatusCode } from "@agent-harness/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
+  createOtlpHttpExporter,
   getServerTracer,
   initTelemetry,
   ServerTracer,
@@ -9,12 +11,13 @@ import {
 } from "./tracer.js";
 
 describe("ServerTracer and Telemetry", () => {
-  beforeEach(() => {
-    shutdownTelemetry();
+  beforeEach(async () => {
+    await shutdownTelemetry();
   });
 
-  afterEach(() => {
-    shutdownTelemetry();
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await shutdownTelemetry();
   });
 
   it("creates and records server spans accurately", () => {
@@ -126,5 +129,116 @@ describe("ServerTracer and Telemetry", () => {
 
     expect(batches.length).toBe(2);
     await tracer.flush();
+  });
+
+  it("creates a fresh root trace when options.root is true even within an active span", async () => {
+    const tracer = new ServerTracer();
+    const parent = tracer.startSpan("parent");
+
+    await tracer.withSpan(parent, async () => {
+      const rootSpan = tracer.startSpan("independent_root", { root: true });
+      expect(rootSpan.spanContext().traceId).not.toBe(parent.spanContext().traceId);
+      rootSpan.end();
+    });
+
+    parent.end();
+
+    const finished = tracer.getFinishedSpans();
+    const rootRecord = finished.find((s) => s.name === "independent_root");
+    expect(rootRecord?.parentSpanId).toBeUndefined();
+  });
+
+  it("awaits shutdown of flushable exporter in shutdownTelemetry", async () => {
+    let shutdownCalled = false;
+    const fakeFlushableExporter = Object.assign(() => {}, {
+      flush: async () => {},
+      shutdown: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        shutdownCalled = true;
+      },
+    });
+
+    initTelemetry({ enabled: true, exporter: fakeFlushableExporter });
+    await shutdownTelemetry();
+    expect(shutdownCalled).toBe(true);
+  });
+
+  it("correctly serializes integers, floats, and arrays into OTLP payload without errors", async () => {
+    let capturedBody: string | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: { body?: string }) => {
+        capturedBody = init?.body;
+        return new Response(null, { status: 200 });
+      }),
+    );
+
+    const exporter = createOtlpHttpExporter("http://localhost:4318/v1/traces");
+    const record: SpanRecord = {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      name: "test.otlp",
+      kind: SpanKind.INTERNAL,
+      startTime: 1000.5, // float timestamp
+      endTime: 1050.2, // float timestamp
+      durationMs: 49.7,
+      status: { code: SpanStatusCode.OK },
+      attributes: {
+        intAttr: 42,
+        floatAttr: 3.14,
+        strAttr: "hello",
+        boolAttr: true,
+        arrayAttr: ["a", "b"],
+        numArrayAttr: [1, 2.5],
+      },
+      events: [],
+      links: [],
+    };
+
+    await exporter([record]);
+    expect(capturedBody).toBeDefined();
+    if (!capturedBody) throw new Error("Expected capturedBody");
+
+    const OtlpPayloadSchema = z.object({
+      resourceSpans: z.array(
+        z.object({
+          scopeSpans: z.array(
+            z.object({
+              spans: z.array(
+                z.object({
+                  startTimeUnixNano: z.string(),
+                  endTimeUnixNano: z.string(),
+                  attributes: z.array(
+                    z.object({
+                      key: z.string(),
+                      value: z.unknown(),
+                    }),
+                  ),
+                }),
+              ),
+            }),
+          ),
+        }),
+      ),
+    });
+
+    const parsed = parseJsonBoundary(OtlpPayloadSchema, capturedBody, "otlp payload");
+    const span = parsed.resourceSpans[0]?.scopeSpans[0]?.spans[0];
+    if (!span) throw new Error("Expected span in parsed OTLP payload");
+
+    expect(span.startTimeUnixNano).toBe("1001000000"); // rounded 1001 * 1e6
+    expect(span.endTimeUnixNano).toBe("1050000000"); // rounded 1050 * 1e6
+
+    const attrs = Object.fromEntries(span.attributes.map((a) => [a.key, a.value]));
+    expect(attrs.intAttr).toEqual({ intValue: "42" });
+    expect(attrs.floatAttr).toEqual({ doubleValue: 3.14 });
+    expect(attrs.strAttr).toEqual({ stringValue: "hello" });
+    expect(attrs.boolAttr).toEqual({ boolValue: true });
+    expect(attrs.arrayAttr).toEqual({
+      arrayValue: { values: [{ stringValue: "a" }, { stringValue: "b" }] },
+    });
+    expect(attrs.numArrayAttr).toEqual({
+      arrayValue: { values: [{ intValue: "1" }, { doubleValue: 2.5 }] },
+    });
   });
 });

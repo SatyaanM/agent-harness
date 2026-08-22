@@ -81,7 +81,6 @@ export class Worker {
         span.setStatus({
           code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
         });
-        span.end();
         return workerResult;
       } catch (error) {
         const isCancelled =
@@ -97,7 +96,6 @@ export class Worker {
           code: isCancelled ? SpanStatusCode.OK : SpanStatusCode.ERROR,
           message: isCancelled ? "Cancelled by user" : describeError(error).message,
         });
-        span.end();
         const workerResult: WorkerResult = {
           taskId: this.taskId,
           status: isCancelled ? "cancelled" : "error",
@@ -110,6 +108,8 @@ export class Worker {
         };
 
         return workerResult;
+      } finally {
+        span.end();
       }
     });
   }

@@ -80,9 +80,17 @@ export class Agent {
       }
       if (timeoutController.signal.aborted) {
         runSpan.recordException(error);
+        runSpan.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: `Agent run exceeded ${timeoutMs}ms deadline`,
+        });
         throw new AgentBudgetExceededError(`Agent run exceeded ${timeoutMs}ms deadline`);
       }
       runSpan.recordException(error);
+      runSpan.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -130,7 +138,7 @@ export class Agent {
       });
 
       try {
-        const response = await tracer.withSpan(stepSpan, async () => {
+        const stepResult = await tracer.withSpan(stepSpan, async () => {
           const llmSpan = tracer.startSpan("gen_ai.chat", {
             kind: SpanKind.CLIENT,
             attributes: {
@@ -139,6 +147,7 @@ export class Agent {
             },
           });
 
+          let response: LLMResponse;
           try {
             const rawResponse = await tracer.withSpan(llmSpan, async () => {
               return await this.llmClient.chat({
@@ -165,148 +174,166 @@ export class Agent {
               });
             }
             llmSpan.setStatus({ code: SpanStatusCode.OK });
-            return parsed;
+            response = parsed;
           } catch (llmError) {
             llmSpan.recordException(llmError);
+            llmSpan.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: llmError instanceof Error ? llmError.message : String(llmError),
+            });
             throw llmError;
           } finally {
             llmSpan.end();
           }
-        });
 
-        if (signal.aborted) {
-          throw new AgentCancelledError();
-        }
-
-        const responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
-        const responseMessage = responseToolCalls.length
-          ? { ...response.message, toolCalls: responseToolCalls }
-          : response.message;
-        this.messages.push(responseMessage);
-        this.onEvent?.({ type: "step", messages: [...this.messages] });
-
-        totalTokensUsed += tokenCharge(
-          response,
-          projectToolResultsForModel(this.messages, maxToolResultChars),
-          this.config.instructions,
-        );
-        if (totalTokensUsed > maxTotalTokens) {
-          if (responseToolCalls.length) {
-            this.messages.push(
-              ...responseToolCalls.map((toolCall) => ({
-                role: "tool" as const,
-                content: `Error: Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}); tool was not executed.`,
-                toolCallId: toolCall.toolCallId,
-              })),
-            );
+          if (signal.aborted) {
+            throw new AgentCancelledError();
           }
-          return this.budgetExceeded(
-            `Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}).`,
+
+          const responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+          const responseMessage = responseToolCalls.length
+            ? { ...response.message, toolCalls: responseToolCalls }
+            : response.message;
+          this.messages.push(responseMessage);
+          this.onEvent?.({ type: "step", messages: [...this.messages] });
+
+          totalTokensUsed += tokenCharge(
+            response,
+            projectToolResultsForModel(this.messages, maxToolResultChars),
+            this.config.instructions,
           );
-        }
-
-        if (response.finishReason === "stop") {
-          stepSpan.setStatus({ code: SpanStatusCode.OK });
-          return {
-            status: "success",
-            summary: response.message.content,
-            messages: [...this.messages],
-          };
-        }
-
-        if (response.finishReason !== "tool-calls") {
-          stepSpan.setStatus({ code: SpanStatusCode.ERROR });
-          return {
-            status: "error",
-            summary: `Provider stopped with finish reason ${response.finishReason}.`,
-            messages: [...this.messages],
-          };
-        }
-
-        if (responseToolCalls.length) {
-          for (const [toolCallIndex, toolCall] of responseToolCalls.entries()) {
-            if (signal.aborted) {
-              throw new AgentCancelledError();
-            }
-            if (toolCallsUsed >= maxToolCalls) {
+          if (totalTokensUsed > maxTotalTokens) {
+            if (responseToolCalls.length) {
               this.messages.push(
-                ...responseToolCalls.slice(toolCallIndex).map((skipped) => ({
+                ...responseToolCalls.map((toolCall) => ({
                   role: "tool" as const,
-                  content: `Error: Agent tool-call budget exceeded (${maxToolCalls}).`,
-                  toolCallId: skipped.toolCallId,
+                  content: `Error: Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}); tool was not executed.`,
+                  toolCallId: toolCall.toolCallId,
                 })),
               );
-              return this.budgetExceeded(`Agent tool-call budget exceeded (${maxToolCalls}).`);
             }
-            toolCallsUsed += 1;
+            stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+            return this.budgetExceeded(
+              `Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}).`,
+            );
+          }
 
-            const tool = this.toolRegistry.get(toolCall.toolName);
+          if (response.finishReason === "stop") {
+            stepSpan.setStatus({ code: SpanStatusCode.OK });
+            return {
+              status: "success" as const,
+              summary: response.message.content,
+              messages: [...this.messages],
+            };
+          }
 
-            if (!tool) {
-              this.messages.push({
-                role: "tool",
-                content: `Error: Tool "${toolCall.toolName}" not found`,
-                toolCallId: toolCall.toolCallId,
-              });
-              continue;
-            }
+          if (response.finishReason !== "tool-calls") {
+            stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+            return {
+              status: "error" as const,
+              summary: `Provider stopped with finish reason ${response.finishReason}.`,
+              messages: [...this.messages],
+            };
+          }
 
-            this.onEvent?.({
-              type: "tool:called",
-              toolName: toolCall.toolName,
-              args: toolCall.args,
-            });
-
-            const toolSpan = tracer.startSpan(`tool.execute: ${toolCall.toolName}`, {
-              kind: SpanKind.INTERNAL,
-              attributes: {
-                "agent.tool.name": toolCall.toolName,
-                "agent.tool.call_id": toolCall.toolCallId,
-              },
-            });
-
-            try {
-              const args = parseBoundary(
-                tool.parameters,
-                toolCall.args,
-                `tool ${toolCall.toolName} arguments`,
-              );
-              const result = await waitForAbort(tool.execute(args, { signal }), signal);
+          if (responseToolCalls.length) {
+            for (const [toolCallIndex, toolCall] of responseToolCalls.entries()) {
               if (signal.aborted) {
                 throw new AgentCancelledError();
               }
-              toolSpan.setStatus({ code: SpanStatusCode.OK });
+              if (toolCallsUsed >= maxToolCalls) {
+                this.messages.push(
+                  ...responseToolCalls.slice(toolCallIndex).map((skipped) => ({
+                    role: "tool" as const,
+                    content: `Error: Agent tool-call budget exceeded (${maxToolCalls}).`,
+                    toolCallId: skipped.toolCallId,
+                  })),
+                );
+                stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+                return this.budgetExceeded(`Agent tool-call budget exceeded (${maxToolCalls}).`);
+              }
+              toolCallsUsed += 1;
+
+              const tool = this.toolRegistry.get(toolCall.toolName);
+
+              if (!tool) {
+                this.messages.push({
+                  role: "tool",
+                  content: `Error: Tool "${toolCall.toolName}" not found`,
+                  toolCallId: toolCall.toolCallId,
+                });
+                continue;
+              }
 
               this.onEvent?.({
-                type: "tool:completed",
+                type: "tool:called",
                 toolName: toolCall.toolName,
-                result: boundToolResult(result, maxToolResultChars),
+                args: toolCall.args,
               });
-              this.messages.push({
-                role: "tool",
-                content: result,
-                toolCallId: toolCall.toolCallId,
+
+              const toolSpan = tracer.startSpan(`tool.execute: ${toolCall.toolName}`, {
+                kind: SpanKind.INTERNAL,
+                attributes: {
+                  "agent.tool.name": toolCall.toolName,
+                  "agent.tool.call_id": toolCall.toolCallId,
+                },
               });
-            } catch (error) {
-              toolSpan.recordException(error);
-              if (signal.aborted) {
-                throw new AgentCancelledError();
+
+              try {
+                await tracer.withSpan(toolSpan, async () => {
+                  const args = parseBoundary(
+                    tool.parameters,
+                    toolCall.args,
+                    `tool ${toolCall.toolName} arguments`,
+                  );
+                  const result = await waitForAbort(tool.execute(args, { signal }), signal);
+                  if (signal.aborted) {
+                    throw new AgentCancelledError();
+                  }
+                  toolSpan.setStatus({ code: SpanStatusCode.OK });
+
+                  this.onEvent?.({
+                    type: "tool:completed",
+                    toolName: toolCall.toolName,
+                    result: boundToolResult(result, maxToolResultChars),
+                  });
+                  this.messages.push({
+                    role: "tool",
+                    content: result,
+                    toolCallId: toolCall.toolCallId,
+                  });
+                });
+              } catch (error) {
+                toolSpan.recordException(error);
+                toolSpan.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message: error instanceof Error ? error.message : String(error),
+                });
+                if (signal.aborted) {
+                  throw new AgentCancelledError();
+                }
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                this.logger.error(`Tool "${toolCall.toolName}" failed`, {
+                  toolName: toolCall.toolName,
+                  ...describeError(error),
+                });
+                this.messages.push({
+                  role: "tool",
+                  content: `Error: ${errorMessage}`,
+                  toolCallId: toolCall.toolCallId,
+                });
+              } finally {
+                toolSpan.end();
               }
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              this.logger.error(`Tool "${toolCall.toolName}" failed`, {
-                toolName: toolCall.toolName,
-                ...describeError(error),
-              });
-              this.messages.push({
-                role: "tool",
-                content: `Error: ${errorMessage}`,
-                toolCallId: toolCall.toolCallId,
-              });
-            } finally {
-              toolSpan.end();
             }
+            this.onEvent?.({ type: "step", messages: [...this.messages] });
           }
-          this.onEvent?.({ type: "step", messages: [...this.messages] });
+
+          return undefined;
+        });
+
+        if (stepResult) {
+          return stepResult;
         }
       } finally {
         stepSpan.end();

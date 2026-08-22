@@ -216,4 +216,30 @@ describe("verifyAuditLedger", () => {
 
     db.close();
   });
+
+  it("prevents delimiter injection collisions when fields contain pipe characters", () => {
+    const hash1 = computeAuditEventHash({
+      prevHash: GENESIS_PREV_HASH,
+      timestamp: 1000,
+      actorType: "user",
+      actorId: "u1|session.delete",
+      action: "test",
+      resourceType: "session",
+      resourceId: "s1",
+      canonicalPayload: "{}",
+    });
+
+    const hash2 = computeAuditEventHash({
+      prevHash: GENESIS_PREV_HASH,
+      timestamp: 1000,
+      actorType: "user",
+      actorId: "u1",
+      action: "session.delete|test",
+      resourceType: "session",
+      resourceId: "s1",
+      canonicalPayload: "{}",
+    });
+
+    expect(hash1).not.toBe(hash2);
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { GENESIS_PREV_HASH } from "../../crypto/audit-hash.js";
+import { computeAuditEventHash, GENESIS_PREV_HASH } from "../../crypto/audit-hash.js";
 import { canonicalJsonStringify } from "../../crypto/canonical-json.js";
 import { parseJsonBoundary } from "../../validation.js";
 import { AuditRepository } from "./audit-repo.js";
@@ -160,5 +160,31 @@ describe("AuditRepository & Cryptographic Hash Chaining", () => {
 
     expect(strA).toBe(strB);
     expect(strA).toBe('{"a":1,"b":2,"c":{"x":10,"y":20}}');
+  });
+
+  it("prevents delimiter injection collisions when fields contain pipe characters", () => {
+    const hash1 = computeAuditEventHash({
+      prevHash: GENESIS_PREV_HASH,
+      timestamp: 1000,
+      actorType: "user",
+      actorId: "user|session.delete",
+      action: "test",
+      resourceType: "session",
+      resourceId: "s1",
+      canonicalPayload: "{}",
+    });
+
+    const hash2 = computeAuditEventHash({
+      prevHash: GENESIS_PREV_HASH,
+      timestamp: 1000,
+      actorType: "user",
+      actorId: "user",
+      action: "session.delete|test",
+      resourceType: "session",
+      resourceId: "s1",
+      canonicalPayload: "{}",
+    });
+
+    expect(hash1).not.toBe(hash2);
   });
 });

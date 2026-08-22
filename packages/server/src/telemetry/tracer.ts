@@ -183,8 +183,9 @@ export class ServerTracer implements ITracer {
   }
 
   startSpan(name: string, options?: SpanOptions, parentContext?: ITraceContext): ISpan {
-    const activeSpan = this.storage.getStore();
-    const resolvedParentContext = parentContext ?? activeSpan?.spanContext();
+    const isRoot = options?.root === true;
+    const activeSpan = isRoot ? undefined : this.storage.getStore();
+    const resolvedParentContext = isRoot ? undefined : (parentContext ?? activeSpan?.spanContext());
 
     const traceId = resolvedParentContext?.traceId ?? W3CTraceContext.generateTraceId();
     const spanId = W3CTraceContext.generateSpanId();
@@ -290,10 +291,10 @@ export function initTelemetry(options?: {
   return activeServerTracer;
 }
 
-export function shutdownTelemetry(): void {
+export async function shutdownTelemetry(): Promise<void> {
   if (activeServerTracer) {
     if (isFlushableExporter(activeServerTracer.exporter)) {
-      void activeServerTracer.exporter.shutdown();
+      await activeServerTracer.exporter.shutdown();
     }
     activeServerTracer.clearFinishedSpans();
     activeServerTracer = undefined;
@@ -380,6 +381,32 @@ export function createBatchOtlpHttpExporter(
   return exporter;
 }
 
+function toOtlpAttributeValue(v: AttributeValue): Record<string, unknown> {
+  if (typeof v === "string") {
+    return { stringValue: v };
+  }
+  if (typeof v === "boolean") {
+    return { boolValue: v };
+  }
+  if (typeof v === "number") {
+    return Number.isInteger(v) ? { intValue: v.toString() } : { doubleValue: v };
+  }
+  if (Array.isArray(v)) {
+    return {
+      arrayValue: {
+        values: v.map((item) => toOtlpAttributeValue(item)),
+      },
+    };
+  }
+  return { stringValue: String(v) };
+}
+
+function isDefinedAttributeEntry(
+  entry: [string, AttributeValue | undefined],
+): entry is [string, AttributeValue] {
+  return entry[1] !== undefined;
+}
+
 export function createOtlpHttpExporter(endpoint: string): SpanExporter {
   return async (spans) => {
     try {
@@ -406,23 +433,20 @@ export function createOtlpHttpExporter(endpoint: string): SpanExporter {
                 parentSpanId: s.parentSpanId,
                 name: s.name,
                 kind: s.kind,
-                startTimeUnixNano: (BigInt(s.startTime) * 1_000_000n).toString(),
-                endTimeUnixNano: (BigInt(s.endTime ?? s.startTime) * 1_000_000n).toString(),
+                startTimeUnixNano: (BigInt(Math.round(s.startTime)) * 1_000_000n).toString(),
+                endTimeUnixNano: (
+                  BigInt(Math.round(s.endTime ?? s.startTime)) * 1_000_000n
+                ).toString(),
                 status: {
                   code: s.status.code,
                   message: s.status.message,
                 },
-                attributes: Object.entries(s.attributes).map(([k, v]) => ({
-                  key: k,
-                  value:
-                    typeof v === "string"
-                      ? { stringValue: v }
-                      : typeof v === "number"
-                        ? { intValue: v.toString() }
-                        : typeof v === "boolean"
-                          ? { boolValue: v }
-                          : { stringValue: String(v) },
-                })),
+                attributes: Object.entries(s.attributes)
+                  .filter(isDefinedAttributeEntry)
+                  .map(([k, v]) => ({
+                    key: k,
+                    value: toOtlpAttributeValue(v),
+                  })),
               })),
             },
           ],

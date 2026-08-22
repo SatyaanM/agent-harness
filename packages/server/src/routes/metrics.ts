@@ -7,7 +7,7 @@ import {
   concurrencyActiveGauge,
   concurrencyQueueDepthGauge,
   metricRegistry,
-  sessionsTotalGauge,
+  sessionsGauge,
 } from "../telemetry/index.js";
 
 export const metricsRouter: Router = Router();
@@ -25,14 +25,14 @@ metricsRouter.get("/", (req, res) => {
   const metrics = sessionManager.metrics();
   concurrencyActiveGauge.set(undefined, metrics.agentExecutions.active);
   concurrencyQueueDepthGauge.set(undefined, metrics.agentExecutions.queued);
-  sessionsTotalGauge.set({ state: "loaded" }, metrics.loadedSessions);
+  sessionsGauge.set({ state: "loaded" }, metrics.loadedSessions);
 
   const db = sessionManager.getDb();
   if (db) {
     try {
       const sessionRepo = new SessionRepository(db);
       const totalPersisted = sessionRepo.count();
-      sessionsTotalGauge.set({ state: "persisted" }, totalPersisted);
+      sessionsGauge.set({ state: "persisted" }, totalPersisted);
     } catch {
       // Non-blocking best-effort
     }

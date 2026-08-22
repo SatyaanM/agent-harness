@@ -63,10 +63,10 @@ export const mailboxEventsCounter = metricRegistry.registerCounter<"status">({
   type: "counter",
 });
 
-// 8. Sessions Total Gauge
-export const sessionsTotalGauge = metricRegistry.registerGauge<"state">({
-  name: "agent_harness_sessions_total",
-  help: "Total number of sessions (loaded in-memory vs persisted in database).",
+// 8. Sessions Gauge
+export const sessionsGauge = metricRegistry.registerGauge<"state">({
+  name: "agent_harness_sessions",
+  help: "Current number of sessions (loaded in-memory vs persisted in database).",
   labelNames: ["state"],
   type: "gauge",
 });

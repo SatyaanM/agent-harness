@@ -124,6 +124,7 @@ export class AuditRepository {
     limit?: number;
     offset?: number;
     action?: string;
+    actorType?: string;
     actorId?: string;
     resourceType?: string;
   }): { events: readonly AuditEventRow[]; total: number } {
@@ -136,6 +137,10 @@ export class AuditRepository {
     if (options?.action) {
       conditions.push("action = ?");
       params.push(options.action);
+    }
+    if (options?.actorType) {
+      conditions.push("actor_type = ?");
+      params.push(options.actorType);
     }
     if (options?.actorId) {
       conditions.push("actor_id = ?");

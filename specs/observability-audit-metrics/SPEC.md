@@ -81,7 +81,7 @@ Exposed at `GET /api/metrics` supporting `text/plain; version=0.0.4` and `applic
 | `agent_harness_concurrency_active_runs` | Gauge | Number of actively running agent executions. | None | N/A |
 | `agent_harness_concurrency_queue_depth` | Gauge | Number of executions waiting for limiter capacity. | None | N/A |
 | `agent_harness_mailbox_events_total` | Counter | Total worker mailbox completion events processed. | `status="acknowledged\|abandoned\|rejected"` | N/A |
-| `agent_harness_sessions_total` | Gauge | Total sessions count. | `state="loaded\|persisted"` | N/A |
+| `agent_harness_sessions` | Gauge | Total sessions count. | `state="loaded\|persisted"` | N/A |
 
 #### Cardinality Protection
 Dynamic labels (`agent`, `model`, `tool`) are strictly sanitized:

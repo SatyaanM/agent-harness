@@ -24,4 +24,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_current_hash ON audit_events(
 CREATE INDEX IF NOT EXISTS idx_audit_events_action_ts ON audit_events(action, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_events_resource ON audit_events(resource_type, resource_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_type, actor_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_actor_id ON audit_events(actor_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp ON audit_events(timestamp DESC);

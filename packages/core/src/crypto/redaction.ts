@@ -10,12 +10,17 @@ const SENSITIVE_KEY_REGEX =
 const SENSITIVE_VALUE_PATTERNS = [
   /sk-[a-zA-Z0-9_-]{20,}/g, // OpenAI/Anthropic keys
   /AIza[0-9A-Za-z-_]{35}/g, // Google API keys
-  /ghp_[0-9a-zA-Z]{36}/g, // GitHub PATs
+  /ghp_[0-9a-zA-Z]{36}/g, // GitHub classic PATs
+  /github_pat_[0-9a-zA-Z_]{22,}/g, // GitHub fine-grained PATs
+  /gh[osru]_[0-9a-zA-Z]{36}/g, // GitHub OAuth/app/refresh tokens
+  /AKIA[0-9A-Z]{16}/g, // AWS Access Key IDs
+  /xox[baprs]-[0-9a-zA-Z-]{10,80}/g, // Slack tokens
+  /eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/g, // Standalone JWTs
   /Bearer\s+[a-zA-Z0-9._~+/-]+=*/gi, // Bearer headers
   /-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----(?:(?!-----BEGIN)[\s\S])+?-----END (?:[A-Z0-9_-]+ )?PRIVATE KEY-----/g,
 ];
 
-export function redactSecretsRecursive(val: unknown): unknown {
+export function redactSecretsRecursive(val: unknown, seen = new WeakSet<object>()): unknown {
   if (val === null || typeof val !== "object") {
     if (typeof val === "string") {
       let redacted = val;
@@ -27,8 +32,13 @@ export function redactSecretsRecursive(val: unknown): unknown {
     return val;
   }
 
+  if (seen.has(val)) {
+    return "[CIRCULAR]";
+  }
+  seen.add(val);
+
   if (Array.isArray(val)) {
-    return val.map((item) => redactSecretsRecursive(item));
+    return val.map((item) => redactSecretsRecursive(item, seen));
   }
 
   if (!isRecord(val)) {
@@ -40,7 +50,7 @@ export function redactSecretsRecursive(val: unknown): unknown {
     if (SENSITIVE_KEY_REGEX.test(key)) {
       result[key] = "[REDACTED]";
     } else {
-      result[key] = redactSecretsRecursive(propVal);
+      result[key] = redactSecretsRecursive(propVal, seen);
     }
   }
   return result;

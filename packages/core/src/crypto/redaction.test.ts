@@ -12,11 +12,27 @@ describe("redaction", () => {
       const openAi = ["sk-", "ant-api03-abcdefghijklmnopqrstuvwxyz123456"].join(""); // mock test-key
       const google = ["AIza", "SyD-1234567890abcdefghijklmnopqrs12"].join(""); // mock test-key
       const github = ["ghp_", "0123456789abcdefghijklmnopqrstuvwxyz"].join(""); // mock test-token
+      const githubPat = ["github_pat_", "11ABCD1234_abcdefghijklmnopqrstuvwxyz1234567890"].join(""); // mock test-token
+      const githubOauth = ["gho_", "0123456789abcdefghijklmnopqrstuvwxyz"].join(""); // mock test-token
+      const aws = ["AKIA", "IOSFODNN7EXAMPLE"].join(""); // mock test-key
+      const slack = ["xoxb-", "123456789012-", "1234567890123-", "abcdefghijklmnopqrstuvwx"].join(
+        "",
+      ); // mock test-token
+      const jwt = [
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.",
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0.",
+        "doNotLeakThisSignature123",
+      ].join("");
       const bearer = ["Bearer ", "ya29.a0AfH6SM-token_val123=="].join(""); // mock test-token
 
       expect(redactSecretsRecursive(openAi)).toBe("[REDACTED]");
       expect(redactSecretsRecursive(google)).toBe("[REDACTED]");
       expect(redactSecretsRecursive(github)).toBe("[REDACTED]");
+      expect(redactSecretsRecursive(githubPat)).toBe("[REDACTED]");
+      expect(redactSecretsRecursive(githubOauth)).toBe("[REDACTED]");
+      expect(redactSecretsRecursive(aws)).toBe("[REDACTED]");
+      expect(redactSecretsRecursive(slack)).toBe("[REDACTED]");
+      expect(redactSecretsRecursive(jwt)).toBe("[REDACTED]");
       expect(redactSecretsRecursive(bearer)).toBe("[REDACTED]");
     });
 
@@ -114,6 +130,21 @@ describe("redaction", () => {
       expect(redactSecretsRecursive(true)).toBe(true);
       expect(redactSecretsRecursive(null)).toBe(null);
       expect(redactSecretsRecursive(undefined)).toBe(undefined);
+    });
+
+    it("handles circular object references without throwing stack overflow", () => {
+      const circular: Record<string, unknown> = {
+        name: "circular-test",
+        secret: "my-secret-token",
+      };
+      circular.self = circular;
+
+      const redacted = redactSecretsRecursive(circular);
+      expect(isRecord(redacted)).toBe(true);
+      if (!isRecord(redacted)) throw new Error("Expected record");
+      expect(redacted.secret).toBe("[REDACTED]");
+      expect(redacted.name).toBe("circular-test");
+      expect(redacted.self).toBe("[CIRCULAR]");
     });
   });
 

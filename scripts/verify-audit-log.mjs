@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 export const GENESIS_PREV_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
 export function computeAuditEventHash(event) {
-  const preimage = [
+  const fields = [
     event.prevHash,
     event.timestamp.toString(),
     event.actorType,
@@ -16,7 +16,9 @@ export function computeAuditEventHash(event) {
     event.resourceType,
     event.resourceId,
     event.canonicalPayload,
-  ].join("|");
+  ];
+
+  const preimage = fields.map((field) => `${field.length}:${field}`).join("|");
 
   return crypto.createHash("sha256").update(preimage, "utf8").digest("hex");
 }
