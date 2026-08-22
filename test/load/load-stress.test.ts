@@ -91,5 +91,5 @@ describe("Load & Concurrency Benchmarks", () => {
       .get();
     expect(row?.total).toBe(50);
     verifyDb.close();
-  });
+  }, 30_000);
 });

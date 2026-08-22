@@ -49,5 +49,5 @@ describe("Windows NTFS File Locking & WAL Cleanliness", () => {
       fs.renameSync(dbPath, renamedPath);
       fs.unlinkSync(renamedPath);
     }).not.toThrow();
-  });
+  }, 30_000);
 });

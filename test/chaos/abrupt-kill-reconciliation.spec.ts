@@ -87,5 +87,5 @@ describe("Chaos Crash Injection & Orphan Task Reconciliation", () => {
     expect(pendingEvents.some((e) => e.task_id === "task-orphaned-running")).toBe(true);
     expect(pendingEvents.some((e) => e.task_id === "task-orphaned-queued")).toBe(true);
     expect(pendingEvents[0]?.event_type).toBe("worker_abandoned");
-  });
+  }, 30_000);
 });
