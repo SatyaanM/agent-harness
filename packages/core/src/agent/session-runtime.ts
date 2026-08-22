@@ -58,6 +58,22 @@ export type SessionRuntimeEvent =
       runId: string;
       requestId?: string;
     }
+  | {
+      sessionId: string;
+      type: "agent:text-delta";
+      agentName: string;
+      text: string;
+      runId: string;
+      requestId?: string;
+    }
+  | {
+      sessionId: string;
+      type: "agent:tool-call-delta";
+      agentName: string;
+      toolCall: { id: string; name: string; argumentsDelta: string };
+      runId: string;
+      requestId?: string;
+    }
   | { sessionId: string; type: "session:updated"; session: SessionData };
 
 export type SessionRuntimeEventWithoutSession =
@@ -89,6 +105,20 @@ export type SessionRuntimeEventWithoutSession =
       runId: string;
       requestId?: string;
     }
+  | {
+      type: "agent:text-delta";
+      agentName: string;
+      text: string;
+      runId: string;
+      requestId?: string;
+    }
+  | {
+      type: "agent:tool-call-delta";
+      agentName: string;
+      toolCall: { id: string; name: string; argumentsDelta: string };
+      runId: string;
+      requestId?: string;
+    }
   | { type: "session:updated"; session: SessionData };
 
 export interface RunCorrelation {
@@ -111,6 +141,7 @@ export interface SessionRuntimeOptions {
 
 export class SessionRuntime {
   private queue: Promise<unknown> = Promise.resolve();
+  private listeners = new Set<(event: SessionRuntimeEvent) => void>();
   private readonly sessionStore?: SessionStore;
   private readonly db?: ISqliteDatabase;
   private readonly sessionRepo?: SessionRepository;
@@ -131,6 +162,14 @@ export class SessionRuntime {
       this.mailboxRepo = new MailboxRepository(options.db);
     }
     this.logger = createLogger("core.session-runtime").child({ sessionId: options.sessionId });
+  }
+
+  on(listener: (event: SessionRuntimeEvent) => void): void {
+    this.listeners.add(listener);
+  }
+
+  off(listener: (event: SessionRuntimeEvent) => void): void {
+    this.listeners.delete(listener);
   }
 
   /**
@@ -167,7 +206,15 @@ export class SessionRuntime {
   }
 
   private emit(event: SessionRuntimeEventWithoutSession): void {
-    this.options.onEvent?.({ sessionId: this.options.sessionId, ...event });
+    const fullEvent: SessionRuntimeEvent = { sessionId: this.options.sessionId, ...event };
+    this.options.onEvent?.(fullEvent);
+    for (const listener of this.listeners) {
+      try {
+        listener(fullEvent);
+      } catch (err) {
+        this.logger.error("Error in SessionRuntime listener", { ...describeError(err) });
+      }
+    }
   }
 
   private isAvailable(): boolean {
@@ -480,6 +527,26 @@ export class SessionRuntime {
               });
               return;
             }
+            if (e.type === "text-delta") {
+              this.emit({
+                type: "agent:text-delta",
+                agentName: agentConfig.name,
+                text: e.text,
+                runId,
+                ...(requestId ? { requestId } : {}),
+              });
+              return;
+            }
+            if (e.type === "tool-call-delta") {
+              this.emit({
+                type: "agent:tool-call-delta",
+                agentName: agentConfig.name,
+                toolCall: e.toolCall,
+                runId,
+                ...(requestId ? { requestId } : {}),
+              });
+              return;
+            }
             if (e.type === "tool:called" || e.type === "tool:completed") {
               const isCalled = e.type === "tool:called";
               this.emit({
@@ -489,9 +556,10 @@ export class SessionRuntime {
                   type: isCalled ? "called" : "completed",
                   toolName: e.toolName,
                   args: isCalled ? e.args : undefined,
-                  result: isCalled ? undefined : e.result,
+                  result: !isCalled ? e.result : undefined,
                 },
-                ...correlation,
+                runId,
+                ...(requestId ? { requestId } : {}),
               });
             }
           },

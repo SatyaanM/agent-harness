@@ -79,17 +79,29 @@ chatRouter.post(
     try {
       await tracer.withSpan(serverSpan, async () => {
         const runtime = sessionManager.getOrCreate(sessionId);
-        const result = retry
-          ? await runtime.retry(message, agentName, controller.signal, requestId)
-          : await runtime.deliver(message, agentName, controller.signal, requestId);
-        const chunks = chunkSummary(result.summary);
-        for (const chunk of chunks) {
-          res.write(`data: ${JSON.stringify({ type: "text-delta", text: chunk })}\n\n`);
+        const handleEvent = (event: import("@agent-harness/core").SessionRuntimeEvent) => {
+          if ("requestId" in event && event.requestId === requestId) {
+            if (event.type === "agent:text-delta") {
+              res.write(`data: ${JSON.stringify({ type: "text-delta", text: event.text })}\n\n`);
+            } else if (event.type === "agent:tool-call-delta") {
+              res.write(
+                `data: ${JSON.stringify({ type: "tool-call-delta", toolCall: event.toolCall })}\n\n`,
+              );
+            }
+          }
+        };
+        runtime.on(handleEvent);
+        try {
+          const result = retry
+            ? await runtime.retry(message, agentName, controller.signal, requestId)
+            : await runtime.deliver(message, agentName, controller.signal, requestId);
+          res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+          serverSpan.setStatus({
+            code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+          });
+        } finally {
+          runtime.off(handleEvent);
         }
-        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-        serverSpan.setStatus({
-          code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
-        });
       });
     } catch (error) {
       serverSpan.recordException(error);
@@ -110,12 +122,3 @@ chatRouter.post(
     if (!res.destroyed) res.end();
   }),
 );
-
-function chunkSummary(summary: string): string[] {
-  if (summary.length === 0) return [""];
-  const chunks: string[] = [];
-  for (let offset = 0; offset < summary.length; offset += 40) {
-    chunks.push(summary.slice(offset, offset + 40));
-  }
-  return chunks;
-}

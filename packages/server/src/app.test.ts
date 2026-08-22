@@ -264,26 +264,6 @@ describe("upstream trust boundaries", () => {
     expect(res.text).not.toContain("provider-secret");
   });
 
-  it("preserves long unbroken agent summaries in the chat stream", async () => {
-    const summary = "x".repeat(100);
-    vi.spyOn(SessionRuntime.prototype, "deliver").mockResolvedValue({
-      status: "success",
-      summary,
-      messages: [{ role: "assistant", content: summary }],
-    });
-
-    const response = await request(createApp())
-      .post("/api/chat")
-      .send({ sessionId: "chunking-session", message: "hello" });
-
-    expect(response.status).toBe(200);
-    const emittedCharacters = Array.from(response.text.matchAll(/"text":"(x*)"/gu)).reduce(
-      (total, match) => total + (match[1]?.length ?? 0),
-      0,
-    );
-    expect(emittedCharacters).toBe(100);
-  });
-
   it("aborts an in-flight run when the chat client disconnects", async () => {
     let observedSignal: AbortSignal | undefined;
     vi.spyOn(SessionRuntime.prototype, "deliver").mockImplementation(

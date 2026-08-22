@@ -4,9 +4,11 @@ import { createLogger, type Logger } from "../contracts/logging.js";
 import { getTracer, SpanKind, SpanStatusCode } from "../contracts/tracing.js";
 import {
   type LLMClient,
+  type LLMFinishReason,
   type LLMResponse,
   LLMResponseSchema,
   type LLMToolDefinition,
+  type LLMUsage,
 } from "../llm/client.js";
 
 import type { ToolRegistry } from "../tool/types.js";
@@ -33,7 +35,9 @@ export type AgentEventCallback = (
     | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
     | { type: "tool:completed"; toolName: string; result?: string }
     | { type: "step"; messages: Message[] }
-    | { type: "capability-mismatch"; detail: string },
+    | { type: "capability-mismatch"; detail: string }
+    | { type: "text-delta"; text: string }
+    | { type: "tool-call-delta"; toolCall: { id: string; name: string; argumentsDelta: string } },
 ) => void;
 
 export class Agent {
@@ -185,17 +189,65 @@ export class Agent {
 
           let response: LLMResponse;
           try {
+            const chatParams = {
+              messages: finalMessages,
+              system: finalSystem,
+              model: this.config.model,
+              ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
+              ...(llmTools ? { tools: llmTools } : {}),
+              maxOutputTokens,
+              promptCaching: matrix.promptCaching,
+              signal,
+            };
+
             const rawResponse = await tracer.withSpan(llmSpan, async () => {
-              return await this.llmClient.chat({
-                messages: finalMessages,
-                system: finalSystem,
-                model: this.config.model,
-                ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
-                ...(llmTools ? { tools: llmTools } : {}),
-                maxOutputTokens,
-                promptCaching: matrix.promptCaching,
-                signal,
-              });
+              if (matrix.streaming && this.llmClient.chatStream) {
+                let text = "";
+                const toolCallsMap = new Map<string, { name: string; argsText: string }>();
+                let finishReason: LLMFinishReason = "stop";
+                let usage: LLMUsage | undefined;
+
+                for await (const chunk of this.llmClient.chatStream(chatParams)) {
+                  if (chunk.type === "text-delta") {
+                    text += chunk.text;
+                    this.onEvent?.(chunk);
+                  } else if (chunk.type === "tool-call-delta") {
+                    if (chunk.toolCall) {
+                      const existing = toolCallsMap.get(chunk.toolCall.id) || {
+                        name: chunk.toolCall.name,
+                        argsText: "",
+                      };
+                      existing.argsText += chunk.toolCall.argumentsDelta;
+                      toolCallsMap.set(chunk.toolCall.id, existing);
+                      this.onEvent?.(chunk);
+                    }
+                  } else if (chunk.type === "finish") {
+                    finishReason = chunk.finishReason;
+                    usage = chunk.usage;
+                  }
+                }
+
+                const toolCalls = Array.from(toolCallsMap.entries()).map(([id, tc]) => {
+                  try {
+                    return { toolCallId: id, toolName: tc.name, args: JSON.parse(tc.argsText) };
+                  } catch {
+                    return { toolCallId: id, toolName: tc.name, args: {} };
+                  }
+                });
+
+                return {
+                  message: {
+                    role: "assistant",
+                    content: text,
+                    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+                  },
+                  finishReason,
+                  ...(toolCalls.length > 0 ? { toolCalls } : {}),
+                  ...(usage ? { usage } : {}),
+                };
+              } else {
+                return await this.llmClient.chat(chatParams);
+              }
             });
 
             const parsed = parseBoundary(LLMResponseSchema, rawResponse, "provider response");
