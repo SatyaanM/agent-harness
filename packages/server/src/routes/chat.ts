@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { createLogger, describeError } from "@agent-harness/core";
+import {
+  createLogger,
+  describeError,
+  getTracer,
+  SpanKind,
+  SpanStatusCode,
+  W3CTraceContext,
+} from "@agent-harness/core";
+
 import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
@@ -50,17 +58,41 @@ chatRouter.post(
 
     sessionManager.trackSession(sessionId, controller);
     const requestId = randomUUID();
+    const tracer = getTracer();
+    const parentContext = W3CTraceContext.extract(req.headers);
+    const serverSpan = tracer.startSpan(
+      "HTTP POST /api/chat",
+      {
+        kind: SpanKind.SERVER,
+        attributes: {
+          "http.method": "POST",
+          "http.route": "/api/chat",
+          "agent.session_id": sessionId,
+          "agent.request_id": requestId,
+          "agent.name": agentName,
+          "agent.is_retry": Boolean(retry),
+        },
+      },
+      parentContext,
+    );
+
     try {
-      const runtime = sessionManager.getOrCreate(sessionId);
-      const result = retry
-        ? await runtime.retry(message, agentName, controller.signal, requestId)
-        : await runtime.deliver(message, agentName, controller.signal, requestId);
-      const chunks = chunkSummary(result.summary);
-      for (const chunk of chunks) {
-        res.write(`data: ${JSON.stringify({ type: "text-delta", text: chunk })}\n\n`);
-      }
-      res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+      await tracer.withSpan(serverSpan, async () => {
+        const runtime = sessionManager.getOrCreate(sessionId);
+        const result = retry
+          ? await runtime.retry(message, agentName, controller.signal, requestId)
+          : await runtime.deliver(message, agentName, controller.signal, requestId);
+        const chunks = chunkSummary(result.summary);
+        for (const chunk of chunks) {
+          res.write(`data: ${JSON.stringify({ type: "text-delta", text: chunk })}\n\n`);
+        }
+        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+        serverSpan.setStatus({
+          code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+        });
+      });
     } catch (error) {
+      serverSpan.recordException(error);
       logger.error("Agent request failed", {
         requestId,
         sessionId,
@@ -70,6 +102,7 @@ chatRouter.post(
         res.write(`data: ${JSON.stringify({ type: "error", error: "Agent request failed" })}\n\n`);
       }
     } finally {
+      serverSpan.end();
       sessionManager.clearSession(sessionId, controller);
       res.off("close", abortOnDisconnect);
     }

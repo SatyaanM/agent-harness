@@ -7,7 +7,7 @@ read_when:
 
 # ADR 0004: Embedded SQLite with WAL mode for ACID persistence and delivery
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-18
 
 ## Context

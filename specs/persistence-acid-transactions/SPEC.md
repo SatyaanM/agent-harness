@@ -7,7 +7,7 @@ read_when:
 
 # Persistence and ACID Transactions Specification
 
-Status: Approved
+Status: Implemented
 Governing ADR: `docs/decisions/0004-acid-storage-and-relational-persistence.md`
 
 ## Problem and evidence

@@ -1,11 +1,12 @@
 import type { CapabilityRegistry } from "../capability/registry.js";
 import { describeError } from "../contracts/errors.js";
 import { createLogger, type Logger } from "../contracts/logging.js";
+import { getTracer, SpanKind, SpanStatusCode, W3CTraceContext } from "../contracts/tracing.js";
 import type { LLMClient } from "../llm/client.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
-import type { AgentEventCallback } from "./agent.js";
-import { Agent } from "./agent.js";
+import { Agent, type AgentEventCallback } from "./agent.js";
+
 import type { AgentConfig, Message, TaskId } from "./types.js";
 import { AgentCancelledError } from "./types.js";
 
@@ -46,43 +47,70 @@ export class Worker {
     );
   }
 
-  async run(task: string): Promise<WorkerResult> {
-    try {
-      const execute = () => this.agent.run(task, [], this.abortSignal);
-      const result = this.executionLimiter
-        ? await this.executionLimiter.run(execute, this.abortSignal)
-        : await execute();
-      this.messages = result.messages;
+  async run(task: string, traceCarrier?: Record<string, unknown>): Promise<WorkerResult> {
+    const tracer = getTracer();
+    const parentContext = traceCarrier ? W3CTraceContext.extract(traceCarrier) : undefined;
+    const span = tracer.startSpan(
+      "worker.run",
+      {
+        kind: SpanKind.INTERNAL,
+        links: parentContext ? [{ context: parentContext }] : undefined,
+        attributes: {
+          "agent.task_id": this.taskId,
+          "agent.worker_session_id": `worker-${this.taskId}`,
+        },
+      },
+      parentContext,
+    );
 
-      const workerResult: WorkerResult = {
-        taskId: this.taskId,
-        status: result.status === "success" ? "done" : "error",
-        summary: result.summary,
-        messages: this.messages,
-      };
+    return tracer.withSpan(span, async () => {
+      try {
+        const execute = () => this.agent.run(task, [], this.abortSignal);
+        const result = this.executionLimiter
+          ? await this.executionLimiter.run(execute, this.abortSignal)
+          : await execute();
+        this.messages = result.messages;
 
-      return workerResult;
-    } catch (error) {
-      const isCancelled =
-        error instanceof AgentCancelledError ||
-        (error instanceof DOMException && error.name === "AbortError") ||
-        Boolean(this.abortSignal?.aborted);
-      this.logger.error("Worker run failed", {
-        code: describeError(error).code,
-        cancelled: isCancelled,
-      });
-      const workerResult: WorkerResult = {
-        taskId: this.taskId,
-        status: isCancelled ? "cancelled" : "error",
-        summary: isCancelled
-          ? "Cancelled by user"
-          : error instanceof Error
-            ? error.message
-            : String(error),
-        messages: this.messages,
-      };
+        const workerResult: WorkerResult = {
+          taskId: this.taskId,
+          status: result.status === "success" ? "done" : "error",
+          summary: result.summary,
+          messages: this.messages,
+        };
 
-      return workerResult;
-    }
+        span.setStatus({
+          code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+        });
+        return workerResult;
+      } catch (error) {
+        const isCancelled =
+          error instanceof AgentCancelledError ||
+          (error instanceof DOMException && error.name === "AbortError") ||
+          Boolean(this.abortSignal?.aborted);
+        this.logger.error("Worker run failed", {
+          code: describeError(error).code,
+          cancelled: isCancelled,
+        });
+        span.recordException(error);
+        span.setStatus({
+          code: isCancelled ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+          message: isCancelled ? "Cancelled by user" : describeError(error).message,
+        });
+        const workerResult: WorkerResult = {
+          taskId: this.taskId,
+          status: isCancelled ? "cancelled" : "error",
+          summary: isCancelled
+            ? "Cancelled by user"
+            : error instanceof Error
+              ? error.message
+              : String(error),
+          messages: this.messages,
+        };
+
+        return workerResult;
+      } finally {
+        span.end();
+      }
+    });
   }
 }

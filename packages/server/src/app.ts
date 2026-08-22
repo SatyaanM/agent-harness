@@ -11,13 +11,13 @@ import helmet from "helmet";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import inboxRouter from "./routes/inbox.js";
+import { metricsRouter } from "./routes/metrics.js";
 import { pluginsRouter } from "./routes/plugins.js";
 import { sessionsRouter } from "./routes/sessions.js";
 import { settingsRouter } from "./routes/settings.js";
 import { ttsRouter } from "./routes/tts.js";
 import { workersRouter } from "./routes/workers.js";
 import { parseServerConfig } from "./server-config.js";
-import { sessionManager } from "./session-manager.js";
 
 const logger = createLogger("server.app");
 
@@ -56,9 +56,7 @@ export function createApp(options?: {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/metrics", (_req, res) => {
-    res.json(sessionManager.metrics());
-  });
+  app.use("/api/metrics", metricsRouter);
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (res.headersSent) {

@@ -54,6 +54,31 @@ export {
 } from "./contracts/limits.js";
 export type { Logger, LogLevel, LogRecord, LogSink } from "./contracts/logging.js";
 export { consoleSink, createLogger } from "./contracts/logging.js";
+export type {
+  AttributeValue,
+  ISpan,
+  ITraceContext,
+  ITracer,
+  SpanAttributes,
+  SpanEvent,
+  SpanLink,
+  SpanOptions,
+  SpanStatus,
+} from "./contracts/tracing.js";
+export {
+  getTracer,
+  NoopSpan,
+  NoopTracer,
+  resetGlobalTracer,
+  SpanKind,
+  SpanStatusCode,
+  setGlobalTracer,
+  W3CTraceContext,
+  W3CTraceParentSchema,
+} from "./contracts/tracing.js";
+export * from "./crypto/audit-hash.js";
+export * from "./crypto/canonical-json.js";
+export * from "./crypto/redaction.js";
 export {
   readFileBounded,
   readUtf8FileBounded,

@@ -5,4 +5,5 @@ export * from "./limits.js";
 export * from "./logging.js";
 export * from "./plugin.js";
 export * from "./session.js";
+export * from "./tracing.js";
 export * from "./validation.js";

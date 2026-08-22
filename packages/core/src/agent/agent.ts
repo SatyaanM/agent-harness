@@ -1,14 +1,17 @@
 import type { CapabilityRegistry } from "../capability/registry.js";
 import { describeError } from "../contracts/errors.js";
 import { createLogger, type Logger } from "../contracts/logging.js";
+import { getTracer, SpanKind, SpanStatusCode } from "../contracts/tracing.js";
 import {
   type LLMClient,
   type LLMResponse,
   LLMResponseSchema,
   type LLMToolDefinition,
 } from "../llm/client.js";
+
 import type { ToolRegistry } from "../tool/types.js";
 import { parseBoundary } from "../validation.js";
+
 import {
   AgentBudgetExceededError,
   AgentCancelledError,
@@ -47,6 +50,15 @@ export class Agent {
   }
 
   async run(prompt?: string, history: Message[] = [], signal?: AbortSignal): Promise<AgentResult> {
+    const tracer = getTracer();
+    const runSpan = tracer.startSpan("agent.run", {
+      attributes: {
+        "agent.name": this.config.name,
+        "agent.model": this.config.model,
+        "agent.max_steps": this.config.maxSteps,
+      },
+    });
+
     const timeoutController = new AbortController();
     const timeoutMs = this.config.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
     const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
@@ -54,15 +66,35 @@ export class Agent {
       ? AbortSignal.any([signal, timeoutController.signal])
       : timeoutController.signal;
     try {
-      return await this.runWithSignal(prompt, history, runSignal);
+      const result = await tracer.withSpan(runSpan, async () => {
+        return await this.runWithSignal(prompt, history, runSignal);
+      });
+      runSpan.setStatus({
+        code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+      });
+      return result;
     } catch (error) {
-      if (signal?.aborted) throw new AgentCancelledError();
+      if (signal?.aborted) {
+        runSpan.setStatus({ code: SpanStatusCode.OK, message: "Cancelled by user" });
+        throw new AgentCancelledError();
+      }
       if (timeoutController.signal.aborted) {
+        runSpan.recordException(error);
+        runSpan.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: `Agent run exceeded ${timeoutMs}ms deadline`,
+        });
         throw new AgentBudgetExceededError(`Agent run exceeded ${timeoutMs}ms deadline`);
       }
+      runSpan.recordException(error);
+      runSpan.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     } finally {
       clearTimeout(timeout);
+      runSpan.end();
     }
   }
 
@@ -71,6 +103,7 @@ export class Agent {
     history: Message[],
     signal: AbortSignal,
   ): Promise<AgentResult> {
+    const tracer = getTracer();
     this.messages = [...history];
     if (prompt) {
       this.messages.push({ role: "user", content: prompt });
@@ -97,128 +130,213 @@ export class Agent {
     for (let step = 0; step < this.config.maxSteps; step++) {
       if (signal.aborted) throw new AgentCancelledError();
 
-      const response = parseBoundary(
-        LLMResponseSchema,
-        await this.llmClient.chat({
-          messages: projectToolResultsForModel(this.messages, maxToolResultChars),
-          system: this.config.instructions,
-          model: this.config.model,
-          ...(llmTools ? { tools: llmTools } : {}),
-          maxOutputTokens,
-          signal,
-        }),
-        "provider response",
-      );
-      if (signal.aborted) throw new AgentCancelledError();
+      const stepSpan = tracer.startSpan("agent.step", {
+        attributes: {
+          "agent.step_index": step,
+          "agent.name": this.config.name,
+        },
+      });
 
-      const responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
-      const responseMessage = responseToolCalls.length
-        ? { ...response.message, toolCalls: responseToolCalls }
-        : response.message;
-      this.messages.push(responseMessage);
-      this.onEvent?.({ type: "step", messages: [...this.messages] });
-
-      totalTokensUsed += tokenCharge(
-        response,
-        projectToolResultsForModel(this.messages, maxToolResultChars),
-        this.config.instructions,
-      );
-      if (totalTokensUsed > maxTotalTokens) {
-        if (responseToolCalls.length) {
-          this.messages.push(
-            ...responseToolCalls.map((toolCall) => ({
-              role: "tool" as const,
-              content: `Error: Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}); tool was not executed.`,
-              toolCallId: toolCall.toolCallId,
-            })),
-          );
-        }
-        return this.budgetExceeded(
-          `Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}).`,
-        );
-      }
-
-      if (response.finishReason === "stop") {
-        return {
-          status: "success",
-          summary: response.message.content,
-          messages: [...this.messages],
-        };
-      }
-
-      if (response.finishReason !== "tool-calls") {
-        return {
-          status: "error",
-          summary: `Provider stopped with finish reason ${response.finishReason}.`,
-          messages: [...this.messages],
-        };
-      }
-
-      if (responseToolCalls.length) {
-        for (const [toolCallIndex, toolCall] of responseToolCalls.entries()) {
-          if (signal.aborted) throw new AgentCancelledError();
-          if (toolCallsUsed >= maxToolCalls) {
-            this.messages.push(
-              ...responseToolCalls.slice(toolCallIndex).map((skipped) => ({
-                role: "tool" as const,
-                content: `Error: Agent tool-call budget exceeded (${maxToolCalls}).`,
-                toolCallId: skipped.toolCallId,
-              })),
-            );
-            return this.budgetExceeded(`Agent tool-call budget exceeded (${maxToolCalls}).`);
-          }
-          toolCallsUsed += 1;
-
-          const tool = this.toolRegistry.get(toolCall.toolName);
-
-          if (!tool) {
-            this.messages.push({
-              role: "tool",
-              content: `Error: Tool "${toolCall.toolName}" not found`,
-              toolCallId: toolCall.toolCallId,
-            });
-            continue;
-          }
-
-          this.onEvent?.({
-            type: "tool:called",
-            toolName: toolCall.toolName,
-            args: toolCall.args,
+      try {
+        const stepResult = await tracer.withSpan(stepSpan, async () => {
+          const llmSpan = tracer.startSpan("gen_ai.chat", {
+            kind: SpanKind.CLIENT,
+            attributes: {
+              "gen_ai.request.model": this.config.model,
+              "gen_ai.request.max_tokens": maxOutputTokens,
+            },
           });
 
+          let response: LLMResponse;
           try {
-            const args = parseBoundary(
-              tool.parameters,
-              toolCall.args,
-              `tool ${toolCall.toolName} arguments`,
-            );
-            const result = await waitForAbort(tool.execute(args, { signal }), signal);
-            if (signal.aborted) throw new AgentCancelledError();
-            this.onEvent?.({
-              type: "tool:completed",
-              toolName: toolCall.toolName,
-              result: boundToolResult(result, maxToolResultChars),
+            const rawResponse = await tracer.withSpan(llmSpan, async () => {
+              return await this.llmClient.chat({
+                messages: projectToolResultsForModel(this.messages, maxToolResultChars),
+                system: this.config.instructions,
+                model: this.config.model,
+                ...(llmTools ? { tools: llmTools } : {}),
+                maxOutputTokens,
+                signal,
+              });
             });
-            this.messages.push({
-              role: "tool",
-              content: result,
-              toolCallId: toolCall.toolCallId,
+
+            const parsed = parseBoundary(LLMResponseSchema, rawResponse, "provider response");
+            llmSpan.setAttributes({
+              "gen_ai.response.model": this.config.model,
+              "gen_ai.response.finish_reasons": [parsed.finishReason],
             });
-          } catch (error) {
-            if (signal.aborted) throw new AgentCancelledError();
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`Tool "${toolCall.toolName}" failed`, {
-              toolName: toolCall.toolName,
-              ...describeError(error),
+
+            if (parsed.usage) {
+              llmSpan.setAttributes({
+                "gen_ai.usage.input_tokens": parsed.usage.inputTokens,
+                "gen_ai.usage.output_tokens": parsed.usage.outputTokens,
+                "gen_ai.usage.total_tokens": parsed.usage.totalTokens,
+              });
+            }
+            llmSpan.setStatus({ code: SpanStatusCode.OK });
+            response = parsed;
+          } catch (llmError) {
+            llmSpan.recordException(llmError);
+            llmSpan.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: llmError instanceof Error ? llmError.message : String(llmError),
             });
-            this.messages.push({
-              role: "tool",
-              content: `Error: ${errorMessage}`,
-              toolCallId: toolCall.toolCallId,
-            });
+            throw llmError;
+          } finally {
+            llmSpan.end();
           }
+
+          if (signal.aborted) {
+            throw new AgentCancelledError();
+          }
+
+          const responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+          const responseMessage = responseToolCalls.length
+            ? { ...response.message, toolCalls: responseToolCalls }
+            : response.message;
+          this.messages.push(responseMessage);
+          this.onEvent?.({ type: "step", messages: [...this.messages] });
+
+          totalTokensUsed += tokenCharge(
+            response,
+            projectToolResultsForModel(this.messages, maxToolResultChars),
+            this.config.instructions,
+          );
+          if (totalTokensUsed > maxTotalTokens) {
+            if (responseToolCalls.length) {
+              this.messages.push(
+                ...responseToolCalls.map((toolCall) => ({
+                  role: "tool" as const,
+                  content: `Error: Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}); tool was not executed.`,
+                  toolCallId: toolCall.toolCallId,
+                })),
+              );
+            }
+            stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+            return this.budgetExceeded(
+              `Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}).`,
+            );
+          }
+
+          if (response.finishReason === "stop") {
+            stepSpan.setStatus({ code: SpanStatusCode.OK });
+            return {
+              status: "success" as const,
+              summary: response.message.content,
+              messages: [...this.messages],
+            };
+          }
+
+          if (response.finishReason !== "tool-calls") {
+            stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+            return {
+              status: "error" as const,
+              summary: `Provider stopped with finish reason ${response.finishReason}.`,
+              messages: [...this.messages],
+            };
+          }
+
+          if (responseToolCalls.length) {
+            for (const [toolCallIndex, toolCall] of responseToolCalls.entries()) {
+              if (signal.aborted) {
+                throw new AgentCancelledError();
+              }
+              if (toolCallsUsed >= maxToolCalls) {
+                this.messages.push(
+                  ...responseToolCalls.slice(toolCallIndex).map((skipped) => ({
+                    role: "tool" as const,
+                    content: `Error: Agent tool-call budget exceeded (${maxToolCalls}).`,
+                    toolCallId: skipped.toolCallId,
+                  })),
+                );
+                stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+                return this.budgetExceeded(`Agent tool-call budget exceeded (${maxToolCalls}).`);
+              }
+              toolCallsUsed += 1;
+
+              const tool = this.toolRegistry.get(toolCall.toolName);
+
+              if (!tool) {
+                this.messages.push({
+                  role: "tool",
+                  content: `Error: Tool "${toolCall.toolName}" not found`,
+                  toolCallId: toolCall.toolCallId,
+                });
+                continue;
+              }
+
+              this.onEvent?.({
+                type: "tool:called",
+                toolName: toolCall.toolName,
+                args: toolCall.args,
+              });
+
+              const toolSpan = tracer.startSpan(`tool.execute: ${toolCall.toolName}`, {
+                kind: SpanKind.INTERNAL,
+                attributes: {
+                  "agent.tool.name": toolCall.toolName,
+                  "agent.tool.call_id": toolCall.toolCallId,
+                },
+              });
+
+              try {
+                await tracer.withSpan(toolSpan, async () => {
+                  const args = parseBoundary(
+                    tool.parameters,
+                    toolCall.args,
+                    `tool ${toolCall.toolName} arguments`,
+                  );
+                  const result = await waitForAbort(tool.execute(args, { signal }), signal);
+                  if (signal.aborted) {
+                    throw new AgentCancelledError();
+                  }
+                  toolSpan.setStatus({ code: SpanStatusCode.OK });
+
+                  this.onEvent?.({
+                    type: "tool:completed",
+                    toolName: toolCall.toolName,
+                    result: boundToolResult(result, maxToolResultChars),
+                  });
+                  this.messages.push({
+                    role: "tool",
+                    content: result,
+                    toolCallId: toolCall.toolCallId,
+                  });
+                });
+              } catch (error) {
+                toolSpan.recordException(error);
+                toolSpan.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message: error instanceof Error ? error.message : String(error),
+                });
+                if (signal.aborted) {
+                  throw new AgentCancelledError();
+                }
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                this.logger.error(`Tool "${toolCall.toolName}" failed`, {
+                  toolName: toolCall.toolName,
+                  ...describeError(error),
+                });
+                this.messages.push({
+                  role: "tool",
+                  content: `Error: ${errorMessage}`,
+                  toolCallId: toolCall.toolCallId,
+                });
+              } finally {
+                toolSpan.end();
+              }
+            }
+            this.onEvent?.({ type: "step", messages: [...this.messages] });
+          }
+
+          return undefined;
+        });
+
+        if (stepResult) {
+          return stepResult;
         }
-        this.onEvent?.({ type: "step", messages: [...this.messages] });
+      } finally {
+        stepSpan.end();
       }
     }
 

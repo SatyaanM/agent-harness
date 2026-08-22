@@ -7,7 +7,9 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "audit:verify": "node scripts/verify-audit-log.mjs",
     "build": "turbo run build",
+
     "check": "node scripts/run-checks.mjs",
     "check:ci": "node scripts/run-checks.mjs ci",
     "check:fast": "node scripts/run-checks.mjs fast",

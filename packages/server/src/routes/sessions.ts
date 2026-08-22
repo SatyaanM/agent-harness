@@ -196,6 +196,14 @@ sessionsRouter.post(
       });
     }
     sessionManager.markSessionCreated(session.sessionId);
+    sessionManager.audit({
+      actorType: "user",
+      actorId: "user",
+      action: "session.create",
+      resourceType: "session",
+      resourceId: session.sessionId,
+      payload: { prompt: session.prompt, agentName: session.agentName },
+    });
     hooks.emit("session.created", { sessionId: session.sessionId, agentName: session.agentName });
     res.status(201).json(session);
   }),
@@ -277,6 +285,14 @@ sessionsRouter.patch(
       });
     }
     emitAgentEvent("session:updated", session);
+    sessionManager.audit({
+      actorType: "user",
+      actorId: "user",
+      action: "session.rename",
+      resourceType: "session",
+      resourceId: sessionId,
+      payload: { title: session.title },
+    });
     hooks.emit("session.renamed", { sessionId, title: session.title });
     res.json(session);
   }),
@@ -300,6 +316,14 @@ sessionsRouter.delete(
       sessionManager.markSessionCreated(sessionId);
       throw error;
     }
+    sessionManager.audit({
+      actorType: "user",
+      actorId: "user",
+      action: "session.delete",
+      resourceType: "session",
+      resourceId: sessionId,
+      payload: {},
+    });
     hooks.emit("session.deleted", { sessionId });
     res.status(204).end();
   }),

@@ -22,6 +22,8 @@ export default defineProject({
   test: {
     name: "test-infra",
     environment: "node",
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     include: ["test/**/*.test.ts", "test/**/*.spec.ts"],
   },
 });

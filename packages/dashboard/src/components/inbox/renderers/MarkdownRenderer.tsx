@@ -195,9 +195,10 @@ export function MarkdownRenderer({ content, item }: MarkdownRendererProps) {
         typeof src === "string" && (src.startsWith("data:image/") || src.startsWith("blob:"))
           ? src
           : undefined;
-      // biome-ignore lint/performance/noImgElement: Artifact data/blob images cannot use Next image optimization.
+      // Artifact data/blob images cannot use Next image optimization.
       return <img src={safeSource} alt={alt ?? ""} />;
     },
+
     a: ({ href, children }) => (
       <a href={safeLinkTarget(href)} rel="noopener noreferrer">
         {children}

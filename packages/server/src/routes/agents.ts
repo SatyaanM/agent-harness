@@ -16,6 +16,7 @@ import matter from "gray-matter";
 import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { IdentifierSchema, validateRequest } from "../http/validation.js";
+import { sessionManager } from "../session-manager.js";
 
 export const agentsRouter: Router = Router();
 
@@ -78,6 +79,14 @@ agentsRouter.put(
         return;
       }
       await fs.rename(temporaryFile, filePath);
+      sessionManager.audit({
+        actorType: "user",
+        actorId: "user",
+        action: "agent.update_source",
+        resourceType: "agent",
+        resourceId: params.name,
+        payload: { sourceLength: body.source.length },
+      });
       res.json(parsed);
     } catch (error) {
       if (
@@ -145,6 +154,14 @@ agentsRouter.post(
         },
         true,
       );
+      sessionManager.audit({
+        actorType: "user",
+        actorId: "user",
+        action: "agent.create",
+        resourceType: "agent",
+        resourceId: body.name,
+        payload: { model: body.model, tools: body.tools ?? [] },
+      });
       res.status(201).json(agentConfig);
     } catch (error) {
       if (
@@ -181,6 +198,14 @@ agentsRouter.put(
       ...body,
       name: params.name,
     });
+    sessionManager.audit({
+      actorType: "user",
+      actorId: "user",
+      action: "agent.update",
+      resourceType: "agent",
+      resourceId: params.name,
+      payload: body,
+    });
     res.json(agentConfig);
   }),
 );
@@ -198,6 +223,14 @@ agentsRouter.delete(
       return;
     }
     await fs.unlink(filePath);
+    sessionManager.audit({
+      actorType: "user",
+      actorId: "user",
+      action: "agent.delete",
+      resourceType: "agent",
+      resourceId: params.name,
+      payload: {},
+    });
     res.status(204).end();
   }),
 );

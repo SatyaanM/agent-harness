@@ -22,9 +22,11 @@ flowchart LR
   Tools --> Worker["Background Worker"]
   Runtime --> SQLite["SQLite Database (.harness/harness.db WAL Mode)"]
   Worker --> SQLite
-  SQLite --> Relational["Relational Tables: sessions, runs, messages, tasks, mailbox_events, open_sessions"]
+  SQLite --> Relational["Relational Tables: sessions, runs, messages, tasks, mailbox_events, open_sessions, audit_events"]
   Server --> Open["open_sessions in SQLite / JSON fallback"]
   Server --> Plugin["manifest registry + enabled state"]
+  Server --> Telemetry["OpenTelemetry Tracing + Prometheus / OpenMetrics (/api/metrics)"]
+  Server --> AuditLog["Audit Ledger (SHA-256 Hash Chain)"]
 ```
 
 The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRuntime.deliver()` → `Agent.run()`, with delegation added as a registered tool. The superseded polling `Orchestrator` implementation has been removed.
@@ -33,10 +35,13 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 
 ### Core
 
-- [`Agent.run`](../../packages/core/src/agent/agent.ts) owns one in-memory model/tool loop. It builds tools from an `AgentConfig`, appends structurally balanced assistant/tool messages even when a budget stops execution, projects bounded tool content into provider context and transient tool events, and propagates its deadline/cancellation signal into providers and tools before returning after stop or `maxSteps`.
-- [`SessionRuntime`](../../packages/core/src/agent/session-runtime.ts) owns serialized delivery for one top-level `sessionId`. `deliver()` chains runs on an in-memory promise queue; `runOnce()` executes an atomic `BEGIN IMMEDIATE` SQLite transaction to load history, materialize unacknowledged worker completions with monotonic message sequence numbers, persist the canonical model order, acknowledge mailbox events, and insert run tracking records before executing the agent loop.
-- [`SqliteDatabaseDriver`](../../packages/core/src/persistence/sqlite/db.ts) and [`SqliteMigrator`](../../packages/core/src/persistence/sqlite/migrator.ts) manage embedded SQLite with Write-Ahead Logging (WAL) mode, busy timeouts, and SHA-256 verified schema migrations.
-- Strongly typed relational repositories ([`SessionRepository`](../../packages/core/src/persistence/sqlite/session-repo.ts), [`RunRepository`](../../packages/core/src/persistence/sqlite/run-repo.ts), [`MessageRepository`](../../packages/core/src/persistence/sqlite/message-repo.ts), [`TaskRepository`](../../packages/core/src/persistence/sqlite/task-repo.ts), [`MailboxRepository`](../../packages/core/src/persistence/sqlite/mailbox-repo.ts), [`OpenSessionsRepository`](../../packages/core/src/persistence/sqlite/open-sessions-repo.ts)) enforce relational integrity, monotonic sequence numbers, and cascade deletions.
+- [`Agent.run`](../../packages/core/src/agent/agent.ts) owns one in-memory model/tool loop. It builds tools from an `AgentConfig`, appends structurally balanced assistant/tool messages even when a budget stops execution, projects bounded tool content into provider context and transient tool events, wraps `agent.step` and `tool.execute` spans in deterministic `try ... finally` blocks, and propagates its deadline/cancellation signal into providers and tools before returning after stop or `maxSteps`.
+- [`SessionRuntime`](../../packages/core/src/agent/session-runtime.ts) owns serialized delivery for one top-level `sessionId`. `deliver()` chains runs on an in-memory promise queue; `runOnce()` executes an atomic `BEGIN IMMEDIATE` SQLite transaction to load history, materialize unacknowledged worker completions with monotonic message sequence numbers, persist the canonical model order, acknowledge mailbox events, and insert run tracking records before executing the agent loop. `persistRunCompletion()` deduplicates message persistence and run completion status updates across success, error, and cancellation paths.
+- [`SqliteDatabaseDriver`](../../packages/core/src/persistence/sqlite/db.ts) and [`SqliteMigrator`](../../packages/core/src/persistence/sqlite/migrator.ts) manage embedded SQLite with Write-Ahead Logging (WAL) mode, busy timeouts, and SHA-256 verified schema migrations (including `001_initial_schema.sql` and `002_audit_events.sql`).
+- Strongly typed relational repositories ([`SessionRepository`](../../packages/core/src/persistence/sqlite/session-repo.ts), [`RunRepository`](../../packages/core/src/persistence/sqlite/run-repo.ts), [`MessageRepository`](../../packages/core/src/persistence/sqlite/message-repo.ts), [`TaskRepository`](../../packages/core/src/persistence/sqlite/task-repo.ts), [`MailboxRepository`](../../packages/core/src/persistence/sqlite/mailbox-repo.ts), [`OpenSessionsRepository`](../../packages/core/src/persistence/sqlite/open-sessions-repo.ts), [`AuditRepository`](../../packages/core/src/persistence/sqlite/audit-repo.ts)) enforce relational integrity, monotonic sequence numbers, cascade deletions, and tamper-evident append-only audit ledgers.
+- [`AuditRepository`](../../packages/core/src/persistence/sqlite/audit-repo.ts) records hash-chained audit events computed via RFC 8785 Canonical JSON (`canonical-json.ts`) and SHA-256 (`audit-hash.ts`) with automatic sensitive field/secret redaction (`redaction.ts`).
+- [`W3CTraceContext`](../../packages/core/src/contracts/tracing.ts) provides W3C Trace Context parsing, serialization, and validation with `W3CTraceParentSchema` rejecting all-zero trace and span identifiers.
+- [`ITracer`](../../packages/core/src/telemetry/spans.ts) defines framework-neutral distributed tracing contracts with `NoopTracer` fallback.
 - [`LegacyMigrator`](../../packages/core/src/persistence/sqlite/legacy-migrator.ts) imports legacy JSON transcripts, mailbox JSONL, and open-sessions state into SQLite with pre-migration backups and corrupted file quarantine (`.invalid-*`).
 - [`createDelegateTool`](../../packages/core/src/agent/delegation.ts) creates a task ID, tracks worker tasks in `tasks` table, launches a `Worker` without awaiting it, and enqueues completion events to `mailbox_events`.
 - [`Worker.run`](../../packages/core/src/agent/worker.ts) wraps an `Agent` invocation, retains each progressive step, and maps cancellation/errors to a `WorkerResult`. Terminal delivery and cleanup are owned by the delegate/server lifecycle rather than duplicated into a process-local result queue.
@@ -45,7 +50,9 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 
 ### Server
 
-- [`SessionManager`](../../packages/server/src/session-manager.ts) owns loaded `SessionRuntime` objects, SQLite connection lifecycle, and running worker `AbortController` objects. On boot, `SessionManager.initialize()` executes startup worker reconciliation, transitioning orphaned `running`/`queued` tasks to `abandoned` and enqueuing diagnostic delivery cards.
+- [`SessionManager`](../../packages/server/src/session-manager.ts) owns loaded `SessionRuntime` objects, SQLite connection lifecycle, audit logging for administrative actions and tool executions (`tool.exec.*`), and running worker `AbortController` objects. On boot, `SessionManager.initialize()` executes startup worker reconciliation, transitioning orphaned `running`/`queued` tasks to `abandoned` and enqueuing diagnostic delivery cards.
+- [`ServerTracer`](../../packages/server/src/telemetry/tracer.ts) implements OpenTelemetry tracing via `AsyncLocalStorage` context propagation and `createBatchOtlpHttpExporter` with configurable batching thresholds and background timer flushes.
+- [`MetricRegistry`](../../packages/server/src/telemetry/metrics.ts) and [`metricsRouter`](../../packages/server/src/routes/metrics.ts) expose Prometheus text, OpenMetrics (`# EOF\n` trailer), and JSON format snapshots for active/queued executions, token counters, and persisted/loaded session counts via `SessionRepository.count()`.
 - [`chatRouter`](../../packages/server/src/routes/chat.ts) validates a message, aborts the delivery when its client disconnects, awaits a full `SessionRuntime.deliver()`, and only then slices the complete final summary into SSE-shaped chunks. An explicit retry is routed through `SessionRuntime.retry()`, which requires a matching durable user message and replays it without appending a duplicate transcript record. This is response chunking, not live model token streaming.
 - [`sessionsRouter`](../../packages/server/src/routes/sessions.ts) owns session CRUD, metadata-only collection listing via indexed SQLite queries (<10ms for 10k sessions), safe durable-record diagnostics, rename, conditional mailbox wake on explicit open, updates to the open-session registry, and close/delete lifecycle enforcement.
 - [`open-sessions.ts`](../../packages/server/src/open-sessions.ts) persists the browser tab set and active tab under SQLite `open_sessions` and `.harness/open-sessions.json`; duplicate IDs and active IDs outside the open set are rejected. An explicit update quarantines malformed prior bytes before repair. Settings use the same quarantine-on-repair policy, while `ROOT` remains environment/discovery-owned.
@@ -62,6 +69,7 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 | Top-level transcript | `SessionRepository` / `MessageRepository` | Indexed relational messages with monotonic sequence IDs | Normalized in `messages` and `sessions` tables. |
 | Worker completion | `MailboxRepository` (`mailbox_events`) | Transactional drain inside `BEGIN IMMEDIATE` | Drains atomically with message materialization. |
 | In-flight worker reconciliation | `SessionManager.initialize` | Reconciled to `abandoned` on boot | Diagnostic mailbox event delivered on parent wake. |
+| Audit ledger | `AuditRepository` (`audit_events`) | SHA-256 hash-chained immutable append-only log | Verifiable via `scripts/verify-audit-log.mjs`. |
 | Session list metadata | `SessionRepository.listMeta` | Relational B-tree index | Responds in < 10ms for 10,000 sessions. |
 | Open/active tabs | `OpenSessionsRepository` (`open_sessions`) | Relational table + JSON snapshot | Browser is writer; closing unloads runtime after before-close hooks pass. |
 | Loaded runtime | `SessionManager.runtimes` | Process memory | Boot reconciliation transitions orphaned tasks cleanly. |
@@ -73,6 +81,10 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 | Capability | Status | Evidence |
 |---|---|---|
 | SQLite WAL Persistence & ACID Transactions | Implemented | `SqliteDatabaseDriver`, `SqliteMigrator`, Repositories, `withDbRetry`, fault injection and benchmark test suites. |
+| Tamper-Evident Cryptographic Audit Logging | Implemented | `AuditRepository`, `002_audit_events.sql`, canonical JSON RFC 8785, SHA-256 hash chaining, sensitive data redaction, `scripts/verify-audit-log.mjs`. |
+| OpenTelemetry Distributed Tracing | Implemented | W3C trace context, spans across HTTP/session/tool/step execution, batched OTLP HTTP exporter (`ServerTracer`). |
+| Prometheus & OpenMetrics RFC Telemetry | Implemented | `/api/metrics`, `MetricRegistry`, counters/gauges/histograms, `# EOF\n` trailer, exact `SessionRepository.count()`. |
+| Universal Tool Execution Auditing | Implemented | `SessionManager` records `tool.exec.*` audit ledger entries for all orchestrator and worker tool execution dispatches. |
 | Durable conversations and worker transcripts | Implemented | Relational `sessions`, `messages`, `runs`, `tasks`, and `SessionRuntime`. |
 | Durable worker-result delivery & Atomic Drain | Implemented | `mailbox_events`, atomic `BEGIN IMMEDIATE` drain, wake-run guard. |
 | Startup Worker Task Reconciliation | Implemented | `SessionManager.initialize()` transitions orphaned tasks to `abandoned` and enqueues diagnostic events. |

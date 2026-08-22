@@ -7,7 +7,7 @@ read_when:
 
 # Developer Experience (DX) and Tooling Modernization Specification
 
-Status: Accepted
+Status: Implemented
 
 ## Problem and evidence
 
