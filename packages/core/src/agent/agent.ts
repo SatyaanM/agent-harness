@@ -18,6 +18,7 @@ import {
   type AgentConfig,
   AgentConfigSchema,
   type AgentResult,
+  type CapabilityMatrix,
   type Message,
 } from "./types.js";
 
@@ -42,7 +43,7 @@ export class Agent {
     config: AgentConfig,
     private readonly toolRegistry: ToolRegistry,
     private readonly llmClient: LLMClient,
-    _capabilityRegistry: CapabilityRegistry,
+    private readonly capabilityRegistry: CapabilityRegistry,
     private readonly onEvent?: AgentEventCallback,
     private readonly logger: Logger = createLogger("core.agent"),
   ) {
@@ -109,20 +110,48 @@ export class Agent {
       this.messages.push({ role: "user", content: prompt });
     }
 
+    const modelParts = this.config.model.split("/");
+    const providerId = modelParts.length > 1 ? modelParts[0] || "default" : "default";
+    const modelId = modelParts.length > 1 ? modelParts.slice(1).join("/") : this.config.model;
+
+    let matrix: CapabilityMatrix;
+    try {
+      matrix = await this.capabilityRegistry.lookup(providerId, modelId, "vercel-ai", this.config);
+    } catch {
+      matrix = {
+        chat: true,
+        tools: true,
+        vision: true,
+        streaming: false,
+        structuredOutputs: false,
+        promptCaching: false,
+        reasoning: false,
+        maxTokens: 0,
+      };
+    }
+
     const tools = this.config.tools
       .map((name) => this.toolRegistry.get(name))
       .filter((t): t is NonNullable<typeof t> => t != null);
 
-    const llmTools: LLMToolDefinition[] | undefined = tools.length
-      ? tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        }))
-      : undefined;
+    const llmTools: LLMToolDefinition[] | undefined =
+      matrix.tools && tools.length
+        ? tools
+            .filter((t) => !t.requiresHITL || matrix.reasoning)
+            .map((t) => ({
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            }))
+        : undefined;
+
     const maxToolCalls = this.config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     const maxToolResultChars = this.config.maxToolResultChars ?? DEFAULT_MAX_TOOL_RESULT_CHARS;
-    const maxOutputTokens = this.config.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+
+    const configMax = this.config.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+    const maxOutputTokens =
+      matrix.maxTokens && matrix.maxTokens > 0 ? Math.min(configMax, matrix.maxTokens) : configMax;
+
     const maxTotalTokens = this.config.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
     let toolCallsUsed = 0;
     let totalTokensUsed = 0;
@@ -147,16 +176,34 @@ export class Agent {
             },
           });
 
+          let finalSystem = this.config.instructions;
+          if (!matrix.structuredOutputs && llmTools && llmTools.length > 0) {
+            finalSystem +=
+              "\n\nYou must strictly adhere to the provided JSON schemas for any tools you invoke.";
+          }
+
+          let finalMessages = projectToolResultsForModel(this.messages, maxToolResultChars);
+          if (!matrix.vision) {
+            finalMessages = finalMessages.map((msg) => ({
+              ...msg,
+              content: msg.content.replace(
+                /!\[.*?\]\(.*?\)/g,
+                "[Image omitted due to model capability]",
+              ),
+            }));
+          }
+
           let response: LLMResponse;
           try {
             const rawResponse = await tracer.withSpan(llmSpan, async () => {
               return await this.llmClient.chat({
-                messages: projectToolResultsForModel(this.messages, maxToolResultChars),
-                system: this.config.instructions,
+                messages: finalMessages,
+                system: finalSystem,
                 model: this.config.model,
                 ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
                 ...(llmTools ? { tools: llmTools } : {}),
                 maxOutputTokens,
+                promptCaching: matrix.promptCaching,
                 signal,
               });
             });

@@ -9,6 +9,7 @@ export interface Tool<TParams extends z.ZodType = z.ZodType> {
   description: string;
   parameters: TParams;
   execute(args: z.infer<TParams>, context?: ToolExecutionContext): Promise<string>;
+  requiresHITL?: boolean;
 }
 
 export interface ToolRegistry {

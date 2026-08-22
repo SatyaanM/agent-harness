@@ -34,6 +34,9 @@ export class CapabilityRegistry {
         tools: agentConfig.capabilities.tools ?? false,
         vision: agentConfig.capabilities.vision ?? false,
         streaming: agentConfig.capabilities.streaming ?? false,
+        structuredOutputs: agentConfig.capabilities.structuredOutputs ?? false,
+        promptCaching: agentConfig.capabilities.promptCaching ?? false,
+        reasoning: agentConfig.capabilities.reasoning ?? false,
         maxTokens: agentConfig.capabilities.maxTokens ?? 0,
       };
       await this.cacheEntry({
@@ -87,9 +90,12 @@ export class CapabilityRegistry {
 
     return {
       chat: true,
-      tools: false,
-      vision: false,
+      tools: true,
+      vision: true,
       streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
       maxTokens: 0,
     };
   }

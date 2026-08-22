@@ -14,6 +14,9 @@ export const CapabilityMatrixSchema = z
     tools: z.boolean(),
     vision: z.boolean(),
     streaming: z.boolean(),
+    structuredOutputs: z.boolean().default(false),
+    promptCaching: z.boolean().default(false),
+    reasoning: z.boolean().default(false),
     maxTokens: z.number().int().nonnegative().max(10_000_000),
   })
   .strict();
@@ -38,7 +41,7 @@ export const AgentConfigSchema = z
     runTimeoutMs: z.number().int().min(1_000).max(3_600_000).optional(),
     instructions: z.string().max(1_000_000),
     description: z.string().max(10_000).optional(),
-    capabilities: CapabilityMatrixSchema.optional(),
+    capabilities: CapabilityMatrixSchema.partial().optional(),
     modelIdMapping: z.string().max(256).optional(),
   })
   .strict();

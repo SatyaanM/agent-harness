@@ -40,6 +40,9 @@ describe("probeCapabilities", () => {
       vision: true,
       streaming: true,
       maxTokens: 0,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
     });
     expect(cancel).toHaveBeenCalledTimes(4);
   });

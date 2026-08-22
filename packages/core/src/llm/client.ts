@@ -14,6 +14,7 @@ export interface LLMChatParams {
   preferredProviderId?: string;
   tools?: LLMToolDefinition[];
   maxOutputTokens?: number;
+  promptCaching?: boolean;
   signal?: AbortSignal;
 }
 

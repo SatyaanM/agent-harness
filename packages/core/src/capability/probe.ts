@@ -70,6 +70,9 @@ async function probeOnce(
     tools: false,
     vision: false,
     streaming: false,
+    structuredOutputs: false,
+    promptCaching: false,
+    reasoning: false,
     maxTokens: 0,
   };
 

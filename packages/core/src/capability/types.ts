@@ -21,6 +21,9 @@ export interface AgentConfigRef {
     tools?: boolean;
     vision?: boolean;
     streaming?: boolean;
+    structuredOutputs?: boolean;
+    promptCaching?: boolean;
+    reasoning?: boolean;
     maxTokens?: number;
   };
   modelIdMapping?: string;

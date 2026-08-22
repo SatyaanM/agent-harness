@@ -102,6 +102,9 @@ export async function fetchCapabilities(
     tools: entry.tool_call === true,
     vision: (entry.modalities?.input ?? []).includes("image"),
     streaming: true,
+    structuredOutputs: false,
+    promptCaching: false,
+    reasoning: false,
     maxTokens: entry.limit?.output ?? 0,
   };
 }

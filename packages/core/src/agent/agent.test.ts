@@ -497,3 +497,68 @@ describe("Agent tool boundary", () => {
     }
   });
 });
+
+describe("Agent Capability Enforcement", () => {
+  it("strips tools when tools capability is false", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "no tools sent" },
+    }));
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute: async () => "ok",
+    });
+
+    const capabilityRegistry = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilityRegistry, "lookup").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: true,
+      streaming: false,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+
+    const agent = new Agent(config, registry, { chat }, capabilityRegistry);
+    await agent.run("go");
+
+    expect(chat).toHaveBeenCalledWith(expect.not.objectContaining({ tools: expect.anything() }));
+  });
+
+  it("strips images when vision capability is false", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "no images" },
+    }));
+
+    const capabilityRegistry = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilityRegistry, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: false,
+      streaming: false,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+
+    const agent = new Agent(config, new ToolRegistry(), { chat }, capabilityRegistry);
+    await agent.run("Here is an image: ![alt](http://example.com/img.png) and text.");
+
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            content: "Here is an image: [Image omitted due to model capability] and text.",
+          }),
+        ]),
+      }),
+    );
+  });
+});
