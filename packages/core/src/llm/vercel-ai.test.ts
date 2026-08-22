@@ -155,4 +155,75 @@ describe("Vercel AI adapter", () => {
       },
     ]);
   });
+
+  it("falls back to secondary provider on 429 error and implements circuit breaker", async () => {
+    vi.useFakeTimers();
+
+    const multiConfig: Config = {
+      ...config,
+      PROVIDERS: [
+        {
+          id: "primary",
+          displayName: "Primary",
+          protocol: "openai",
+          baseUrl: "https://primary.example",
+          apiKeyEnv: "TEST_API_KEY",
+          enabled: true,
+          priority: 0,
+        },
+        {
+          id: "secondary",
+          displayName: "Secondary",
+          protocol: "anthropic",
+          baseUrl: "https://secondary.example",
+          apiKeyEnv: "TEST_API_KEY",
+          enabled: true,
+          priority: 1,
+        },
+      ],
+    };
+
+    // First call throws 429, second call succeeds
+    mocks.generateText.mockRejectedValueOnce(
+      Object.assign(new Error("Rate limit"), { statusCode: 429, name: "APICallError" }),
+    );
+    mocks.generateText.mockResolvedValueOnce({
+      text: "fallback success",
+      finishReason: "stop",
+      toolCalls: [],
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+
+    const client = createVercelAILLMClient(multiConfig);
+
+    const chatPromise = client.chat({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+    });
+
+    await vi.runAllTimersAsync();
+
+    const result = await chatPromise;
+    expect(result.message.content).toBe("fallback success");
+    expect(mocks.generateText).toHaveBeenCalledTimes(2);
+
+    // Verify circuit breaker prevents primary on immediate next call
+    mocks.generateText.mockResolvedValueOnce({
+      text: "secondary again",
+      finishReason: "stop",
+      toolCalls: [],
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+
+    const chatPromise2 = client.chat({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+    });
+    await vi.runAllTimersAsync();
+    const result2 = await chatPromise2;
+    expect(result2.message.content).toBe("secondary again");
+    expect(mocks.generateText).toHaveBeenCalledTimes(3);
+
+    vi.useRealTimers();
+  });
 });

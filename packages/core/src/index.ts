@@ -38,7 +38,7 @@ export type { BusMessage } from "./collaboration/message-bus.js";
 export { MessageBus, messageBus } from "./collaboration/message-bus.js";
 export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supervision.js";
 export { callSupervisor } from "./collaboration/supervision.js";
-export type { Config } from "./config.js";
+export type { Config, ProviderEntry, ProviderProtocol } from "./config.js";
 export { ConfigSchema, getConfig, getConfigRoot, resetConfig } from "./config.js";
 export type { ErrorDescriptor } from "./contracts/errors.js";
 export { describeError } from "./contracts/errors.js";
@@ -118,6 +118,7 @@ export {
 } from "./plugin/types.js";
 export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js";
 export { InboxManager } from "./presentation/inbox.js";
+export { ProviderRegistry } from "./provider-registry.js";
 export type { ExecutionLimiterSnapshot } from "./runtime/execution-limiter.js";
 export { ExecutionLimiter, ExecutionQueueFullError } from "./runtime/execution-limiter.js";
 export { createEditFileTool } from "./tool/editFile.js";

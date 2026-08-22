@@ -26,6 +26,26 @@ const ProviderEndpointSchema = z
     );
   }, "must be an HTTP(S) URL without credentials, query, or fragment");
 
+export const ProviderProtocol = z.enum(["openai", "anthropic"]);
+export type ProviderProtocol = z.infer<typeof ProviderProtocol>;
+
+export const ProviderEntrySchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  protocol: ProviderProtocol,
+  baseUrl: z.string().url(),
+  apiKeyEnv: z.string(),
+  supportedModels: z.array(z.string()).optional(),
+  rateLimit: z
+    .object({
+      requestsPerMinute: z.number().optional(),
+      tokensPerMinute: z.number().optional(),
+    })
+    .optional(),
+  enabled: z.boolean().default(true),
+  priority: z.number().default(0),
+});
+export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 export const ConfigSchema = z
   .object({
     ROOT: AbsolutePathSchema.default(process.cwd()),
@@ -46,6 +66,7 @@ export const ConfigSchema = z
       .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u, "contains unsupported characters")
       .default("opencode-go/qwen3.7-plus"),
     MAX_CONCURRENT_AGENTS: z.coerce.number().int().min(1).max(1_000).default(10),
+    PROVIDERS: z.array(ProviderEntrySchema).optional(),
   })
   .strict();
 const PersistedConfigSchema = ConfigSchema.partial().strict();
@@ -105,6 +126,7 @@ export function getConfig(): Config {
     API_KEY_ENV: process.env.API_KEY_ENV ?? persisted.API_KEY_ENV,
     DEFAULT_MODEL: process.env.DEFAULT_MODEL ?? persisted.DEFAULT_MODEL,
     MAX_CONCURRENT_AGENTS: process.env.MAX_CONCURRENT_AGENTS ?? persisted.MAX_CONCURRENT_AGENTS,
+    PROVIDERS: persisted.PROVIDERS,
   });
 
   return cachedConfig;
