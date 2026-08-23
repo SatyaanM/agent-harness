@@ -99,4 +99,33 @@ describe("ProviderRegistry", () => {
     const withPreferred = registry.resolveProvider("gpt-4o-mini", "fallback");
     expect(withPreferred.map((p) => p.id)).toEqual(["fallback", "fast", "slow"]);
   });
+
+  it("safely handles glob patterns containing regex metacharacters", () => {
+    const registry = new ProviderRegistry({
+      ...config,
+      PROVIDERS: [
+        {
+          id: "special-chars",
+          displayName: "Special Chars Provider",
+          protocol: "openai",
+          baseUrl: "https://special.example/v1",
+          apiKeyEnv: "TEST",
+          enabled: true,
+          priority: 1,
+          supportedModels: ["qwen3.7-plus*", "custom+model.*", "test(v1)*"],
+        },
+      ],
+    });
+
+    // Exact dot match should match
+    expect(registry.resolveProvider("qwen3.7-plus-preview").map((p) => p.id)).toEqual([
+      "special-chars",
+    ]);
+    // Dot should NOT match arbitrary character (e.g. "qwen3X7-plus" should not match "qwen3.7-plus*")
+    expect(registry.resolveProvider("qwen3X7-plus-preview")).toEqual([]);
+    // Plus sign should match literally
+    expect(registry.resolveProvider("custom+model.v2").map((p) => p.id)).toEqual(["special-chars"]);
+    // Parentheses should match literally
+    expect(registry.resolveProvider("test(v1)-prod").map((p) => p.id)).toEqual(["special-chars"]);
+  });
 });
