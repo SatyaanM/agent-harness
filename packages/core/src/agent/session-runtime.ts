@@ -480,18 +480,20 @@ export class SessionRuntime {
               });
               return;
             }
-            const isCalled = e.type === "tool:called";
-            this.emit({
-              type: "agent:tool",
-              agentName: agentConfig.name,
-              tool: {
-                type: isCalled ? "called" : "completed",
-                toolName: e.toolName,
-                args: isCalled ? e.args : undefined,
-                result: isCalled ? undefined : e.result,
-              },
-              ...correlation,
-            });
+            if (e.type === "tool:called" || e.type === "tool:completed") {
+              const isCalled = e.type === "tool:called";
+              this.emit({
+                type: "agent:tool",
+                agentName: agentConfig.name,
+                tool: {
+                  type: isCalled ? "called" : "completed",
+                  toolName: e.toolName,
+                  args: isCalled ? e.args : undefined,
+                  result: isCalled ? undefined : e.result,
+                },
+                ...correlation,
+              });
+            }
           },
           logger,
         );

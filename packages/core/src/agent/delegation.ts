@@ -150,7 +150,9 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
                 .catch(reportBackgroundError);
               return;
             }
-            deps.onWorkerTool?.(sessionId, e);
+            if (e.type === "tool:called" || e.type === "tool:completed") {
+              deps.onWorkerTool?.(sessionId, e);
+            }
           },
           deps.executionLimiter,
         );
