@@ -230,8 +230,11 @@ export class Agent {
                 const toolCalls = Array.from(toolCallsMap.entries()).map(([id, tc]) => {
                   try {
                     return { toolCallId: id, toolName: tc.name, args: JSON.parse(tc.argsText) };
-                  } catch {
-                    return { toolCallId: id, toolName: tc.name, args: {} };
+                  } catch (err) {
+                    throw new Error(
+                      `Failed to parse tool call arguments for ${tc.name} (${id}): ${err instanceof Error ? err.message : String(err)}`,
+                      { cause: err },
+                    );
                   }
                 });
 

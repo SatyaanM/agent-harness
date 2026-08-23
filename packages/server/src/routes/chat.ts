@@ -79,9 +79,11 @@ chatRouter.post(
     try {
       await tracer.withSpan(serverSpan, async () => {
         const runtime = sessionManager.getOrCreate(sessionId);
+        let streamed = false;
         const handleEvent = (event: import("@agent-harness/core").SessionRuntimeEvent) => {
           if ("requestId" in event && event.requestId === requestId) {
             if (event.type === "agent:text-delta") {
+              streamed = true;
               res.write(`data: ${JSON.stringify({ type: "text-delta", text: event.text })}\n\n`);
             } else if (event.type === "agent:tool-call-delta") {
               res.write(
@@ -95,6 +97,11 @@ chatRouter.post(
           const result = retry
             ? await runtime.retry(message, agentName, controller.signal, requestId)
             : await runtime.deliver(message, agentName, controller.signal, requestId);
+          if (!streamed && result.summary) {
+            for (const chunk of chunkSummary(result.summary)) {
+              res.write(`data: ${JSON.stringify({ type: "text-delta", text: chunk })}\n\n`);
+            }
+          }
           res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
           serverSpan.setStatus({
             code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
@@ -122,3 +129,12 @@ chatRouter.post(
     if (!res.destroyed) res.end();
   }),
 );
+
+function chunkSummary(summary: string): string[] {
+  if (summary.length === 0) return [""];
+  const chunks: string[] = [];
+  for (let offset = 0; offset < summary.length; offset += 40) {
+    chunks.push(summary.slice(offset, offset + 40));
+  }
+  return chunks;
+}
