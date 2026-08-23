@@ -28,4 +28,22 @@ describe("CapabilityRegistry manual overrides", () => {
 
     expect(capabilities.chat).toBe(false);
   });
+
+  it("merges partial capability overrides on top of base defaults without wiping unspecified fields", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
+    tempDirs.push(root);
+    const registry = new CapabilityRegistry({ workspaceRoot: root });
+
+    // User only overrides tools to false
+    const capabilities = await registry.lookup("unknown-provider", "unknown-model", "unknown-sdk", {
+      capabilities: {
+        tools: false,
+      },
+    });
+
+    expect(capabilities.tools).toBe(false);
+    // Unspecified fields should retain default values from base matrix
+    expect(capabilities.chat).toBe(true);
+    expect(capabilities.vision).toBe(true);
+  });
 });
