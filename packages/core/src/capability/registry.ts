@@ -28,17 +28,12 @@ export class CapabilityRegistry {
     sdk: string,
     agentConfig?: AgentConfigRef,
   ): Promise<CapabilityMatrix> {
+    // Resolve base matrix from tiers 2-4 (cache, models.dev, probe, defaults)
+    const base = await this.resolveBaseMatrix(provider, model, sdk, agentConfig);
+
     if (agentConfig?.capabilities) {
-      const manual: CapabilityMatrix = {
-        chat: agentConfig.capabilities.chat ?? true,
-        tools: agentConfig.capabilities.tools ?? false,
-        vision: agentConfig.capabilities.vision ?? false,
-        streaming: agentConfig.capabilities.streaming ?? false,
-        structuredOutputs: agentConfig.capabilities.structuredOutputs ?? false,
-        promptCaching: agentConfig.capabilities.promptCaching ?? false,
-        reasoning: agentConfig.capabilities.reasoning ?? false,
-        maxTokens: agentConfig.capabilities.maxTokens ?? 0,
-      };
+      // Merge user's partial overrides on top of the resolved base matrix
+      const manual: CapabilityMatrix = { ...base, ...agentConfig.capabilities };
       await this.cacheEntry({
         provider,
         model,
@@ -50,6 +45,15 @@ export class CapabilityRegistry {
       return manual;
     }
 
+    return base;
+  }
+
+  private async resolveBaseMatrix(
+    provider: string,
+    model: string,
+    sdk: string,
+    agentConfig?: AgentConfigRef,
+  ): Promise<CapabilityMatrix> {
     const cached = await this.cache.getEntry(provider, model, sdk);
     if (cached) {
       return cached.caps;

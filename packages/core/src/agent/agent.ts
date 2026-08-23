@@ -32,7 +32,8 @@ export type AgentEventCallback = (
   event:
     | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
     | { type: "tool:completed"; toolName: string; result?: string }
-    | { type: "step"; messages: Message[] },
+    | { type: "step"; messages: Message[] }
+    | { type: "capability-mismatch"; detail: string },
 ) => void;
 
 export class Agent {
@@ -238,7 +239,17 @@ export class Agent {
             throw new AgentCancelledError();
           }
 
-          const responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+          let responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+
+          // Emit diagnostic and discard hallucinated tool calls when tools are disabled
+          if (!matrix.tools && responseToolCalls.length > 0) {
+            this.onEvent?.({
+              type: "capability-mismatch",
+              detail: `Model returned ${responseToolCalls.length} tool call(s) but tools capability is disabled`,
+            });
+            responseToolCalls = [];
+          }
+
           const responseMessage = responseToolCalls.length
             ? { ...response.message, toolCalls: responseToolCalls }
             : response.message;
