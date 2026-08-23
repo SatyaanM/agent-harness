@@ -201,6 +201,14 @@ export class MessageRepository {
     return stmt.all(sessionId);
   }
 
+  /**
+   * Retrieves the active context for a session by replacing compacted message ranges
+   * with their corresponding summary messages.
+   *
+   * TODO(perf): Currently loads all messages into memory via listBySession. For long-lived
+   * sessions, this should be optimized to perform range exclusion and summary substitution
+   * directly at the SQL query level.
+   */
   getActiveContext(sessionId: string): MessageRow[] {
     const allMessages = this.listBySession(sessionId);
     const ranges = this.getCompactedRanges(sessionId);
