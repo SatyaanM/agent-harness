@@ -16,8 +16,22 @@ const ANTHROPIC_MODELS = new Set([
   "qwen3.6-plus",
 ]);
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true },
+    );
+  });
 }
 
 export function createVercelAILLMClient(config: Config): LLMClient {
@@ -79,7 +93,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           if (attempt > 0) {
             // Exponential backoff before fallback (e.g. 1s, 2s...)
             const backoff = Math.min(2 ** (attempt - 1) * 1000, 5000);
-            await delay(backoff);
+            await delay(backoff, params.signal);
           }
 
           const result = await generateText({
@@ -140,6 +154,12 @@ export function createVercelAILLMClient(config: Config): LLMClient {
           }
           attempt++;
         }
+      }
+
+      if (attempt === 0) {
+        throw new Error(
+          "All eligible providers are temporarily unavailable (circuit breakers open)",
+        );
       }
 
       throw new Error(`All eligible providers failed. Last error: ${lastError?.message}`, {

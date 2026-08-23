@@ -1,5 +1,11 @@
 import type { Config, ProviderEntry } from "./config.js";
 
+/** Escape regex metacharacters in a glob pattern, then convert `*` to `.*`. */
+function globToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/([.+?^${}()|[\]\\])/g, "\\$1").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
 export class ProviderRegistry {
   private providers: ProviderEntry[] = [];
 
@@ -34,9 +40,7 @@ export class ProviderRegistry {
       if (!p.supportedModels || p.supportedModels.length === 0) return true;
       return p.supportedModels.some((pattern) => {
         if (pattern.includes("*")) {
-          // simple glob pattern to regex
-          const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
-          return regex.test(modelId);
+          return globToRegex(pattern).test(modelId);
         }
         return pattern === modelId;
       });

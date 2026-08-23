@@ -33,7 +33,7 @@ export const ProviderEntrySchema = z.object({
   id: z.string(),
   displayName: z.string(),
   protocol: ProviderProtocol,
-  baseUrl: z.string().url(),
+  baseUrl: ProviderEndpointSchema,
   apiKeyEnv: z.string(),
   supportedModels: z.array(z.string()).optional(),
   rateLimit: z
