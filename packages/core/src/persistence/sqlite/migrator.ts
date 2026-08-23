@@ -202,6 +202,30 @@ DROP INDEX IF EXISTS idx_audit_events_action_ts;
 DROP INDEX IF EXISTS idx_audit_events_current_hash;
 DROP TABLE IF EXISTS audit_events;`;
 
+export const COMPACTION_RECORDS_UP = `-- Migration 003: Compaction Records
+CREATE TABLE IF NOT EXISTS compaction_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  summary_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  start_sequence INTEGER NOT NULL,
+  end_sequence INTEGER NOT NULL,
+  original_token_estimate INTEGER NOT NULL,
+  summary_token_estimate INTEGER NOT NULL,
+  compacted_at INTEGER NOT NULL,
+  model_used TEXT NOT NULL,
+  CONSTRAINT chk_sequence_range CHECK (end_sequence >= start_sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_compaction_records_session_seq ON compaction_records(session_id, start_sequence ASC);
+CREATE INDEX IF NOT EXISTS idx_compaction_records_summary ON compaction_records(summary_message_id);
+`;
+
+export const COMPACTION_RECORDS_DOWN = `-- Down migration for compaction records
+DROP INDEX IF EXISTS idx_compaction_records_summary;
+DROP INDEX IF EXISTS idx_compaction_records_session_seq;
+DROP TABLE IF EXISTS compaction_records;
+`;
+
 export const BUILTIN_MIGRATIONS: readonly MigrationFile[] = Object.freeze([
   {
     version: 1,
@@ -214,6 +238,12 @@ export const BUILTIN_MIGRATIONS: readonly MigrationFile[] = Object.freeze([
     name: "002_audit_events",
     upSql: AUDIT_EVENTS_UP,
     downSql: AUDIT_EVENTS_DOWN,
+  },
+  {
+    version: 3,
+    name: "003_compaction_records",
+    upSql: COMPACTION_RECORDS_UP,
+    downSql: COMPACTION_RECORDS_DOWN,
   },
 ]);
 

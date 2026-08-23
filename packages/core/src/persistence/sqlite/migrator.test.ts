@@ -13,16 +13,17 @@ describe("SqliteMigrator", () => {
     const migrator = new SqliteMigrator(db);
 
     const pending = migrator.getPendingMigrations();
-    expect(pending).toHaveLength(2);
+    expect(pending).toHaveLength(3);
     expect(pending[0]?.version).toBe(1);
     expect(pending[1]?.version).toBe(2);
+    expect(pending[2]?.version).toBe(3);
 
     const result = migrator.up();
-    expect(result.appliedCount).toBe(2);
-    expect(result.versions).toEqual([1, 2]);
+    expect(result.appliedCount).toBe(3);
+    expect(result.versions).toEqual([1, 2, 3]);
 
     const applied = migrator.getAppliedMigrations();
-    expect(applied).toHaveLength(2);
+    expect(applied).toHaveLength(3);
     expect(applied[0]?.version).toBe(1);
     expect(applied[0]?.name).toBe("001_initial_schema");
     expect(applied[1]?.version).toBe(2);
@@ -58,12 +59,12 @@ describe("SqliteMigrator", () => {
 
     // 1. Up
     migrator.up();
-    expect(migrator.getAppliedMigrations()).toHaveLength(2);
+    expect(migrator.getAppliedMigrations()).toHaveLength(3);
 
     // 2. Down
     const downRes = migrator.down(0);
-    expect(downRes.rolledBackCount).toBe(2);
-    expect(downRes.versions).toEqual([2, 1]);
+    expect(downRes.rolledBackCount).toBe(3);
+    expect(downRes.versions).toEqual([3, 2, 1]);
 
     // Check tables dropped
     const tablesAfterDown = db
@@ -75,8 +76,8 @@ describe("SqliteMigrator", () => {
 
     // 3. Up again
     const reUpRes = migrator.up();
-    expect(reUpRes.appliedCount).toBe(2);
-    expect(migrator.getAppliedMigrations()).toHaveLength(2);
+    expect(reUpRes.appliedCount).toBe(3);
+    expect(migrator.getAppliedMigrations()).toHaveLength(3);
 
     db.close();
   });

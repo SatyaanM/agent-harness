@@ -43,6 +43,7 @@ export const AgentConfigSchema = z
     description: z.string().max(10_000).optional(),
     capabilities: CapabilityMatrixSchema.partial().optional(),
     modelIdMapping: z.string().max(256).optional(),
+    compaction: z.boolean().optional(),
   })
   .strict();
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
