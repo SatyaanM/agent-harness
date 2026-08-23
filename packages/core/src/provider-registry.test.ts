@@ -18,8 +18,8 @@ describe("ProviderRegistry", () => {
     const registry = new ProviderRegistry(config);
     const providers = registry.getProviders();
     expect(providers).toHaveLength(1);
-    expect(providers[0].id).toBe("default");
-    expect(providers[0].protocol).toBe("openai");
+    expect(providers[0]?.id).toBe("default");
+    expect(providers[0]?.protocol).toBe("openai");
   });
 
   it("filters out disabled providers", () => {
@@ -48,7 +48,7 @@ describe("ProviderRegistry", () => {
     });
     const providers = registry.getProviders();
     expect(providers).toHaveLength(1);
-    expect(providers[0].id).toBe("enabled");
+    expect(providers[0]?.id).toBe("enabled");
   });
 
   it("sorts eligible providers by priority and model pattern matching", () => {
