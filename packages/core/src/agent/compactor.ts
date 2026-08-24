@@ -10,6 +10,7 @@ const COMPACTION_PROMPT_RESERVE_TOKENS = 512;
 export interface CompactionLimits {
   contextWindowTokens?: number;
   maxOutputTokens?: number;
+  preferredProviderId?: string;
   signal?: AbortSignal;
 }
 
@@ -124,6 +125,7 @@ CRITICAL INSTRUCTIONS:
       system: systemPrompt,
       messages: [{ role: "user", content: textBlock }],
       maxOutputTokens: effective.outputTokens,
+      ...(limits.preferredProviderId ? { preferredProviderId: limits.preferredProviderId } : {}),
       signal: limits.signal,
     });
 

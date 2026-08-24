@@ -1131,49 +1131,69 @@ describe("SessionRuntime delivery invariants", () => {
       }),
     );
 
-    const calls: LLMChatParams[] = [];
+    const compactionCalls: LLMChatParams[] = [];
+    const primaryCalls: LLMChatParams[] = [];
     const llmClient: LLMClient = {
       async chat(params) {
-        calls.push(params);
-        if (calls.length === 1) {
-          return {
-            ...stop("MEMORY:\nuserPreference: concise\n\nSUMMARY:\nEarlier work completed."),
-            usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
-          };
-        }
-        return stop("primary answer");
+        compactionCalls.push(params);
+        return {
+          ...stop("MEMORY:\nuserPreference: concise\n\nSUMMARY:\nEarlier work completed."),
+          usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+        };
+      },
+      async *chatStream(params) {
+        primaryCalls.push(params);
+        yield { type: "text-delta" as const, text: "primary answer" };
+        yield {
+          type: "finish" as const,
+          finishReason: "stop" as const,
+          usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
+        };
       },
     };
+    const capabilities = new CapabilityRegistry({ workspaceRoot: sessionsDir });
+    const lookupModel = vi.spyOn(capabilities, "lookupModel").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: false,
+      streaming: true,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      contextWindowTokens: 100,
+      maxTokens: 64,
+    });
     const runtime = new SessionRuntime({
       sessionId: "compact-runtime",
       sessionsDir,
       db,
       resolveConfig: () => ({
         ...config(),
-        capabilities: {
-          chat: true,
-          tools: false,
-          vision: false,
-          streaming: false,
-          maxTokens: 100_000,
-          contextWindowTokens: 100,
-        },
+        provider: "preferred-provider",
         compactionThreshold: 0.5,
         compactionKeepRecentMessages: 2,
         compactionChunkMessages: 4,
       }),
       toolRegistry: new ToolRegistry(),
       llmClient,
-      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      capabilityRegistry: capabilities,
     });
 
     await expect(runtime.deliver("new prompt")).resolves.toEqual(
       expect.objectContaining({ status: "success", summary: "primary answer" }),
     );
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.system).toContain("structured memory block");
-    expect(calls[1]?.messages.map((entry) => entry.content)).toEqual([
+    expect(lookupModel).toHaveBeenCalledTimes(1);
+    expect(compactionCalls).toHaveLength(1);
+    expect(compactionCalls[0]?.system).toContain("structured memory block");
+    expect(compactionCalls[0]).toEqual(
+      expect.objectContaining({
+        preferredProviderId: "preferred-provider",
+        maxOutputTokens: 25,
+      }),
+    );
+    expect(primaryCalls).toHaveLength(1);
+    expect(primaryCalls[0]?.messages.map((entry) => entry.content)).toEqual([
       "MEMORY:\nuserPreference: concise\n\nSUMMARY:\nEarlier work completed.",
       originalMessages[4]?.content,
       originalMessages[5]?.content,
@@ -1193,11 +1213,75 @@ describe("SessionRuntime delivery invariants", () => {
       "primary answer",
     ]);
     const run = new RunRepository(db).listBySession("compact-runtime")[0];
-    expect(run?.token_usage).toBe(
-      JSON.stringify({
-        compactionTokenUsage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+    expect(JSON.parse(run?.token_usage ?? "null")).toEqual({
+      streaming: { steps: [expect.objectContaining({ outputTokens: 4 })] },
+      compactionTokenUsage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+    });
+    db.close();
+  });
+
+  it("retains compaction and streaming usage together when the primary stream fails", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+    new SessionRepository(db).create({
+      id: "compact-stream-failure",
+      agentName: "orchestrator",
+      prompt: "old prompt",
+    });
+    const messageRepo = new MessageRepository(db);
+    for (let sequenceNum = 0; sequenceNum < 6; sequenceNum += 1) {
+      messageRepo.create({
+        sessionId: "compact-stream-failure",
+        role: sequenceNum % 2 === 0 ? "user" : "assistant",
+        content: `historical message ${sequenceNum} with enough context to compact`,
+        sequenceNum,
+      });
+    }
+    const capabilities = new CapabilityRegistry({ workspaceRoot: tmpdir() });
+    vi.spyOn(capabilities, "lookupModel").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: false,
+      streaming: true,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      contextWindowTokens: 100,
+      maxTokens: 64,
+    });
+    const runtime = new SessionRuntime({
+      sessionId: "compact-stream-failure",
+      db,
+      resolveConfig: () => ({
+        ...config(),
+        compactionThreshold: 0.5,
+        compactionKeepRecentMessages: 2,
+        compactionChunkMessages: 4,
       }),
-    );
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return {
+            ...stop("MEMORY:\nstate: retained\n\nSUMMARY:\nEarlier work."),
+            usage: { inputTokens: 30, outputTokens: 8, totalTokens: 38 },
+          };
+        },
+        async *chatStream() {
+          yield { type: "text-delta" as const, text: "partial" };
+          throw new Error("primary stream failed");
+        },
+      },
+      capabilityRegistry: capabilities,
+    });
+
+    await expect(runtime.deliver("new prompt")).rejects.toThrow("primary stream failed");
+
+    const failedRun = new RunRepository(db).listBySession("compact-stream-failure")[0];
+    expect(failedRun?.status).toBe("failed");
+    expect(JSON.parse(failedRun?.token_usage ?? "null")).toEqual({
+      streaming: { steps: [expect.objectContaining({ outputTokens: 2 })] },
+      compactionTokenUsage: { inputTokens: 30, outputTokens: 8, totalTokens: 38 },
+    });
     db.close();
   });
 

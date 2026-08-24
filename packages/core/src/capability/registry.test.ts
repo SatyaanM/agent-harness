@@ -84,6 +84,7 @@ describe("CapabilityRegistry manual overrides", () => {
         structuredOutputs: true,
         promptCaching: true,
         reasoning: true,
+        contextWindowTokens: 128_000,
         maxTokens: 4096,
       })
       .mockResolvedValueOnce({
@@ -94,6 +95,7 @@ describe("CapabilityRegistry manual overrides", () => {
         structuredOutputs: false,
         promptCaching: false,
         reasoning: false,
+        contextWindowTokens: 32_000,
         maxTokens: 1024,
       })
       .mockResolvedValueOnce({
@@ -104,6 +106,7 @@ describe("CapabilityRegistry manual overrides", () => {
         structuredOutputs: true,
         promptCaching: true,
         reasoning: true,
+        contextWindowTokens: 0,
         maxTokens: 0,
       });
 
@@ -115,6 +118,7 @@ describe("CapabilityRegistry manual overrides", () => {
       structuredOutputs: false,
       promptCaching: false,
       reasoning: false,
+      contextWindowTokens: 32_000,
       maxTokens: 1024,
     });
     expect(lookup).toHaveBeenNthCalledWith(1, "full", "shared-model", "vercel-ai", undefined);
@@ -191,6 +195,7 @@ describe("CapabilityRegistry manual overrides", () => {
       structuredOutputs: false,
       promptCaching: false,
       reasoning: false,
+      contextWindowTokens: 0,
       maxTokens: 0,
     });
     delete process.env.FULL_PROBE_KEY;
@@ -690,6 +695,7 @@ describe("CapabilityRegistry manual overrides", () => {
         structuredOutputs: false,
         promptCaching: false,
         reasoning: false,
+        contextWindowTokens: 0,
         maxTokens: 0,
       },
     );

@@ -23,6 +23,7 @@ import {
   AgentCancelledError,
   type AgentConfig,
   type AgentResult,
+  type CapabilityMatrix,
   type Message,
 } from "./types.js";
 
@@ -626,13 +627,19 @@ export class SessionRuntime {
         try {
           const execute = async () => {
             this.emit({ type: "agent:started", agentName: agentConfig.name, ...correlation });
+            const resolvedCapabilities = await agent.resolveCapabilities();
             if (this.messageRepo) {
-              const prepared = await this.prepareActiveContext(agentConfig, message, signal);
+              const prepared = await this.prepareActiveContext(
+                agentConfig,
+                resolvedCapabilities,
+                message,
+                signal,
+              );
               modelHistory = prepared.history;
               modelHistoryLength = modelHistory.length;
               compactionTokenUsage = prepared.compactionTokenUsage;
             }
-            return agent.run(message, modelHistory, signal);
+            return agent.run(message, modelHistory, signal, resolvedCapabilities);
           };
           result = this.options.executionLimiter
             ? await this.options.executionLimiter.run(execute, signal)
@@ -769,9 +776,7 @@ export class SessionRuntime {
           tokenUsage:
             streamMetrics.length > 0 || compactionTokenUsage
               ? {
-                  ...(streamMetrics.length > 0
-                    ? { streaming: { steps: streamMetrics } }
-                    : {}),
+                  ...(streamMetrics.length > 0 ? { streaming: { steps: streamMetrics } } : {}),
                   ...(compactionTokenUsage ? { compactionTokenUsage } : {}),
                 }
               : undefined,
@@ -812,6 +817,7 @@ export class SessionRuntime {
 
   private async prepareActiveContext(
     agentConfig: AgentConfig,
+    resolvedCapabilities: CapabilityMatrix,
     deliveredPrompt: string | undefined,
     signal: AbortSignal | undefined,
   ): Promise<{ history: Message[]; compactionTokenUsage?: LLMUsage }> {
@@ -819,10 +825,14 @@ export class SessionRuntime {
     if (!messageRepo) return { history: [] };
 
     const contextWindowTokens =
-      agentConfig.capabilities?.contextWindowTokens &&
-      agentConfig.capabilities.contextWindowTokens > 0
-        ? agentConfig.capabilities.contextWindowTokens
-        : DEFAULT_CONTEXT_WINDOW_TOKENS;
+      minimumPositive(
+        resolvedCapabilities.contextWindowTokens,
+        agentConfig.capabilities?.contextWindowTokens,
+      ) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+    const maxOutputTokens = minimumPositive(
+      resolvedCapabilities.maxTokens,
+      agentConfig.capabilities?.maxTokens,
+    );
     const threshold = agentConfig.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
     const activeRows = messageRepo.getActiveContext(this.options.sessionId);
     const activeMessages = activeRows.map((row) => messageRepo.toMessage(row));
@@ -845,7 +855,8 @@ export class SessionRuntime {
           agentConfig.model,
           {
             contextWindowTokens,
-            maxOutputTokens: agentConfig.capabilities?.maxTokens,
+            maxOutputTokens,
+            preferredProviderId: agentConfig.provider,
             signal,
           },
         );
@@ -880,4 +891,9 @@ export class SessionRuntime {
       ...(compactionTokenUsage ? { compactionTokenUsage } : {}),
     };
   }
+}
+
+function minimumPositive(...values: Array<number | undefined>): number | undefined {
+  const positive = values.filter((value): value is number => value !== undefined && value > 0);
+  return positive.length > 0 ? Math.min(...positive) : undefined;
 }

@@ -100,5 +100,6 @@ Verified current behavior:
 
 ## Stacked-branch integration requirements
 
-- After rebasing onto PR #31, each run must resolve one capability matrix and share that same result with both compaction budgeting and the primary `Agent`; compaction must not perform an independent registry lookup or observe different manual/cache state.
-- After rebasing onto PR #32, successful and failed run persistence must merge `compactionTokenUsage` with streaming token-usage metadata rather than replacing either subtree. Combined regression coverage must exercise successful streaming after compaction and a rejected compaction response before streaming begins.
+- Each run resolves one capability matrix and shares that same result with both compaction budgeting and the primary `Agent`; compaction does not perform an independent registry lookup or observe different manual/cache state. Positive context-window and output limits use the most restrictive discovered/configured value.
+- Compaction uses the agent's preferred provider through the shared provider runtime, preserving the same routing, rate, circuit, and fallback policy as primary generation.
+- Successful and failed run persistence merges `compactionTokenUsage` with streaming token-usage metadata rather than replacing either subtree. Combined regression coverage exercises successful streaming after compaction, primary-stream failure after successful compaction, and rejected compaction before streaming begins.

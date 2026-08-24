@@ -95,7 +95,7 @@ describe("Compactor Engine and SQLite Repo", () => {
   it("excludes persisted assistant reasoning from projection and token estimation", async () => {
     const reasoning = "PRIVATE_REASONING_DO_NOT_SEND".repeat(100);
     const withoutReasoning = [{ role: "assistant" as const, content: "visible answer" }];
-    const withReasoning = [{ ...withoutReasoning[0], reasoning }];
+    const withReasoning = [{ role: "assistant" as const, content: "visible answer", reasoning }];
     const mockClient: LLMClient = {
       chat: vi.fn().mockResolvedValue({
         message: { role: "assistant", content: "safe summary" },
