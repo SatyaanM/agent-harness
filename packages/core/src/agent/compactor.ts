@@ -13,6 +13,16 @@ export interface CompactionLimits {
   signal?: AbortSignal;
 }
 
+export class CompactionResponseError extends Error {
+  constructor(
+    message: string,
+    public readonly usage?: LLMUsage,
+  ) {
+    super(message);
+    this.name = "CompactionResponseError";
+  }
+}
+
 function boundedField(value: string): string {
   if (value.length <= MAX_COMPACTION_FIELD_CHARACTERS) return value;
   const marker = "\n[truncated]";
@@ -25,9 +35,6 @@ function projectMessages(messages: Message[], maxCharacters: number): string {
   for (const message of messages) {
     const fields = [`[Message ${messageNumber}] Role: ${message.role}`];
     fields.push(`Content: ${boundedField(message.content)}`);
-    if (message.role === "assistant" && message.reasoning) {
-      fields.push(`Reasoning: ${boundedField(message.reasoning)}`);
-    }
     if (message.role === "assistant" && message.toolCalls?.length) {
       fields.push(`Tool Calls: ${boundedField(JSON.stringify(message.toolCalls))}`);
     }
@@ -80,7 +87,6 @@ export function estimateMessagesTokens(messages: Message[]): number {
   for (const message of messages) {
     characters += message.role.length + message.content.length + 32;
     if (message.role === "assistant") {
-      characters += message.reasoning?.length ?? 0;
       if (message.toolCalls) characters += JSON.stringify(message.toolCalls).length;
     }
     if (message.role === "tool") characters += message.toolCallId.length;
@@ -129,8 +135,9 @@ CRITICAL INSTRUCTIONS:
       summary.length > MAX_COMPACTION_SUMMARY_CHARACTERS ||
       toolCalls.length > 0
     ) {
-      throw new Error(
+      throw new CompactionResponseError(
         `Invalid compaction response: finish=${response.finishReason}, contentCharacters=${summary.length}, toolCalls=${toolCalls.length}`,
+        response.usage,
       );
     }
 

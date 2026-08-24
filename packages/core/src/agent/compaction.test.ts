@@ -92,6 +92,27 @@ describe("Compactor Engine and SQLite Repo", () => {
     expect(source).toHaveLength(MAX_COMPACTION_INPUT_CHARACTERS * 2);
   });
 
+  it("excludes persisted assistant reasoning from projection and token estimation", async () => {
+    const reasoning = "PRIVATE_REASONING_DO_NOT_SEND".repeat(100);
+    const withoutReasoning = [{ role: "assistant" as const, content: "visible answer" }];
+    const withReasoning = [{ ...withoutReasoning[0], reasoning }];
+    const mockClient: LLMClient = {
+      chat: vi.fn().mockResolvedValue({
+        message: { role: "assistant", content: "safe summary" },
+        finishReason: "stop",
+      }),
+    };
+
+    const result = await new Compactor(mockClient).compact(withReasoning, "model");
+
+    expect(result.originalTokenEstimate).toBe(estimateMessagesTokens(withoutReasoning));
+    expect(estimateMessagesTokens(withReasoning)).toBe(estimateMessagesTokens(withoutReasoning));
+    const projection = vi.mocked(mockClient.chat).mock.calls[0]?.[0].messages[0]?.content;
+    expect(projection).toContain("visible answer");
+    expect(projection).not.toContain("PRIVATE_REASONING_DO_NOT_SEND");
+    expect(projection).not.toContain("Reasoning:");
+  });
+
   it("fits an oversized tool result within a small context and output capability", async () => {
     const oversizedResult = "r".repeat(100_000);
     const mockClient: LLMClient = {

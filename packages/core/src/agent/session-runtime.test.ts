@@ -1286,49 +1286,64 @@ describe("SessionRuntime delivery invariants", () => {
     db.close();
   });
 
-  it("does not persist derived compaction state for a truncated summary", async () => {
-    const db = createDatabaseConnection(":memory:");
-    new SqliteMigrator(db).up();
-    new SessionRepository(db).create({ id: "bad-summary", agentName: "agent", prompt: "old" });
-    const messageRepo = new MessageRepository(db);
-    for (let sequenceNum = 0; sequenceNum < 6; sequenceNum++) {
-      messageRepo.create({
+  it.each([
+    ["truncated", "length"],
+    ["content-filtered", "content-filter"],
+  ] as const)(
+    "persists usage but no derived state for a %s summary",
+    async (_case, finishReason) => {
+      const db = createDatabaseConnection(":memory:");
+      new SqliteMigrator(db).up();
+      new SessionRepository(db).create({ id: "bad-summary", agentName: "agent", prompt: "old" });
+      const messageRepo = new MessageRepository(db);
+      for (let sequenceNum = 0; sequenceNum < 6; sequenceNum++) {
+        messageRepo.create({
+          sessionId: "bad-summary",
+          role: sequenceNum % 2 === 0 ? "user" : "assistant",
+          content: `history ${sequenceNum} with enough text to compact`,
+          sequenceNum,
+        });
+      }
+      const chat = vi.fn(async () => ({
+        message: { role: "assistant" as const, content: "incomplete summary" },
+        finishReason,
+        usage: { inputTokens: 11, outputTokens: 3, totalTokens: 14 },
+      }));
+      const runtime = new SessionRuntime({
         sessionId: "bad-summary",
-        role: sequenceNum % 2 === 0 ? "user" : "assistant",
-        content: `history ${sequenceNum} with enough text to compact`,
-        sequenceNum,
+        db,
+        resolveConfig: () => ({
+          ...config(),
+          capabilities: {
+            chat: true,
+            tools: false,
+            vision: false,
+            streaming: false,
+            maxTokens: 100_000,
+            contextWindowTokens: 10,
+          },
+          compactionKeepRecentMessages: 2,
+          compactionChunkMessages: 4,
+        }),
+        toolRegistry: new ToolRegistry(),
+        llmClient: { chat },
+        capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
       });
-    }
-    const chat = vi.fn(async () => ({
-      message: { role: "assistant" as const, content: "incomplete summary" },
-      finishReason: "length" as const,
-    }));
-    const runtime = new SessionRuntime({
-      sessionId: "bad-summary",
-      db,
-      resolveConfig: () => ({
-        ...config(),
-        capabilities: {
-          chat: true,
-          tools: false,
-          vision: false,
-          streaming: false,
-          maxTokens: 100_000,
-          contextWindowTokens: 10,
-        },
-        compactionKeepRecentMessages: 2,
-        compactionChunkMessages: 4,
-      }),
-      toolRegistry: new ToolRegistry(),
-      llmClient: { chat },
-      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
-    });
 
-    await expect(runtime.deliver("new prompt")).rejects.toThrow(/compaction response/i);
-    expect(messageRepo.getCompactedRanges("bad-summary")).toEqual([]);
-    expect(messageRepo.listBySession("bad-summary").filter((row) => row.role === "system")).toEqual(
-      [],
-    );
-    db.close();
-  });
+      await expect(runtime.deliver("new prompt")).rejects.toThrow(/compaction response/i);
+      expect(messageRepo.getCompactedRanges("bad-summary")).toEqual([]);
+      expect(
+        messageRepo.listBySession("bad-summary").filter((row) => row.role === "system"),
+      ).toEqual([]);
+      expect(new RunRepository(db).listBySession("bad-summary")[0]).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          token_usage: JSON.stringify({
+            compactionTokenUsage: { inputTokens: 11, outputTokens: 3, totalTokens: 14 },
+          }),
+        }),
+      );
+      db.close();
+    },
+  );
 });

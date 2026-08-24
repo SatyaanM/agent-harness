@@ -17,7 +17,7 @@ import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
 import { isRecord, parseJsonBoundary } from "../validation.js";
 import { Agent, type StreamPerformanceMetrics } from "./agent.js";
-import { Compactor, estimateMessagesTokens } from "./compactor.js";
+import { CompactionResponseError, Compactor, estimateMessagesTokens } from "./compactor.js";
 import {
   AgentBudgetExceededError,
   AgentCancelledError,
@@ -638,6 +638,9 @@ export class SessionRuntime {
             ? await this.options.executionLimiter.run(execute, signal)
             : await execute();
         } catch (error) {
+          if (error instanceof CompactionResponseError && error.usage) {
+            compactionTokenUsage = error.usage;
+          }
           const errorMessage = error instanceof Error ? error.message : String(error);
           const errorCode = describeError(error).code;
           const isCancelled =

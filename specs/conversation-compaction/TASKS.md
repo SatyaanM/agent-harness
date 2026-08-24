@@ -19,3 +19,7 @@ read_when:
 - [x] Bound compaction-only input projection and summary output request/response.
 - [x] Reject unusable compaction responses without durable writes.
 - [x] Make v3 -> v2 rollback delete only referenced derived summaries and prove up/down/up integrity.
+- [x] Exclude persisted assistant reasoning from compaction projection and token estimation.
+- [x] Persist provider usage from rejected compaction responses without summary/range state.
+- [ ] After PR #31 rebase, share one per-run capability matrix between compaction and `Agent`.
+- [ ] After PR #32 rebase, prove streaming and compaction token-usage metadata merge.

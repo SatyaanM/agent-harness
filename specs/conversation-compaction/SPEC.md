@@ -43,8 +43,8 @@ Verified current behavior:
 - The compactor identifies the oldest uncompacted $N$ messages (excluding the system prompt and the most recent $K$ turns) to summarize.
 - Candidate boundaries are tool-exchange atomic: an assistant tool-call message and every contiguous matching tool result are either retained or compacted together. A candidate never starts with an orphan tool result or ends with unresolved tool calls.
 - It uses the configured LLM client to generate a summary of the selected messages. The default model is the agent's main model, but it can be overridden.
-- The provider request receives a projection with a 256,000-character absolute ceiling. Its effective ceiling is lower for small models: it is derived from the true context window after reserving conservative instruction and summary-output budgets. Individual content, reasoning, and serialized tool-call fields have 32,000-character ceilings with explicit truncation markers; canonical transcript rows are never changed.
-- Summary generation has a 2,048-token absolute ceiling and is further capped by the provider's discovered maximum output and a conservative share of the true context window. It is accepted only when the provider reports `finishReason: stop`, returns non-empty text no longer than 32,000 characters, and returns no tool calls. Empty, length-truncated, filtered, errored, or tool-calling responses fail the run without creating a summary message or compaction record.
+- The provider request receives a projection with a 256,000-character absolute ceiling. Its effective ceiling is lower for small models: it is derived from the true context window after reserving conservative instruction and summary-output budgets. Individual content and serialized tool-call fields have 32,000-character ceilings with explicit truncation markers; canonical transcript rows are never changed. Persisted assistant reasoning is excluded from both this projection and the active-context token estimate because it is audit data, not provider-visible conversation input.
+- Summary generation has a 2,048-token absolute ceiling and is further capped by the provider's discovered maximum output and a conservative share of the true context window. It is accepted only when the provider reports `finishReason: stop`, returns non-empty text no longer than 32,000 characters, and returns no tool calls. Empty, length-truncated, filtered, errored, or tool-calling responses fail the run without creating a summary message or compaction record; any provider-reported usage is still persisted on the failed run under `compactionTokenUsage`.
 - **Semantic Memory Extraction**: During summarization, the Compactor MUST extract key entities, persistent facts, user preferences, and unresolved goals into a distinct structured memory block or key-value format, ensuring critical discrete state survives multiple rolling compactions.
 - The summary becomes a system message inserted at the compaction boundary in the active context.
 
@@ -84,12 +84,12 @@ Verified current behavior:
 4. **Idempotency**: Already compacted ranges are never re-selected for compaction; summaries are never summarized again.
 5. **Opt-out**: An agent configured with `compaction: false` never triggers the compactor, even if its context exceeds the threshold.
 6. **UI Compatibility**: The UI data payload includes metadata indicating compacted ranges, allowing the dashboard to render expandable blocks and fetch original messages.
-7. **Cost Tracking**: Tokens used for summarization are correctly recorded under a separate compaction usage metric in the run's metadata.
+7. **Cost Tracking**: Tokens used for successful or rejected summarization calls are correctly recorded under a separate compaction usage metric in the run's metadata.
 8. **Performance**: The compaction summarization step blocks for at most the duration of a single LLM API call (< 5s on average).
 9. **Migration**: The `003_compaction_records.sql` migration runs successfully on startup and creates the required schema.
 10. **Budget semantics**: `capabilities.contextWindowTokens` controls the compaction threshold; `capabilities.maxTokens` remains the provider's maximum output-token capability and `maxOutputTokens` remains the primary run output request limit. Missing/zero context-window discovery uses the 128,000-token fallback.
 11. **Atomic boundaries**: Compaction never separates an assistant tool call from its corresponding contiguous tool results.
-12. **Bounded summarization**: Compaction input projection and summary output are explicitly bounded, and unusable provider responses leave durable state unchanged.
+12. **Bounded summarization**: Compaction input projection and summary output are explicitly bounded. Unusable provider responses create no summary/range but retain provider usage on the failed run.
 13. **Rollback integrity**: Rolling migration 003 back to 002 removes only messages referenced as derived compaction summaries, preserves every canonical transcript message, then removes the compaction table. Reapplying 003 succeeds.
 
 ## Open questions and decisions
@@ -97,3 +97,8 @@ Verified current behavior:
 - **Variable chunking ($N$ and $K$)**: Defaults are 50 messages per oldest contiguous chunk and 8 recent active messages retained verbatim. Agents may override both in frontmatter with bounded integer settings.
 - **Separate token budgets**: `capabilities.contextWindowTokens` is the discovered/manual input context capacity. `capabilities.maxTokens` continues to mean discovered maximum output capacity, and `maxOutputTokens` is the requested primary generation cap. The runtime uses a 128,000-token context fallback and an 80% trigger ratio when no positive context capacity is known.
 - **Bounded projection tradeoff**: Oversized fields are represented by a deterministic prefix plus a truncation marker in the compactor-only projection. Absolute caps are ceilings; the runtime lowers them to fit small discovered context/output limits after reserves. This bounds provider input without mutating or rewriting canonical message bytes.
+
+## Stacked-branch integration requirements
+
+- After rebasing onto PR #31, each run must resolve one capability matrix and share that same result with both compaction budgeting and the primary `Agent`; compaction must not perform an independent registry lookup or observe different manual/cache state.
+- After rebasing onto PR #32, successful and failed run persistence must merge `compactionTokenUsage` with streaming token-usage metadata rather than replacing either subtree. Combined regression coverage must exercise successful streaming after compaction and a rejected compaction response before streaming begins.

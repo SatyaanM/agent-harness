@@ -26,7 +26,7 @@ Status: Implemented
 - **Files/Symbols**:
   - [NEW] `packages/core/src/agent/compactor.ts`
 - **Behavior**: Identifies oldest tool-exchange-safe groups, generates a block summary under a 256,000-character absolute projection ceiling, and extracts semantic memory under 2,048-token/32,000-character absolute output ceilings. Effective limits are reduced to fit the discovered context/output budgets after conservative reserves.
-- **Verification**: Unit tests cover atomic tool boundaries, deterministic projection truncation (including an oversized tool result on a small-context model), effective output-token propagation, and rejection of empty, truncated, filtered, errored, or tool-calling responses.
+- **Verification**: Unit tests cover atomic tool boundaries, deterministic projection truncation (including an oversized tool result on a small-context model), exclusion of persisted reasoning, effective output-token propagation, and rejection of empty, truncated, filtered, errored, or tool-calling responses while retaining provider usage.
 
 ### Phase 3: Runtime Integration
 - **Objective**: Trigger compaction safely before runs.
@@ -35,3 +35,7 @@ Status: Implemented
   - [MODIFY] `packages/core/src/agent/session-runtime.ts`
 - **Behavior**: `capabilities.contextWindowTokens` (never output limits) drives threshold -> safe compaction -> atomic summary/range persistence -> active-context substitution.
 - **Verification**: Runtime tests distinguish context/output budgets and prove rejected summaries do not persist any derived state.
+
+### Stacked integration checks
+- **PR #31**: Resolve capabilities once per run and inject the same matrix into compaction and `Agent` enforcement.
+- **PR #32**: Merge compaction and streaming usage subtrees on every completion path; never overwrite one with the other.
