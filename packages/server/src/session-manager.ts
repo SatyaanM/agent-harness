@@ -332,7 +332,6 @@ export class SessionManager {
       for (const controller of controllers) {
         controller.abort();
       }
-      this.sessionControllers.delete(sessionId);
     }
     this.unload(sessionId);
     for (const worker of this.workerControllers.values()) {

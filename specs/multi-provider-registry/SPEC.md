@@ -103,7 +103,7 @@ If no `providers` array is defined in `.harness/settings.json`, automatically co
 6. **Agent routing overrides:** Defining `model: "custom-model"` and/or `provider: "custom-id"` in an agent's frontmatter overrides the default global model and provider selection.
 7. **Model aggregation:** `GET /api/settings/models` successfully fetches and deduplicates models from all enabled providers.
 8. **Protocol-realistic discovery:** OpenAI uses bearer authentication and OpenAI list envelopes; Anthropic uses `x-api-key` plus `anthropic-version` and Anthropic model metadata. Both normalize to the public response.
-9. **Live reconfiguration:** A successful settings write aborts active parent/worker work, waits for worker terminal cleanup after cancellation or parent deletion, unloads loaded runtimes, and resets provider runtime state before another delivery.
+9. **Live reconfiguration:** A successful settings write aborts active parent/worker work, waits for active parent `clearSession` cleanup and worker settlement after cancellation or parent deletion, unloads loaded runtimes, and resets provider runtime state before another delivery.
 10. **Enforced limits:** Configured RPM/TPM limits are enforced across session clients without an unbounded wait queue, and token admission accounts for the provider-facing JSON Schema projection of production Zod tool parameters.
 
 ## Deferred presentation question

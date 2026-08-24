@@ -22,7 +22,7 @@ describe("SessionManager lifecycle ownership", () => {
     const reconfiguration = manager.reconfigureAfterSettingsUpdate().then(() => {
       reconfigured = true;
     });
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(reconfigured).toBe(false);
 
     manager.onWorkerSettled("task-cancelled");
@@ -80,6 +80,26 @@ describe("SessionManager lifecycle ownership", () => {
     expect(reconfigured).toBe(false);
 
     manager.onWorkerSettled("task-deleted");
+    await reconfiguration;
+    expect(reconfigured).toBe(true);
+  });
+
+  it("waits for a deleted parent's active run to clear before settings reconfiguration", async () => {
+    const manager = new SessionManager();
+    const parent = new AbortController();
+    manager.trackSession("deleted-parent", parent);
+
+    manager.prepareSessionDeletion("deleted-parent");
+    expect(parent.signal.aborted).toBe(true);
+
+    let reconfigured = false;
+    const reconfiguration = manager.reconfigureAfterSettingsUpdate().then(() => {
+      reconfigured = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(reconfigured).toBe(false);
+
+    manager.clearSession("deleted-parent", parent);
     await reconfiguration;
     expect(reconfigured).toBe(true);
   });
