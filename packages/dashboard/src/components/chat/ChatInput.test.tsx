@@ -40,6 +40,7 @@ describe("ChatInput", () => {
       sessions: [createTestSession({ sessionId: "session-a" })],
       streamingMessageIds: {},
       awaitingAuthoritativeMessageIds: {},
+      streamTurnBoundaries: {},
     });
   });
 

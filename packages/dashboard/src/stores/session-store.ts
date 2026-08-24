@@ -56,6 +56,10 @@ interface SessionStore {
   activeSessionId: string | null;
   streamingMessageIds: Record<string, string[]>;
   awaitingAuthoritativeMessageIds: Record<string, string[]>;
+  streamTurnBoundaries: Record<
+    string,
+    Record<string, { serverMessageCount: number; userMessageId?: string }>
+  >;
   addSession: (session: Session) => void;
   setActiveSession: (sessionId: string | null) => void;
   setAgentName: (sessionId: string, agentName: string) => void;
@@ -89,7 +93,10 @@ export interface ServerSession {
 }
 
 function mergeServerSession(
-  state: Pick<SessionStore, "sessions" | "streamingMessageIds" | "awaitingAuthoritativeMessageIds">,
+  state: Pick<
+    SessionStore,
+    "sessions" | "streamingMessageIds" | "awaitingAuthoritativeMessageIds" | "streamTurnBoundaries"
+  >,
   data: ServerSession,
   confirmAwaiting: boolean,
 ): Partial<SessionStore> {
@@ -111,22 +118,46 @@ function mergeServerSession(
     };
   }
 
-  const mergedMessages = reconcileOptimisticMessages(
-    existing.messages,
-    messages,
-    new Set(state.streamingMessageIds[data.sessionId] ?? []),
-    new Set(state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []),
-    confirmAwaiting,
-  );
+  const streamingIds = state.streamingMessageIds[data.sessionId] ?? [];
+  const awaitingIds = state.awaitingAuthoritativeMessageIds[data.sessionId] ?? [];
+  const projectedMessageId = streamingIds[0] ?? (confirmAwaiting ? undefined : awaitingIds[0]);
+  const boundary = projectedMessageId
+    ? state.streamTurnBoundaries[data.sessionId]?.[projectedMessageId]
+    : undefined;
+  const mergedMessages =
+    projectedMessageId && boundary
+      ? [
+          ...messages.slice(0, boundary.serverMessageCount),
+          ...existing.messages.filter(
+            (message) => message.id === boundary.userMessageId || message.id === projectedMessageId,
+          ),
+        ]
+      : reconcileOptimisticMessages(
+          existing.messages,
+          messages,
+          new Set(streamingIds),
+          new Set(awaitingIds),
+          confirmAwaiting,
+        );
   const remainingAwaiting = (state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []).filter(
     (id) => mergedMessages.some((message) => message.id === id),
   );
   const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
   if (remainingAwaiting.length === 0) delete awaitingAuthoritativeMessageIds[data.sessionId];
   else awaitingAuthoritativeMessageIds[data.sessionId] = remainingAwaiting;
+  const trackedMessageIds = new Set([...streamingIds, ...remainingAwaiting]);
+  const streamTurnBoundaries = { ...state.streamTurnBoundaries };
+  const remainingBoundaries = Object.fromEntries(
+    Object.entries(streamTurnBoundaries[data.sessionId] ?? {}).filter(([messageId]) =>
+      trackedMessageIds.has(messageId),
+    ),
+  );
+  if (Object.keys(remainingBoundaries).length === 0) delete streamTurnBoundaries[data.sessionId];
+  else streamTurnBoundaries[data.sessionId] = remainingBoundaries;
 
   return {
     awaitingAuthoritativeMessageIds,
+    streamTurnBoundaries,
     sessions: state.sessions.map((session) =>
       session.sessionId === data.sessionId
         ? {
@@ -145,6 +176,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
   activeSessionId: null,
   streamingMessageIds: {},
   awaitingAuthoritativeMessageIds: {},
+  streamTurnBoundaries: {},
 
   addSession: (session) =>
     set((state) => ({
@@ -181,7 +213,19 @@ export const useSessionStore = create<SessionStore>((set) => ({
   beginMessageStream: (sessionId, messageId) =>
     set((state) => {
       const current = state.streamingMessageIds[sessionId] ?? [];
-      if (current.includes(messageId)) return state;
+      const currentBoundaries = state.streamTurnBoundaries[sessionId] ?? {};
+      if (current.includes(messageId) && currentBoundaries[messageId]) return state;
+      const session = state.sessions.find((candidate) => candidate.sessionId === sessionId);
+      const assistantIndex =
+        session?.messages.findIndex((message) => message.id === messageId) ?? -1;
+      const preceding = assistantIndex > 0 ? session?.messages[assistantIndex - 1] : undefined;
+      const boundary = currentBoundaries[messageId] ?? {
+        serverMessageCount:
+          session?.messages.filter((message) => message.id.startsWith("srv-")).length ?? 0,
+        ...(preceding?.role === "user" && !preceding.id.startsWith("srv-")
+          ? { userMessageId: preceding.id }
+          : {}),
+      };
       const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
       const awaiting = (awaitingAuthoritativeMessageIds[sessionId] ?? []).filter(
         (id) => id !== messageId,
@@ -191,9 +235,13 @@ export const useSessionStore = create<SessionStore>((set) => ({
       return {
         streamingMessageIds: {
           ...state.streamingMessageIds,
-          [sessionId]: [...current, messageId],
+          [sessionId]: current.includes(messageId) ? current : [...current, messageId],
         },
         awaitingAuthoritativeMessageIds,
+        streamTurnBoundaries: {
+          ...state.streamTurnBoundaries,
+          [sessionId]: { ...currentBoundaries, [messageId]: boundary },
+        },
       };
     }),
 
@@ -222,6 +270,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
     set({
       streamingMessageIds: {},
       awaitingAuthoritativeMessageIds: {},
+      streamTurnBoundaries: {},
       sessions: serverSessions.map((data) => {
         const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
         return {
@@ -248,7 +297,15 @@ export const useSessionStore = create<SessionStore>((set) => ({
       delete streamingMessageIds[sessionId];
       const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
       delete awaitingAuthoritativeMessageIds[sessionId];
-      return { sessions, activeSessionId, streamingMessageIds, awaitingAuthoritativeMessageIds };
+      const streamTurnBoundaries = { ...state.streamTurnBoundaries };
+      delete streamTurnBoundaries[sessionId];
+      return {
+        sessions,
+        activeSessionId,
+        streamingMessageIds,
+        awaitingAuthoritativeMessageIds,
+        streamTurnBoundaries,
+      };
     }),
 
   renameSession: (sessionId, title) =>
