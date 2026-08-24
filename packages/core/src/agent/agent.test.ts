@@ -20,6 +20,25 @@ const config: AgentConfig = {
 };
 
 describe("Agent tool boundary", () => {
+  it("passes the configured provider override to the provider call", async () => {
+    const chat = vi.fn().mockResolvedValue({
+      message: { role: "assistant", content: "done" },
+      finishReason: "stop",
+    });
+    const agent = new Agent(
+      { ...config, provider: "preferred-provider", tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      { chat },
+      new CapabilityRegistry({ workspaceRoot: process.cwd() }),
+    );
+
+    await agent.run("go");
+
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({ preferredProviderId: "preferred-provider" }),
+    );
+  });
+
   it("does not report provider truncation as success", async () => {
     const agent = new Agent(
       config,

@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   })),
   model: { modelId: "test-model" },
+  createOpenAI: vi.fn(() => ({ chat: () => ({ modelId: "openai-model" }) })),
+  createAnthropic: vi.fn(() => () => ({ modelId: "anthropic-model" })),
 }));
 
 vi.mock("ai", () => ({
@@ -26,10 +28,10 @@ vi.mock("ai", () => ({
   tool: (definition: unknown) => definition,
 }));
 vi.mock("@ai-sdk/openai", () => ({
-  createOpenAI: () => ({ chat: () => mocks.model }),
+  createOpenAI: mocks.createOpenAI,
 }));
 vi.mock("@ai-sdk/anthropic", () => ({
-  createAnthropic: () => () => mocks.model,
+  createAnthropic: mocks.createAnthropic,
 }));
 
 const config: Config = {
@@ -44,6 +46,8 @@ const config: Config = {
 };
 
 beforeEach(() => {
+  mocks.createOpenAI.mockClear();
+  mocks.createAnthropic.mockClear();
   mocks.generateText.mockReset();
   mocks.generateText.mockResolvedValue({
     text: "done",
@@ -158,6 +162,7 @@ describe("Vercel AI adapter", () => {
 
   it("falls back to secondary provider on 429 error and implements circuit breaker", async () => {
     vi.useFakeTimers();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const multiConfig: Config = {
       ...config,
@@ -206,6 +211,7 @@ describe("Vercel AI adapter", () => {
     const result = await chatPromise;
     expect(result.message.content).toBe("fallback success");
     expect(mocks.generateText).toHaveBeenCalledTimes(2);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("providerId=primary"));
 
     // Verify circuit breaker prevents primary on immediate next call
     mocks.generateText.mockResolvedValueOnce({
@@ -226,4 +232,110 @@ describe("Vercel AI adapter", () => {
 
     vi.useRealTimers();
   });
+
+  it("routes through an eligible preferred provider before higher-priority providers", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    mocks.generateText.mockResolvedValueOnce({
+      text: "preferred success",
+      finishReason: "stop",
+      toolCalls: [],
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+
+    await client.chat({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+      preferredProviderId: "secondary",
+    });
+
+    expect(mocks.createAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: "https://secondary.example" }),
+    );
+    expect(mocks.createOpenAI).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a non-transient provider failure", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    const unauthorized = Object.assign(new Error("Unauthorized"), {
+      name: "APICallError",
+      statusCode: 401,
+    });
+    mocks.generateText.mockRejectedValueOnce(unauthorized);
+
+    await expect(
+      client.chat({ messages: [{ role: "user", content: "hello" }], model: "test-model" }),
+    ).rejects.toBe(unauthorized);
+    expect(mocks.generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back after a 5xx provider failure", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const client = createVercelAILLMClient(multiProviderConfig());
+    mocks.generateText
+      .mockRejectedValueOnce(Object.assign(new Error("Unavailable"), { statusCode: 503 }))
+      .mockResolvedValueOnce({
+        text: "recovered",
+        finishReason: "stop",
+        toolCalls: [],
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      });
+
+    const completion = client.chat({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(completion).resolves.toEqual(
+      expect.objectContaining({ message: expect.objectContaining({ content: "recovered" }) }),
+    );
+    expect(mocks.generateText).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("preserves aborts without retrying another provider", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    const controller = new AbortController();
+    const aborted = new DOMException("Cancelled", "AbortError");
+    mocks.generateText.mockImplementationOnce(async () => {
+      controller.abort(aborted);
+      throw aborted;
+    });
+
+    await expect(
+      client.chat({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(aborted);
+    expect(mocks.generateText).toHaveBeenCalledTimes(1);
+  });
 });
+
+function multiProviderConfig(): Config {
+  return {
+    ...config,
+    PROVIDERS: [
+      {
+        id: "primary",
+        displayName: "Primary",
+        protocol: "openai",
+        baseUrl: "https://primary.example",
+        apiKeyEnv: "TEST_API_KEY",
+        enabled: true,
+        priority: 0,
+      },
+      {
+        id: "secondary",
+        displayName: "Secondary",
+        protocol: "anthropic",
+        baseUrl: "https://secondary.example",
+        apiKeyEnv: "TEST_API_KEY",
+        enabled: true,
+        priority: 1,
+      },
+    ],
+  };
+}

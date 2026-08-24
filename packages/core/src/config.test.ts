@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getConfig, resetConfig } from "./config.js";
+import { ConfigSchema, getConfig, resetConfig } from "./config.js";
 import { BoundaryValidationError } from "./validation.js";
 
 const ORIGINAL_ENV = { ...process.env };
@@ -20,6 +20,33 @@ afterEach(async () => {
 });
 
 describe("getConfig", () => {
+  it("rejects duplicate provider identifiers", () => {
+    expect(() =>
+      ConfigSchema.parse({
+        ROOT: process.cwd(),
+        INBOX_ROOT: process.cwd(),
+        SESSIONS_DIR: process.cwd(),
+        AGENTS_DIR: process.cwd(),
+        PROVIDERS: [
+          {
+            id: "duplicate",
+            displayName: "First",
+            protocol: "openai",
+            baseUrl: "https://first.example/v1",
+            apiKeyEnv: "FIRST_API_KEY",
+          },
+          {
+            id: "duplicate",
+            displayName: "Second",
+            protocol: "anthropic",
+            baseUrl: "https://second.example/v1",
+            apiKeyEnv: "SECOND_API_KEY",
+          },
+        ],
+      }),
+    ).toThrow("provider IDs must be unique");
+  });
+
   it("uses defaults for unset values", () => {
     setEnv("ROOT", undefined);
 

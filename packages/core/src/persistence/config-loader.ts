@@ -36,6 +36,7 @@ export function loadAgentConfig(filePath: string): AgentConfig {
     {
       name: parsed.name,
       model: parsed.model,
+      provider: parsed.provider,
       tools: parsed.tools,
       maxSteps: parsed.maxSteps,
       instructions: content.trim(),

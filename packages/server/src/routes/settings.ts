@@ -9,6 +9,7 @@ import {
   describeError,
   getConfig,
   getConfigRoot,
+  ProviderEntrySchema,
   ProviderRegistry,
   parseBoundary,
   parseJsonResponseBoundary,
@@ -62,6 +63,16 @@ const ModelsResponseSchema = z.object({
     )
     .max(10_000),
 });
+const ProviderParamsSchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+  })
+  .strict();
+const ProviderConnectionRequestSchema = z.object({ provider: ProviderEntrySchema }).strict();
 
 function getSettingsFile(): string {
   return path.join(getConfigRoot(), ".harness", "settings.json");
@@ -140,6 +151,44 @@ settingsRouter.get(
     } catch (error) {
       logger.error("Failed to aggregate models", { ...describeError(error) });
       res.status(502).json({ error: "Failed to fetch models" });
+    }
+  }),
+);
+
+settingsRouter.post(
+  "/providers/:id/test",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(ProviderParamsSchema, req.params, res);
+    if (!params) return;
+    const body = validateRequest(ProviderConnectionRequestSchema, req.body, res);
+    if (!body) return;
+    if (body.provider.id !== params.id) {
+      res.status(400).json({
+        error: { code: "invalid_request", message: "Provider ID must match route identifier" },
+      });
+      return;
+    }
+    const provider = body.provider;
+    try {
+      const apiKey = process.env[provider.apiKeyEnv];
+      const response = await fetch(`${provider.baseUrl.replace(/\/$/u, "")}/models`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error(`Provider returned ${response.status}`);
+      const models = await parseJsonResponseBoundary(
+        response,
+        ModelsResponseSchema,
+        `models response ${provider.id}`,
+        2_000_000,
+      );
+      res.json({ connected: true, modelCount: models.data.length });
+    } catch (error) {
+      logger.warn("Provider connectivity test failed", {
+        providerId: provider.id,
+        ...describeError(error),
+      });
+      res.status(502).json({ error: "Provider connectivity test failed" });
     }
   }),
 );

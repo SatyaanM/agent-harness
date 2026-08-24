@@ -138,6 +138,7 @@ agentsRouter.post(
         {
           name: body.name,
           model: body.model,
+          ...(body.provider !== undefined ? { provider: body.provider } : {}),
           tools: body.tools ?? [],
           maxSteps: body.maxSteps ?? 10,
           instructions: body.instructions ?? "",
@@ -242,6 +243,10 @@ function buildAgentMarkdown(config: Partial<z.infer<typeof AgentConfigSchema>>):
     tools: config.tools ?? [],
     maxSteps: config.maxSteps ?? 10,
   };
+
+  if (config.provider !== undefined) {
+    frontmatter.provider = config.provider;
+  }
 
   if (config.capabilities) {
     frontmatter.capabilities = config.capabilities;

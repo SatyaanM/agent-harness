@@ -7,7 +7,7 @@ read_when:
 
 # Multi-Provider Registry & Model Router Specification
 
-Status: Draft
+Status: Implemented
 
 ## Problem and evidence
 
@@ -103,3 +103,9 @@ If no `providers` array is defined in `.harness/settings.json`, automatically co
 - **Wildcard matching:** Should `supportedModels` support glob patterns (e.g., `gpt-4-*`), or just strict string matching / explicit arrays?
 - **Fallback state persistence:** How long should a provider remain "down" in the fallback chain after a 5xx error? (Decision needed: Should we implement a basic circuit breaker or stateless retries?)
 - **UI UX for Fallbacks:** Should the UI surface which provider was ultimately used for a turn if a fallback occurred?
+
+## Implemented decisions
+
+- `supportedModels` accepts exact IDs and `*` wildcards; other regular-expression metacharacters remain literal.
+- A transient 429/5xx opens a process-local circuit for one minute. Fallback attempts use bounded exponential backoff. Abort and non-transient failures propagate immediately without replay.
+- Provider IDs are unique, bounded identifiers. The settings editor performs persisted list CRUD and exposes a credential-safe connectivity test; fallback-provider display in individual turns remains future presentation work.

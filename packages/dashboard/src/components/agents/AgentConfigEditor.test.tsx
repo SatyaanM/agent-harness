@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchAgentSource } from "@/lib/api";
 import { AgentConfigEditor } from "./AgentConfigEditor";
 
 vi.mock("next/dynamic", () => ({
@@ -60,5 +61,36 @@ describe("AgentConfigEditor unsaved-change guard", () => {
       "unsaved draft",
     );
     expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+  });
+
+  it("preserves a provider override when source fallback is generated", async () => {
+    vi.mocked(fetchAgentSource).mockRejectedValueOnce(new Error("source unavailable"));
+    render(
+      <AgentConfigEditor
+        agentName="routed"
+        initialConfig={{
+          name: "routed",
+          model: "shared-model",
+          provider: "preferred-provider",
+          tools: [],
+          maxSteps: 1,
+          instructions: "Route this agent.",
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole("textbox", { name: "Agent source" })).toHaveValue(
+      [
+        "---",
+        "name: routed",
+        "model: shared-model",
+        "provider: preferred-provider",
+        "maxSteps: 1",
+        "tools: []",
+        "---",
+        "",
+        "Route this agent.",
+      ].join("\n"),
+    );
   });
 });

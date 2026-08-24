@@ -39,7 +39,13 @@ export { MessageBus, messageBus } from "./collaboration/message-bus.js";
 export type { SupervisorRequest, SupervisorResponse } from "./collaboration/supervision.js";
 export { callSupervisor } from "./collaboration/supervision.js";
 export type { Config, ProviderEntry, ProviderProtocol } from "./config.js";
-export { ConfigSchema, getConfig, getConfigRoot, resetConfig } from "./config.js";
+export {
+  ConfigSchema,
+  getConfig,
+  getConfigRoot,
+  ProviderEntrySchema,
+  resetConfig,
+} from "./config.js";
 export type { ErrorDescriptor } from "./contracts/errors.js";
 export { describeError } from "./contracts/errors.js";
 export { parseJsonResponseBoundary, readResponseTextBounded } from "./contracts/http.js";

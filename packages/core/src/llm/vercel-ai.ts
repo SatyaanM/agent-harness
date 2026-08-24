@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, tool } from "ai";
 import type { Message } from "../agent/types.js";
 import type { Config } from "../config.js";
+import { createLogger } from "../contracts/logging.js";
 import { ProviderRegistry } from "../provider-registry.js";
 import type { LLMChatParams, LLMClient, LLMResponse } from "./client.js";
 
@@ -35,6 +36,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export function createVercelAILLMClient(config: Config): LLMClient {
+  const logger = createLogger("core.llm.provider-router");
   const registry = new ProviderRegistry(config);
   // Circuit breaker state: provider id -> timestamp when it opens (fails)
   const openProviders = new Map<string, number>();
@@ -46,7 +48,7 @@ export function createVercelAILLMClient(config: Config): LLMClient {
         ? params.model.slice("opencode-go/".length)
         : params.model;
 
-      const eligibleProviders = registry.resolveProvider(cleanModelId);
+      const eligibleProviders = registry.resolveProvider(cleanModelId, params.preferredProviderId);
       if (eligibleProviders.length === 0) {
         throw new Error(`No eligible provider found for model ${cleanModelId}`);
       }
@@ -139,19 +141,16 @@ export function createVercelAILLMClient(config: Config): LLMClient {
             },
           };
         } catch (error: unknown) {
-          lastError = error instanceof Error ? error : new Error(String(error));
+          if (params.signal?.aborted || isAbortError(error)) throw error;
+          if (!isTransientProviderError(error)) throw error;
 
-          // Open circuit breaker if it's a 429 or 5xx
-          const isRateLimitOrServerError =
-            (isRecord(error) && error.statusCode === 429) ||
-            (isRecord(error) &&
-              typeof error.statusCode === "number" &&
-              error.statusCode >= 500 &&
-              error.statusCode < 600) ||
-            (isRecord(error) && error.name === "APICallError");
-          if (isRateLimitOrServerError) {
-            openProviders.set(provider.id, Date.now());
-          }
+          lastError = error instanceof Error ? error : new Error(String(error));
+          openProviders.set(provider.id, Date.now());
+          logger.warn("Transient provider failure; opening circuit and trying fallback", {
+            providerId: provider.id,
+            model: cleanModelId,
+            statusCode: getStatusCode(error),
+          });
           attempt++;
         }
       }
@@ -167,6 +166,21 @@ export function createVercelAILLMClient(config: Config): LLMClient {
       });
     },
   };
+}
+
+function getStatusCode(error: unknown): number | undefined {
+  if (!isRecord(error)) return undefined;
+  const statusCode = error.statusCode ?? error.status;
+  return typeof statusCode === "number" ? statusCode : undefined;
+}
+
+function isTransientProviderError(error: unknown): boolean {
+  const statusCode = getStatusCode(error);
+  return statusCode === 429 || (statusCode !== undefined && statusCode >= 500 && statusCode < 600);
+}
+
+function isAbortError(error: unknown): boolean {
+  return isRecord(error) && error.name === "AbortError";
 }
 
 function mapFinishReason(

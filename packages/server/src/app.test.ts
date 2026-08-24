@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { resetConfig, SessionRuntime } from "@agent-harness/core";
 import express, { type Express } from "express";
 import request from "supertest";
@@ -7,8 +10,10 @@ import { sessionManager } from "./session-manager.js";
 
 const ORIGINAL_GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ORIGINAL_OPENCODE_API_KEY = process.env.OPENCODE_API_KEY;
+const ORIGINAL_ROOT = process.env.ROOT;
+const tempDirs: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   resetConfig();
@@ -16,6 +21,9 @@ afterEach(() => {
   else process.env.GEMINI_API_KEY = ORIGINAL_GEMINI_API_KEY;
   if (ORIGINAL_OPENCODE_API_KEY === undefined) delete process.env.OPENCODE_API_KEY;
   else process.env.OPENCODE_API_KEY = ORIGINAL_OPENCODE_API_KEY;
+  if (ORIGINAL_ROOT === undefined) delete process.env.ROOT;
+  else process.env.ROOT = ORIGINAL_ROOT;
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 describe("GET /api/health", () => {
@@ -120,6 +128,61 @@ describe("browser origin policy", () => {
 });
 
 describe("upstream trust boundaries", () => {
+  it("tests a configured provider without exposing its credential", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "provider-settings-"));
+    tempDirs.push(root);
+    await mkdir(path.join(root, ".harness"));
+    await writeFile(
+      path.join(root, ".harness", "settings.json"),
+      JSON.stringify({
+        PROVIDERS: [
+          {
+            id: "custom",
+            displayName: "Custom",
+            protocol: "openai",
+            baseUrl: "https://custom.example/v1",
+            apiKeyEnv: "CUSTOM_PROVIDER_KEY",
+            enabled: true,
+            priority: 0,
+          },
+        ],
+      }),
+    );
+    process.env.ROOT = root;
+    process.env.CUSTOM_PROVIDER_KEY = "provider-secret";
+    resetConfig();
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        object: "list",
+        data: [{ id: "model-a", object: "model", created: 1, owned_by: "custom" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await request(createApp())
+      .post("/api/settings/providers/custom/test")
+      .send({
+        provider: {
+          id: "custom",
+          displayName: "Custom",
+          protocol: "openai",
+          baseUrl: "https://custom.example/v1",
+          apiKeyEnv: "CUSTOM_PROVIDER_KEY",
+          enabled: true,
+          priority: 0,
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ connected: true, modelCount: 1 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://custom.example/v1/models",
+      expect.objectContaining({ headers: { Authorization: "Bearer provider-secret" } }),
+    );
+    expect(res.text).not.toContain("provider-secret");
+    delete process.env.CUSTOM_PROVIDER_KEY;
+  });
+
   it("validates provider model responses before returning them", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.stubGlobal(
