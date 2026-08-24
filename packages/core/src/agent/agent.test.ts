@@ -554,6 +554,30 @@ describe("Agent streaming", () => {
     return capabilities;
   }
 
+  it("passes the configured provider override to the streaming call", async () => {
+    const observedParams: unknown[] = [];
+    const agent = new Agent(
+      { ...config, provider: "preferred-provider", tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream(params) {
+          observedParams.push(params);
+          yield { type: "finish" as const, finishReason: "stop" as const };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    await agent.run("go");
+
+    expect(observedParams).toEqual([
+      expect.objectContaining({ preferredProviderId: "preferred-provider" }),
+    ]);
+  });
+
   it("assembles the same transcript as the blocking pathway", async () => {
     const streamed = new Agent(
       { ...config, tools: [], maxSteps: 1 },

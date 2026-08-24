@@ -414,6 +414,29 @@ describe("Vercel AI adapter", () => {
     expect(mocks.createOpenAI).not.toHaveBeenCalled();
   });
 
+  it("routes streaming through an eligible preferred provider", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "finish", finishReason: "stop" };
+      })(),
+    });
+
+    if (!client.chatStream) throw new Error("missing stream support");
+    for await (const _chunk of client.chatStream({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+      preferredProviderId: "secondary",
+    })) {
+      // Consume the selected provider stream.
+    }
+
+    expect(mocks.createAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: "https://secondary.example" }),
+    );
+    expect(mocks.createOpenAI).not.toHaveBeenCalled();
+  });
+
   it("does not retry a non-transient provider failure", async () => {
     const client = createVercelAILLMClient(multiProviderConfig());
     const unauthorized = Object.assign(new Error("Unauthorized"), {
@@ -426,6 +449,68 @@ describe("Vercel AI adapter", () => {
       client.chat({ messages: [{ role: "user", content: "hello" }], model: "test-model" }),
     ).rejects.toBe(unauthorized);
     expect(mocks.generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a non-transient streaming provider failure", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    const unauthorized = Object.assign(new Error("Unauthorized"), {
+      name: "APICallError",
+      statusCode: 401,
+    });
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: rejectingAsyncIterable(unauthorized),
+    });
+
+    const consume = async () => {
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const _chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+      })) {
+        // Consume until the provider rejects.
+      }
+    };
+
+    await expect(consume()).rejects.toBe(unauthorized);
+    expect(mocks.streamText).toHaveBeenCalledTimes(1);
+    expect(mocks.createAnthropic).not.toHaveBeenCalled();
+  });
+
+  it("falls back after a transient streaming provider failure before output begins", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const client = createVercelAILLMClient(multiProviderConfig());
+      const unavailable = Object.assign(new Error("Unavailable"), { statusCode: 503 });
+      mocks.streamText
+        .mockReturnValueOnce({ fullStream: rejectingAsyncIterable(unavailable) })
+        .mockReturnValueOnce({
+          fullStream: (async function* () {
+            yield { type: "text-delta", text: "recovered" };
+            yield { type: "finish", finishReason: "stop" };
+          })(),
+        });
+
+      const consume = async () => {
+        const chunks = [];
+        if (!client.chatStream) throw new Error("missing stream support");
+        for await (const chunk of client.chatStream({
+          messages: [{ role: "user", content: "hello" }],
+          model: "test-model",
+        })) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      };
+      const completion = consume();
+      await vi.runAllTimersAsync();
+
+      await expect(completion).resolves.toContainEqual({ type: "text-delta", text: "recovered" });
+      expect(mocks.streamText).toHaveBeenCalledTimes(2);
+      expect(mocks.createAnthropic).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back after a 5xx provider failure", async () => {
@@ -472,6 +557,30 @@ describe("Vercel AI adapter", () => {
     ).rejects.toBe(aborted);
     expect(mocks.generateText).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves streaming aborts without selecting another provider", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    const controller = new AbortController();
+    const aborted = new DOMException("Cancelled", "AbortError");
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: rejectingAsyncIterable(aborted, () => controller.abort(aborted)),
+    });
+
+    const consume = async () => {
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const _chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+        signal: controller.signal,
+      })) {
+        // Consume until cancellation.
+      }
+    };
+
+    await expect(consume()).rejects.toBe(aborted);
+    expect(mocks.streamText).toHaveBeenCalledTimes(1);
+    expect(mocks.createAnthropic).not.toHaveBeenCalled();
+  });
 });
 
 function multiProviderConfig(): Config {
@@ -497,5 +606,18 @@ function multiProviderConfig(): Config {
         priority: 1,
       },
     ],
+  };
+}
+
+function rejectingAsyncIterable(error: unknown, beforeReject?: () => void): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next(): Promise<IteratorResult<unknown>> {
+          beforeReject?.();
+          throw error;
+        },
+      };
+    },
   };
 }
