@@ -21,6 +21,9 @@ Configured model IDs are opaque and may contain `/`, prompt caching must use the
 - Emit diagnostics when there is a mismatch between declared capabilities and model behavior (e.g., unexpected tool calls).
 - Preserve standalone `Agent` use while allowing a runtime owner to pre-resolve and reuse the same matrix for earlier context decisions.
 - Fail conservatively when a configured live provider probe cannot establish support.
+- Resolve one fallback-safe matrix by intersecting every eligible provider target.
+- Make live probes consume the server-owned circuit and per-request RPM/TPM state.
+- Prevent durable capabilities from crossing provider endpoint/protocol configuration generations.
 - Ensure the lookup adds minimal overhead (< 5ms) to run startup by caching results per-run.
 
 ### Non-goals
@@ -34,6 +37,10 @@ Configured model IDs are opaque and may contain `/`, prompt caching must use the
 When `Agent.run()` starts without a supplied matrix, it MUST resolve through `CapabilityRegistry.lookupModel(model, preferredProvider, sdk, agentConfig)`. The provider registry owns provider/model separation; configured model IDs are never split on `/`.
 The result MUST be cached for the duration of the run to avoid repeated lookups during multi-step executions.
 `Agent.resolveCapabilities()` exposes the same resolution seam to runtime owners, and `Agent.run(..., resolvedCapabilities)` MUST not repeat it. If a configured live probe fails, the matrix MUST conservatively disable unverified features.
+
+For a configured fallback chain, lookup MUST resolve every eligible target and intersect the results. Boolean fields use logical AND. Numeric output and context limits use the minimum, with zero remaining conservative when any target has an unknown limit. Durable entries are keyed by provider/model/SDK plus a non-secret provider configuration identity containing protocol, normalized base URL, and credential environment-variable name; identity-less entries do not satisfy configured lookups.
+
+Configured live probes MUST use the same server-owned `ProviderRuntimeState` as execution. Every actual probe request, including optional probes and retries, performs circuit and RPM/TPM admission immediately before network I/O. Successful HTTP responses close the provider circuit; numeric 429/5xx responses open it; aborts and other 4xx responses do not. Admission-denied partial results are conservative but are not persisted after the window/circuit changes.
 
 ### 2. Payload Modification based on CapabilityMatrix
 Before invoking `llmClient.chat()` (or its streaming equivalent), the agent MUST inspect the resolved `CapabilityMatrix` and modify the request payload as follows:
@@ -73,9 +80,15 @@ The agent MUST monitor the LLM's responses for capability mismatches. If the mod
 9. **Execution-map parity:** A tool omitted from provider definitions cannot execute even if the provider hallucinates its name and it exists in the global registry.
 10. **Provider-aware probing:** OpenAI and Anthropic probes use their declared endpoint, authentication, and request envelopes without logging or returning credentials; failure is conservative.
 11. **Reusable matrix:** A pre-resolved matrix skips the standalone lookup so earlier runtime stages and `Agent` share one decision.
+12. **Fallback-safe intersection:** Heterogeneous eligible targets produce boolean AND and conservative minimum/zero numeric limits before request shaping.
+13. **Shared probe policy:** Every provider probe request consumes the shared configured admission budget and updates the shared circuit only for success or numeric transient HTTP outcomes.
+14. **Configuration-bound cache:** Changing a configured provider endpoint or protocol cannot reuse a durable capability entry from the prior configuration identity.
 
 ## Decisions
 
 - **Diagnostic handling**: A disabled tool call is removed from the assistant message, emitted as a warning and `capability-mismatch` event, and followed by a system denial asking the model for a text-only response. It is never executed.
 - **Vision stripping detail**: Stripped image markdown is replaced with `[Image omitted due to model capability]` so surrounding text retains context.
 - **Provider correlation**: provider/model targets come from `ProviderRegistry.resolveTargets()`; `/` is valid model identity, not an implicit provider delimiter.
+- **Fallback correlation**: the reusable run matrix is the conservative intersection across every eligible target, not only the preferred provider.
+- **Probe ownership**: capability probes and execution share one server-owned provider generation for circuit and rate admission.
+- **Cache identity**: configured-provider cache keys include non-secret protocol, endpoint, and credential-source identity; derived identity-less entries remain readable but do not match configured lookups.

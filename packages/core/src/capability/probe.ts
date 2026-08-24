@@ -30,7 +30,15 @@ const ProbeOptionsSchema = z
   .strict();
 export type ProbeOptions = z.input<typeof ProbeOptionsSchema>;
 
-export async function probeCapabilities(options: ProbeOptions): Promise<CapabilityMatrix> {
+export interface ProbeHooks {
+  beforeRequest?: (estimatedTokens: number) => boolean;
+  onResponse?: (status: number, succeeded: boolean) => void;
+}
+
+export async function probeCapabilities(
+  options: ProbeOptions,
+  hooks: ProbeHooks = {},
+): Promise<CapabilityMatrix> {
   const { baseUrl, apiKey, model, protocol, timeoutMs, maxRetries } = parseBoundary(
     ProbeOptionsSchema,
     options,
@@ -43,7 +51,7 @@ export async function probeCapabilities(options: ProbeOptions): Promise<Capabili
     try {
       return parseBoundary(
         CapabilityMatrixSchema,
-        await probeOnce(baseUrl, apiKey, model, protocol, timeoutMs),
+        await probeOnce(baseUrl, apiKey, model, protocol, timeoutMs, hooks),
         "capability probe result",
       );
     } catch (error) {
@@ -66,6 +74,7 @@ async function probeOnce(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  hooks: ProbeHooks,
 ): Promise<CapabilityMatrix> {
   const caps: CapabilityMatrix = {
     chat: false,
@@ -78,13 +87,13 @@ async function probeOnce(
     maxTokens: 0,
   };
 
-  caps.chat = await testChat(baseUrl, apiKey, model, protocol, timeoutMs);
+  caps.chat = await testChat(baseUrl, apiKey, model, protocol, timeoutMs, hooks);
   if (!caps.chat) return caps;
 
   const [tools, vision, streaming] = await Promise.all([
-    testTools(baseUrl, apiKey, model, protocol, timeoutMs),
-    testVision(baseUrl, apiKey, model, protocol, timeoutMs),
-    testStreaming(baseUrl, apiKey, model, protocol, timeoutMs),
+    testTools(baseUrl, apiKey, model, protocol, timeoutMs, hooks),
+    testVision(baseUrl, apiKey, model, protocol, timeoutMs, hooks),
+    testStreaming(baseUrl, apiKey, model, protocol, timeoutMs, hooks),
   ]);
 
   caps.tools = tools;
@@ -100,22 +109,16 @@ async function testChat(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  hooks: ProbeHooks,
 ): Promise<boolean> {
-  try {
-    const res = await fetch(probeUrl(baseUrl, protocol), {
-      method: "POST",
-      headers: probeHeaders(protocol, apiKey),
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 5,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return releaseResponse(res);
-  } catch {
-    return false;
-  }
+  return sendProbeRequest(
+    baseUrl,
+    apiKey,
+    protocol,
+    timeoutMs,
+    { model, messages: [{ role: "user", content: "Hi" }], max_tokens: 5 },
+    hooks,
+  );
 }
 
 async function testTools(
@@ -124,6 +127,7 @@ async function testTools(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  hooks: ProbeHooks,
 ): Promise<boolean> {
   try {
     const tools =
@@ -145,18 +149,14 @@ async function testTools(
               },
             },
           ];
-    const res = await fetch(probeUrl(baseUrl, protocol), {
-      method: "POST",
-      headers: probeHeaders(protocol, apiKey),
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "Call test" }],
-        tools,
-        max_tokens: 50,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return releaseResponse(res);
+    return sendProbeRequest(
+      baseUrl,
+      apiKey,
+      protocol,
+      timeoutMs,
+      { model, messages: [{ role: "user", content: "Call test" }], tools, max_tokens: 50 },
+      hooks,
+    );
   } catch {
     return false;
   }
@@ -168,6 +168,7 @@ async function testVision(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  hooks: ProbeHooks,
 ): Promise<boolean> {
   try {
     const imagePart =
@@ -186,10 +187,12 @@ async function testVision(
               url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
             },
           };
-    const res = await fetch(probeUrl(baseUrl, protocol), {
-      method: "POST",
-      headers: probeHeaders(protocol, apiKey),
-      body: JSON.stringify({
+    return sendProbeRequest(
+      baseUrl,
+      apiKey,
+      protocol,
+      timeoutMs,
+      {
         model,
         messages: [
           {
@@ -198,10 +201,9 @@ async function testVision(
           },
         ],
         max_tokens: 50,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return releaseResponse(res);
+      },
+      hooks,
+    );
   } catch {
     return false;
   }
@@ -213,20 +215,44 @@ async function testStreaming(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  hooks: ProbeHooks,
+): Promise<boolean> {
+  return sendProbeRequest(
+    baseUrl,
+    apiKey,
+    protocol,
+    timeoutMs,
+    {
+      model,
+      messages: [{ role: "user", content: "Hi" }],
+      max_tokens: 5,
+      stream: true,
+    },
+    hooks,
+  );
+}
+
+async function sendProbeRequest(
+  baseUrl: string,
+  apiKey: string,
+  protocol: "openai" | "anthropic",
+  timeoutMs: number,
+  body: Record<string, unknown>,
+  hooks: ProbeHooks,
 ): Promise<boolean> {
   try {
-    const res = await fetch(probeUrl(baseUrl, protocol), {
+    const serializedBody = JSON.stringify(body);
+    const maximumOutputTokens =
+      typeof body.max_tokens === "number" && Number.isFinite(body.max_tokens) ? body.max_tokens : 0;
+    const estimatedTokens = Math.max(1, Math.ceil(serializedBody.length / 4)) + maximumOutputTokens;
+    if (hooks.beforeRequest && !hooks.beforeRequest(estimatedTokens)) return false;
+    const response = await fetch(probeUrl(baseUrl, protocol), {
       method: "POST",
       headers: probeHeaders(protocol, apiKey),
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 5,
-        stream: true,
-      }),
+      body: serializedBody,
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return releaseResponse(res);
+    return releaseResponse(response, hooks);
   } catch {
     return false;
   }
@@ -247,8 +273,9 @@ function probeHeaders(protocol: "openai" | "anthropic", apiKey: string): Record<
   return { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
 }
 
-async function releaseResponse(response: Response): Promise<boolean> {
+async function releaseResponse(response: Response, hooks: ProbeHooks): Promise<boolean> {
   const succeeded = response.ok;
+  hooks.onResponse?.(response.status, succeeded);
   try {
     await response.body?.cancel();
   } catch {}

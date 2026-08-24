@@ -1,6 +1,7 @@
 import type { CapabilityMatrix } from "../agent/types.js";
 import { CapabilityCache } from "../persistence/capability-cache.js";
-import type { ProviderRegistry } from "../provider-registry.js";
+import type { ProviderRegistry, ProviderTarget } from "../provider-registry.js";
+import type { ProviderRuntimeState } from "../provider-runtime.js";
 import { fetchCapabilities } from "./models-dev-client.js";
 import { correlateName } from "./name-correlation.js";
 import { probeCapabilities } from "./probe.js";
@@ -11,6 +12,7 @@ export interface RegistryOptions {
   baseUrl?: string;
   apiKey?: string;
   providerRegistry?: ProviderRegistry;
+  providerRuntime?: ProviderRuntimeState;
 }
 
 export class CapabilityRegistry {
@@ -18,12 +20,14 @@ export class CapabilityRegistry {
   private baseUrl: string;
   private apiKey: string;
   private providerRegistry: ProviderRegistry | undefined;
+  private providerRuntime: ProviderRuntimeState | undefined;
 
   constructor(options: RegistryOptions) {
     this.cache = new CapabilityCache(options.workspaceRoot);
     this.baseUrl = options.baseUrl ?? "";
     this.apiKey = options.apiKey ?? "";
-    this.providerRegistry = options.providerRegistry;
+    this.providerRuntime = options.providerRuntime;
+    this.providerRegistry = options.providerRuntime?.registry ?? options.providerRegistry;
   }
 
   async lookupModel(
@@ -32,13 +36,14 @@ export class CapabilityRegistry {
     sdk: string,
     agentConfig?: AgentConfigRef,
   ): Promise<CapabilityMatrix> {
-    const target = this.providerRegistry?.resolveTargets(model, preferredProviderId)[0];
-    return this.lookup(
-      target?.provider.id ?? preferredProviderId ?? "default",
-      target?.modelId ?? model,
-      sdk,
-      agentConfig,
-    );
+    const targets = this.providerRegistry?.resolveTargets(model, preferredProviderId);
+    if (!targets) return this.lookup(preferredProviderId ?? "default", model, sdk, agentConfig);
+    if (targets.length === 0) return conservativeCapabilities();
+    const matrices: CapabilityMatrix[] = [];
+    for (const target of targets) {
+      matrices.push(await this.lookup(target.provider.id, target.modelId, sdk, agentConfig));
+    }
+    return intersectCapabilityMatrices(matrices);
   }
 
   async lookup(
@@ -48,7 +53,20 @@ export class CapabilityRegistry {
     agentConfig?: AgentConfigRef,
   ): Promise<CapabilityMatrix> {
     // Resolve base matrix from tiers 2-4 (cache, models.dev, probe, defaults)
-    const base = await this.resolveBaseMatrix(provider, model, sdk, agentConfig);
+    const providerTarget = this.providerRegistry
+      ?.resolveTargets(model, provider)
+      .find((target) => target.provider.id === provider);
+    const providerConfigId = providerTarget
+      ? providerConfigurationIdentity(providerTarget)
+      : undefined;
+    const base = await this.resolveBaseMatrix(
+      provider,
+      model,
+      sdk,
+      agentConfig,
+      providerTarget,
+      providerConfigId,
+    );
 
     if (agentConfig?.capabilities) {
       // Merge user's partial overrides on top of the resolved base matrix
@@ -66,8 +84,10 @@ export class CapabilityRegistry {
     model: string,
     sdk: string,
     agentConfig?: AgentConfigRef,
+    providerTarget?: ProviderTarget,
+    providerConfigId?: string,
   ): Promise<CapabilityMatrix> {
-    const cached = await this.cache.getEntry(provider, model, sdk);
+    const cached = await this.cache.getEntry(provider, model, sdk, providerConfigId);
     if (cached) {
       return cached.caps;
     }
@@ -79,6 +99,7 @@ export class CapabilityRegistry {
         provider,
         model,
         sdk,
+        ...(providerConfigId ? { providerConfigId } : {}),
         caps: modelsDevCaps,
         source: "models.dev",
         probedAt: new Date().toISOString(),
@@ -87,23 +108,52 @@ export class CapabilityRegistry {
       return modelsDevCaps;
     }
 
-    const providerTarget = this.providerRegistry
-      ?.resolveTargets(model, provider)
-      .find((target) => target.provider.id === provider);
     if (providerTarget) {
       const apiKey = process.env[providerTarget.provider.apiKeyEnv];
       if (!apiKey) return conservativeCapabilities();
+      if (this.providerRuntime?.isCircuitOpen(providerTarget.provider.id)) {
+        return conservativeCapabilities();
+      }
+      let admissionDenied = false;
       try {
-        const probedCaps = await probeCapabilities({
-          baseUrl: providerTarget.provider.baseUrl,
-          apiKey,
-          model: providerTarget.modelId,
-          protocol: providerTarget.protocol,
-        });
+        const probedCaps = await probeCapabilities(
+          {
+            baseUrl: providerTarget.provider.baseUrl,
+            apiKey,
+            model: providerTarget.modelId,
+            protocol: providerTarget.protocol,
+          },
+          {
+            beforeRequest: (estimatedTokens) => {
+              if (this.providerRuntime?.isCircuitOpen(providerTarget.provider.id)) {
+                admissionDenied = true;
+                return false;
+              }
+              const admission = this.providerRuntime?.reserve(
+                providerTarget.provider,
+                estimatedTokens,
+              );
+              if (admission && !admission.allowed) admissionDenied = true;
+              return admission?.allowed ?? true;
+            },
+            onResponse: (status, succeeded) => {
+              if (!this.providerRuntime) return;
+              if (succeeded) {
+                this.providerRuntime.closeCircuit(providerTarget.provider.id);
+              } else if (status === 429 || (status >= 500 && status < 600)) {
+                this.providerRuntime.openCircuit(providerTarget.provider.id);
+              }
+            },
+          },
+        );
+        // A denied optional probe produces a conservative partial matrix, but it
+        // must not become durable truth after the minute window or circuit closes.
+        if (admissionDenied) return probedCaps;
         const entry: RegistryEntry = {
           provider,
           model,
           sdk,
+          ...(providerConfigId ? { providerConfigId } : {}),
           caps: probedCaps,
           source: "probe",
           probedAt: new Date().toISOString(),
@@ -165,4 +215,26 @@ function conservativeCapabilities(): CapabilityMatrix {
     reasoning: false,
     maxTokens: 0,
   };
+}
+
+function providerConfigurationIdentity(target: ProviderTarget): string {
+  return `${target.protocol}:${target.provider.baseUrl.replace(/\/+$/u, "")}:${target.provider.apiKeyEnv}`;
+}
+
+function intersectCapabilityMatrices(matrices: CapabilityMatrix[]): CapabilityMatrix {
+  const [first, ...rest] = matrices;
+  if (!first) return conservativeCapabilities();
+  return rest.reduce<CapabilityMatrix>(
+    (intersection, matrix) => ({
+      chat: intersection.chat && matrix.chat,
+      tools: intersection.tools && matrix.tools,
+      vision: intersection.vision && matrix.vision,
+      streaming: intersection.streaming && matrix.streaming,
+      structuredOutputs: intersection.structuredOutputs && matrix.structuredOutputs,
+      promptCaching: intersection.promptCaching && matrix.promptCaching,
+      reasoning: intersection.reasoning && matrix.reasoning,
+      maxTokens: Math.min(intersection.maxTokens, matrix.maxTokens),
+    }),
+    first,
+  );
 }

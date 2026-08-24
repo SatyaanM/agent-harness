@@ -40,3 +40,9 @@ Status: Implemented
 - **Files/Symbols**: `CapabilityRegistry.lookupModel`, `Agent.resolveCapabilities`, `Agent.run`, `createVercelAILLMClient`.
 - **Behavior**: Preserve slash-containing IDs; probe declared OpenAI/Anthropic protocols; accept a pre-resolved matrix; deny every call outside the eligible map; use supported prompt-cache options.
 - **Verification**: Adapter assertions, provider-aware probe tests, pre-resolved lookup-count test, and hallucinated delegate/config/HITL denial tests.
+
+### Phase 5: Fallback-safe capability ownership
+- **Objective**: Keep one capability decision safe across every runtime fallback and provider generation.
+- **Files/Symbols**: `CapabilityRegistry.lookupModel`, `probeCapabilities`, `CapabilityCache`, `ProviderRuntimeState`.
+- **Behavior**: Intersect every eligible target, admit each probe request through shared runtime policy, update shared circuits from HTTP outcomes, and bind durable entries to non-secret provider configuration identity.
+- **Verification**: Heterogeneous-provider intersection, numeric minimum/zero, request-admission/circuit, and endpoint/protocol cache invalidation tests.

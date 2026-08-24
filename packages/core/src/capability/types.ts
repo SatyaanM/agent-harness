@@ -6,6 +6,7 @@ export const RegistryEntrySchema = z
     provider: z.string().min(1).max(256),
     model: z.string().min(1).max(256),
     sdk: z.string().min(1).max(256),
+    providerConfigId: z.string().min(1).max(2_304).optional(),
     caps: CapabilityMatrixSchema,
     source: z.enum(["manual", "cache", "models.dev", "probe"]),
     probedAt: z.string().datetime(),

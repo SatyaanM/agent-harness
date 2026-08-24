@@ -6,6 +6,26 @@ afterEach(() => {
 });
 
 describe("probeCapabilities", () => {
+  it("runs admission immediately before every provider network request", async () => {
+    const beforeRequest = vi.fn(() => true);
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await probeCapabilities(
+      {
+        baseUrl: "https://provider.example/v1",
+        apiKey: "secret",
+        model: "model",
+        maxRetries: 0,
+      },
+      { beforeRequest },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(beforeRequest).toHaveBeenCalledTimes(4);
+    expect(beforeRequest).toHaveBeenCalledWith(expect.any(Number));
+  });
+
   it("rejects invalid probe configuration before network access", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
