@@ -39,11 +39,17 @@ export class CapabilityRegistry {
     const targets = this.providerRegistry?.resolveTargets(model, preferredProviderId);
     if (!targets) return this.lookup(preferredProviderId ?? "default", model, sdk, agentConfig);
     if (targets.length === 0) return conservativeCapabilities();
+    const correlationConfig = agentConfig?.modelIdMapping
+      ? { modelIdMapping: agentConfig.modelIdMapping }
+      : undefined;
     const matrices: CapabilityMatrix[] = [];
     for (const target of targets) {
-      matrices.push(await this.lookup(target.provider.id, target.modelId, sdk, agentConfig));
+      matrices.push(await this.lookup(target.provider.id, target.modelId, sdk, correlationConfig));
     }
-    return intersectCapabilityMatrices(matrices);
+    return applyManualCapabilities(
+      intersectCapabilityMatrices(matrices),
+      agentConfig?.capabilities,
+    );
   }
 
   async lookup(
@@ -73,7 +79,7 @@ export class CapabilityRegistry {
       // Tier-1 bounds belong to this agent invocation. Persisting the merged
       // matrix would leak one agent's restrictions into every agent using the
       // same provider/model/SDK cache key.
-      return { ...base, ...agentConfig.capabilities };
+      return applyManualCapabilities(base, agentConfig.capabilities);
     }
 
     return base;
@@ -238,6 +244,27 @@ function conservativeCapabilities(): CapabilityMatrix {
 
 function providerConfigurationIdentity(target: ProviderTarget): string {
   return `${target.protocol}:${target.provider.baseUrl.replace(/\/+$/u, "")}:${target.provider.apiKeyEnv}`;
+}
+
+function applyManualCapabilities(
+  discovered: CapabilityMatrix,
+  manual: AgentConfigRef["capabilities"],
+): CapabilityMatrix {
+  if (!manual) return discovered;
+  return {
+    ...discovered,
+    ...manual,
+    contextWindowTokens: minimumPositiveCapability(
+      discovered.contextWindowTokens,
+      manual.contextWindowTokens,
+    ),
+    maxTokens: minimumPositiveCapability(discovered.maxTokens, manual.maxTokens),
+  };
+}
+
+function minimumPositiveCapability(...values: Array<number | undefined>): number {
+  const positive = values.filter((value): value is number => value !== undefined && value > 0);
+  return positive.length > 0 ? Math.min(...positive) : 0;
 }
 
 function intersectCapabilityMatrices(matrices: CapabilityMatrix[]): CapabilityMatrix {

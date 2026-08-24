@@ -1160,8 +1160,8 @@ describe("SessionRuntime delivery invariants", () => {
       structuredOutputs: false,
       promptCaching: false,
       reasoning: false,
-      contextWindowTokens: 100,
-      maxTokens: 64,
+      contextWindowTokens: 4096,
+      maxTokens: 512,
     });
     const runtime = new SessionRuntime({
       sessionId: "compact-runtime",
@@ -1170,7 +1170,11 @@ describe("SessionRuntime delivery invariants", () => {
       resolveConfig: () => ({
         ...config(),
         provider: "preferred-provider",
-        compactionThreshold: 0.5,
+        capabilities: {
+          contextWindowTokens: 128_000,
+          maxTokens: 4096,
+        },
+        compactionThreshold: 0.01,
         compactionKeepRecentMessages: 2,
         compactionChunkMessages: 4,
       }),
@@ -1189,7 +1193,7 @@ describe("SessionRuntime delivery invariants", () => {
     expect(compactionCalls[0]).toEqual(
       expect.objectContaining({
         preferredProviderId: "preferred-provider",
-        maxOutputTokens: 25,
+        maxOutputTokens: 512,
       }),
     );
     expect(primaryCalls).toHaveLength(1);

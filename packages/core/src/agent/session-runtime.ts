@@ -825,14 +825,8 @@ export class SessionRuntime {
     if (!messageRepo) return { history: [] };
 
     const contextWindowTokens =
-      minimumPositive(
-        resolvedCapabilities.contextWindowTokens,
-        agentConfig.capabilities?.contextWindowTokens,
-      ) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-    const maxOutputTokens = minimumPositive(
-      resolvedCapabilities.maxTokens,
-      agentConfig.capabilities?.maxTokens,
-    );
+      positiveCapability(resolvedCapabilities.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+    const maxOutputTokens = positiveCapability(resolvedCapabilities.maxTokens);
     const threshold = agentConfig.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
     const activeRows = messageRepo.getActiveContext(this.options.sessionId);
     const activeMessages = activeRows.map((row) => messageRepo.toMessage(row));
@@ -893,7 +887,6 @@ export class SessionRuntime {
   }
 }
 
-function minimumPositive(...values: Array<number | undefined>): number | undefined {
-  const positive = values.filter((value): value is number => value !== undefined && value > 0);
-  return positive.length > 0 ? Math.min(...positive) : undefined;
+function positiveCapability(value: number | undefined): number | undefined {
+  return value !== undefined && value > 0 ? value : undefined;
 }
