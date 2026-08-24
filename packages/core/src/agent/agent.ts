@@ -18,6 +18,7 @@ import {
   type AgentConfig,
   AgentConfigSchema,
   type AgentResult,
+  type CapabilityMatrix,
   type Message,
 } from "./types.js";
 
@@ -31,7 +32,8 @@ export type AgentEventCallback = (
   event:
     | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
     | { type: "tool:completed"; toolName: string; result?: string }
-    | { type: "step"; messages: Message[] },
+    | { type: "step"; messages: Message[] }
+    | { type: "capability-mismatch"; detail: string },
 ) => void;
 
 export class Agent {
@@ -42,14 +44,19 @@ export class Agent {
     config: AgentConfig,
     private readonly toolRegistry: ToolRegistry,
     private readonly llmClient: LLMClient,
-    _capabilityRegistry: CapabilityRegistry,
+    private readonly capabilityRegistry: CapabilityRegistry,
     private readonly onEvent?: AgentEventCallback,
     private readonly logger: Logger = createLogger("core.agent"),
   ) {
     this.config = parseBoundary(AgentConfigSchema, config, "agent configuration");
   }
 
-  async run(prompt?: string, history: Message[] = [], signal?: AbortSignal): Promise<AgentResult> {
+  async run(
+    prompt?: string,
+    history: Message[] = [],
+    signal?: AbortSignal,
+    resolvedCapabilities?: CapabilityMatrix,
+  ): Promise<AgentResult> {
     const tracer = getTracer();
     const runSpan = tracer.startSpan("agent.run", {
       attributes: {
@@ -67,7 +74,7 @@ export class Agent {
       : timeoutController.signal;
     try {
       const result = await tracer.withSpan(runSpan, async () => {
-        return await this.runWithSignal(prompt, history, runSignal);
+        return await this.runWithSignal(prompt, history, runSignal, resolvedCapabilities);
       });
       runSpan.setStatus({
         code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
@@ -102,6 +109,7 @@ export class Agent {
     prompt: string | undefined,
     history: Message[],
     signal: AbortSignal,
+    resolvedCapabilities: CapabilityMatrix | undefined,
   ): Promise<AgentResult> {
     const tracer = getTracer();
     this.messages = [...history];
@@ -109,20 +117,31 @@ export class Agent {
       this.messages.push({ role: "user", content: prompt });
     }
 
+    const matrix = resolvedCapabilities ?? (await this.resolveCapabilities());
+
     const tools = this.config.tools
       .map((name) => this.toolRegistry.get(name))
       .filter((t): t is NonNullable<typeof t> => t != null);
 
-    const llmTools: LLMToolDefinition[] | undefined = tools.length
-      ? tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
+    const eligibleTools = matrix.tools
+      ? tools.filter((tool) => !tool.requiresHITL || matrix.reasoning)
+      : [];
+    const eligibleToolMap = new Map(eligibleTools.map((tool) => [tool.name, tool]));
+    const llmTools: LLMToolDefinition[] | undefined = eligibleTools.length
+      ? eligibleTools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
         }))
       : undefined;
+
     const maxToolCalls = this.config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     const maxToolResultChars = this.config.maxToolResultChars ?? DEFAULT_MAX_TOOL_RESULT_CHARS;
-    const maxOutputTokens = this.config.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+
+    const configMax = this.config.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+    const maxOutputTokens =
+      matrix.maxTokens && matrix.maxTokens > 0 ? Math.min(configMax, matrix.maxTokens) : configMax;
+
     const maxTotalTokens = this.config.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
     let toolCallsUsed = 0;
     let totalTokensUsed = 0;
@@ -147,16 +166,34 @@ export class Agent {
             },
           });
 
+          let finalSystem = this.config.instructions;
+          if (!matrix.structuredOutputs && llmTools && llmTools.length > 0) {
+            finalSystem +=
+              "\n\nYou must strictly adhere to the provided JSON schemas for any tools you invoke.";
+          }
+
+          let finalMessages = projectToolResultsForModel(this.messages, maxToolResultChars);
+          if (!matrix.vision) {
+            finalMessages = finalMessages.map((msg) => ({
+              ...msg,
+              content: msg.content.replace(
+                /!\[.*?\]\(.*?\)/g,
+                "[Image omitted due to model capability]",
+              ),
+            }));
+          }
+
           let response: LLMResponse;
           try {
             const rawResponse = await tracer.withSpan(llmSpan, async () => {
               return await this.llmClient.chat({
-                messages: projectToolResultsForModel(this.messages, maxToolResultChars),
-                system: this.config.instructions,
+                messages: finalMessages,
+                system: finalSystem,
                 model: this.config.model,
                 ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
                 ...(llmTools ? { tools: llmTools } : {}),
                 maxOutputTokens,
+                promptCaching: matrix.promptCaching,
                 signal,
               });
             });
@@ -191,11 +228,43 @@ export class Agent {
             throw new AgentCancelledError();
           }
 
-          const responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+          const providerToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+          const deniedToolCalls = providerToolCalls.filter(
+            (toolCall) => !eligibleToolMap.has(toolCall.toolName),
+          );
+          const responseToolCalls = providerToolCalls.filter((toolCall) =>
+            eligibleToolMap.has(toolCall.toolName),
+          );
+          let toolDenial: string | undefined;
+          if (deniedToolCalls.length > 0) {
+            const detail = !matrix.tools
+              ? `Model returned ${deniedToolCalls.length} tool call(s) but tools capability is disabled`
+              : `Model returned tool call(s) outside the eligible tool map: ${deniedToolCalls.map((call) => call.toolName).join(", ")}`;
+            this.onEvent?.({
+              type: "capability-mismatch",
+              detail,
+            });
+            this.logger.warn("Capability mismatch", {
+              capability: "tools",
+              model: this.config.model,
+              toolCallCount: deniedToolCalls.length,
+              toolNames: deniedToolCalls.map((call) => call.toolName),
+            });
+            toolDenial = matrix.tools
+              ? "One or more requested tools are not eligible for this agent run. Do not call unavailable, unconfigured, delegated, or approval-required tools; continue using only the provided tools or answer with text."
+              : "Tool calls are disabled for this model. Do not call tools; answer using text only.";
+          }
+
           const responseMessage = responseToolCalls.length
             ? { ...response.message, toolCalls: responseToolCalls }
-            : response.message;
+            : stripToolCalls(response.message);
           this.messages.push(responseMessage);
+          if (toolDenial && responseToolCalls.length === 0) {
+            this.messages.push({
+              role: "system",
+              content: toolDenial,
+            });
+          }
           this.onEvent?.({ type: "step", messages: [...this.messages] });
 
           totalTokensUsed += tokenCharge(
@@ -255,7 +324,7 @@ export class Agent {
               }
               toolCallsUsed += 1;
 
-              const tool = this.toolRegistry.get(toolCall.toolName);
+              const tool = eligibleToolMap.get(toolCall.toolName);
 
               if (!tool) {
                 this.messages.push({
@@ -327,6 +396,9 @@ export class Agent {
                 toolSpan.end();
               }
             }
+            if (toolDenial) {
+              this.messages.push({ role: "system", content: toolDenial });
+            }
             this.onEvent?.({ type: "step", messages: [...this.messages] });
           }
 
@@ -350,6 +422,33 @@ export class Agent {
           : (finalMessage?.content ?? ""),
       messages: [...this.messages],
     };
+  }
+
+  async resolveCapabilities(): Promise<CapabilityMatrix> {
+    try {
+      return await this.capabilityRegistry.lookupModel(
+        this.config.model,
+        this.config.provider,
+        "vercel-ai",
+        this.config,
+      );
+    } catch (error) {
+      this.logger.warn("Capability lookup failed; using conservative defaults", {
+        providerId: this.config.provider ?? "default",
+        modelId: this.config.model,
+        ...describeError(error),
+      });
+      return {
+        chat: false,
+        tools: false,
+        vision: false,
+        streaming: false,
+        structuredOutputs: false,
+        promptCaching: false,
+        reasoning: false,
+        maxTokens: 0,
+      };
+    }
   }
 
   private budgetExceeded(summary: string): AgentResult {
@@ -391,6 +490,18 @@ function projectToolResultsForModel(messages: Message[], limit: number): Message
       ? { ...message, content: boundToolResult(message.content, limit) }
       : message,
   );
+}
+
+function stripToolCalls(
+  message: Extract<Message, { role: "assistant" }>,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    content: message.content,
+    ...(message.reasoning === undefined ? {} : { reasoning: message.reasoning }),
+    ...(message.meta === undefined ? {} : { meta: message.meta }),
+    ...(message.createdAt === undefined ? {} : { createdAt: message.createdAt }),
+  };
 }
 
 function tokenCharge(response: LLMResponse, messages: Message[], instructions: string): number {

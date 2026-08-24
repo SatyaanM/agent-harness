@@ -58,15 +58,30 @@ export class CapabilityCache {
     }
   }
 
-  async getEntry(provider: string, model: string, sdk: string): Promise<RegistryEntry | undefined> {
+  async getEntry(
+    provider: string,
+    model: string,
+    sdk: string,
+    providerConfigId?: string,
+  ): Promise<RegistryEntry | undefined> {
     await this.loadCache();
-    return this.entries.find((e) => e.provider === provider && e.model === model && e.sdk === sdk);
+    return this.entries.find(
+      (entry) =>
+        entry.provider === provider &&
+        entry.model === model &&
+        entry.sdk === sdk &&
+        entry.providerConfigId === providerConfigId,
+    );
   }
 
   async upsertEntry(entry: RegistryEntry): Promise<void> {
     await this.loadCache();
     const idx = this.entries.findIndex(
-      (e) => e.provider === entry.provider && e.model === entry.model && e.sdk === entry.sdk,
+      (candidate) =>
+        candidate.provider === entry.provider &&
+        candidate.model === entry.model &&
+        candidate.sdk === entry.sdk &&
+        candidate.providerConfigId === entry.providerConfigId,
     );
     if (idx >= 0) {
       this.entries[idx] = entry;

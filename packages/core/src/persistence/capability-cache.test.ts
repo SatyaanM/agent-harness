@@ -25,6 +25,9 @@ const validEntry = {
     vision: false,
     streaming: true,
     maxTokens: 4096,
+    structuredOutputs: false,
+    promptCaching: false,
+    reasoning: false,
   },
   source: "cache" as const,
   probedAt: new Date().toISOString(),
@@ -56,5 +59,21 @@ describe("CapabilityCache", () => {
 
     await cache.invalidate("openai", "gpt-4o", "vercel-ai");
     expect(await cache.getEntry("openai", "gpt-4o", "vercel-ai")).toBeUndefined();
+  });
+
+  it("keeps entries for different non-secret provider configuration identities distinct", async () => {
+    const { cache } = await makeFixture();
+    const first = { ...validEntry, providerConfigId: "openai:https://first.example/v1" };
+    const second = { ...validEntry, providerConfigId: "anthropic:https://second.example/v1" };
+
+    await cache.upsertEntry(first);
+    await cache.upsertEntry(second);
+
+    await expect(
+      cache.getEntry("openai", "gpt-4o", "vercel-ai", first.providerConfigId),
+    ).resolves.toEqual(first);
+    await expect(
+      cache.getEntry("openai", "gpt-4o", "vercel-ai", second.providerConfigId),
+    ).resolves.toEqual(second);
   });
 });

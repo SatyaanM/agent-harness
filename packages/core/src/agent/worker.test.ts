@@ -1,8 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { resetModelsDevCache } from "../capability/models-dev-client.js";
 import { CapabilityRegistry } from "../capability/registry.js";
 import type { LLMClient } from "../llm/client.js";
 import { ToolRegistry } from "../tool/registry.js";
@@ -11,7 +12,17 @@ import { Worker } from "./worker.js";
 
 const tempDirs: string[] = [];
 
+beforeEach(() => {
+  resetModelsDevCache();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 404 })),
+  );
+});
+
 afterEach(async () => {
+  vi.unstubAllGlobals();
+  resetModelsDevCache();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 

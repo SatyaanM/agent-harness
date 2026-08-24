@@ -33,4 +33,64 @@ describe("loadAgentConfig", () => {
       expect.objectContaining({ provider: "preferred-provider", model: "shared-model" }),
     );
   });
+
+  it("preserves every supported partial capability override from frontmatter", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-config-"));
+    tempDirs.push(root);
+    const file = path.join(root, "agent.md");
+    await writeFile(
+      file,
+      `---
+name: bounded
+model: provider/model
+tools: []
+maxSteps: 2
+capabilities:
+  chat: false
+  tools: false
+  vision: true
+  streaming: false
+  structuredOutputs: true
+  promptCaching: true
+  reasoning: true
+  maxTokens: 1234
+---
+Follow the bounds.
+`,
+      "utf8",
+    );
+
+    expect(loadAgentConfig(file).capabilities).toEqual({
+      chat: false,
+      tools: false,
+      vision: true,
+      streaming: false,
+      structuredOutputs: true,
+      promptCaching: true,
+      reasoning: true,
+      maxTokens: 1234,
+    });
+  });
+
+  it("does not manufacture overrides for omitted capability fields", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-config-"));
+    tempDirs.push(root);
+    const file = path.join(root, "agent.md");
+    await writeFile(
+      file,
+      `---
+name: bounded
+model: provider/model
+tools: []
+maxSteps: 2
+capabilities:
+  tools: false
+---
+Follow the bounds.
+`,
+      "utf8",
+    );
+
+    expect(loadAgentConfig(file).capabilities).toEqual({ tools: false });
+  });
 });

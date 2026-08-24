@@ -6,7 +6,7 @@ read_when:
 
 # Capability Registry Enforcement Implementation Plan
 
-Status: Draft
+Status: Implemented
 
 ## Inputs
 - Governing Specification: `specs/capability-registry-enforcement/SPEC.md`
@@ -34,3 +34,15 @@ Status: Draft
   - [MODIFY] `packages/core/src/agent/agent.ts`
 - **Behavior**: Uses native JSON schema support if `structuredOutputs: true`. Applies caching breakpoints if `promptCaching: true`.
 - **Verification**: Assert correct provider API parameters are mapped.
+
+### Phase 4: Provider parity and reusable resolution
+- **Objective**: Keep routing, probing, advertised tools, and executable tools on one target/matrix.
+- **Files/Symbols**: `CapabilityRegistry.lookupModel`, `Agent.resolveCapabilities`, `Agent.run`, `createVercelAILLMClient`.
+- **Behavior**: Preserve slash-containing IDs; probe declared OpenAI/Anthropic protocols; accept a pre-resolved matrix; deny every call outside the eligible map; use supported prompt-cache options.
+- **Verification**: Adapter assertions, provider-aware probe tests, pre-resolved lookup-count test, and hallucinated delegate/config/HITL denial tests.
+
+### Phase 5: Fallback-safe capability ownership
+- **Objective**: Keep one capability decision safe across every runtime fallback and provider generation.
+- **Files/Symbols**: `CapabilityRegistry.lookupModel`, `probeCapabilities`, `CapabilityCache`, `ProviderRuntimeState`.
+- **Behavior**: Intersect every eligible target using minimum-positive numeric bounds, admit each probe request/retry through shared runtime policy, cache only stable outcomes, update shared circuits from classified HTTP outcomes, and bind durable entries to non-secret provider configuration identity.
+- **Verification**: Heterogeneous-provider intersection, known-plus-unknown output cap, admitted retry recovery caching, exhausted-transient cache absence, stable 4xx caching, circuit classification, and endpoint/protocol cache invalidation tests.

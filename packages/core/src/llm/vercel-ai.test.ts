@@ -102,6 +102,44 @@ describe("Vercel AI adapter", () => {
     expect(mocks.generateText).not.toHaveBeenCalled();
   });
 
+  it("uses supported Anthropic providerOptions and a system-message cache breakpoint", async () => {
+    const anthropicConfig: Config = {
+      ...config,
+      PROVIDERS: [
+        {
+          id: "anthropic",
+          displayName: "Anthropic",
+          protocol: "anthropic",
+          baseUrl: "https://anthropic.example/v1",
+          apiKeyEnv: "TEST_API_KEY",
+          enabled: true,
+          priority: 0,
+        },
+      ],
+    };
+
+    await createVercelAILLMClient(anthropicConfig).chat({
+      messages: [{ role: "user", content: "hello" }],
+      system: "stable instructions",
+      model: "vendor/model",
+      promptCaching: true,
+    });
+
+    expect(mocks.generateText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: {
+          role: "system",
+          content: "stable instructions",
+          providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+        },
+        providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+      }),
+    );
+    expect(mocks.generateText).not.toHaveBeenCalledWith(
+      expect.objectContaining({ experimental_providerMetadata: expect.anything() }),
+    );
+  });
+
   it("preserves configured slash-containing model IDs and shares rate admission", async () => {
     const limitedConfig: Config = {
       ...config,

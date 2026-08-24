@@ -14,7 +14,7 @@ An **orchestrator agent** can delegate tasks to background **worker agents** and
 - **File explorer** — Browse, drag-and-drop, rename, and delete inbox files
 - **In-place editing** — Edit and save markdown and Excalidraw files directly in the dashboard
 - **Multi-provider model routing** — Configure prioritized OpenAI- and Anthropic-compatible providers with per-agent overrides and transient-failure fallback
-- **Capability discovery library** — Manual, cache, models.dev, and probe tiers exist in core but are not yet enforced by the live agent path
+- **Capability-aware execution** — Manual, cache, models.dev, and probe tiers bound tools, vision payloads, output tokens, and provider hints per agent run
 - **File-based agent config** — Define agents as `.md` files with YAML frontmatter
 - **Manifest-backed built-ins** — Enabled inbox renderers and command metadata are discovered by the server
 - **Real-time activity** — Agent, worker, tool, and session updates over WebSocket
@@ -115,7 +115,7 @@ PROVIDER_ENDPOINT=http://localhost:11434/v1
 
 **Model routing note:** configured provider entries declare their protocol, optional exact or `*` wildcard model patterns, and optional request/token minute budgets. Lower priorities are attempted first. An agent's optional `provider` frontmatter field selects its preferred eligible provider. Provider IDs and model IDs (including `/`) stay separate and configured model IDs are sent unchanged. A local rate denial or upstream HTTP 429/5xx advances to a fallback; upstream transient failures also open the provider's shared one-minute circuit. Cancellation and non-transient 4xx failures are never replayed. Saving settings aborts active runs, waits for their terminal cleanup, and unloads cached runtimes before the next configuration generation. The legacy synthetic provider retains historical prefix/protocol compatibility when the registry is absent.
 
-**Capability discovery status:** core contains manual, cache, models.dev, and probe tiers, but `Agent.run()` does not currently call the registry. Treat configured tools and provider compatibility as operator responsibility until that integration is designed and tested.
+**Capability discovery status:** `Agent.run()` resolves the four-tier registry once per run, or consumes one pre-resolved matrix from its runtime owner. Provider/model correlation preserves opaque model IDs containing `/`, and the matrix conservatively intersects every eligible fallback target; numeric limits use the minimum positive known value and the 4096 output default only when all are unknown. Configured OpenAI or Anthropic probes use environment-owned credentials plus the same circuit and per-request/retry RPM/TPM admission as execution. Network/429/5xx transients retry within bounds; recovered success and stable unsupported-feature 4xx results may be cached, while exhausted/denied results may not. Successful responses close circuits, and only exhausted numeric 429/5xx retry sequences open them. Durable entries include non-secret endpoint/protocol configuration identity, preventing stale reuse after provider edits. Agent-frontmatter overrides remain scoped to that agent rather than entering the shared model cache. Only the eligible per-run tool map is advertised or executable, image markdown and HITL tools are bounded by model support, and failed configured probes fall back conservatively. Anthropic prompt caching uses AI SDK 7 provider options and an explicit system-message cache breakpoint.
 
 ## Production
 

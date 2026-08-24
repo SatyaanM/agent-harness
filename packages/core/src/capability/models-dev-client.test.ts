@@ -37,6 +37,9 @@ describe("models.dev capability boundary", () => {
       tools: true,
       vision: true,
       streaming: true,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
       maxTokens: 4096,
     });
     expect(second).toEqual(first);

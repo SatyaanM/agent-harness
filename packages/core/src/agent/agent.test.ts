@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { resetModelsDevCache } from "../capability/models-dev-client.js";
 import { CapabilityRegistry } from "../capability/registry.js";
+import type { Config } from "../config.js";
 import type { LLMClient } from "../llm/client.js";
+import { ProviderRegistry } from "../provider-registry.js";
 import { ToolRegistry } from "../tool/registry.js";
 import { Agent } from "./agent.js";
 import {
@@ -19,23 +22,53 @@ const config: AgentConfig = {
   instructions: "Test",
 };
 
+beforeEach(() => {
+  resetModelsDevCache();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 404 })),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  resetModelsDevCache();
+});
+
 describe("Agent tool boundary", () => {
   it("passes the configured provider override to the provider call", async () => {
     const chat = vi.fn().mockResolvedValue({
       message: { role: "assistant", content: "done" },
       finishReason: "stop",
     });
+    const capabilityRegistry = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    const lookup = vi.spyOn(capabilityRegistry, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
     const agent = new Agent(
       { ...config, provider: "preferred-provider", tools: [], maxSteps: 1 },
       new ToolRegistry(),
       { chat },
-      new CapabilityRegistry({ workspaceRoot: process.cwd() }),
+      capabilityRegistry,
     );
 
     await agent.run("go");
 
     expect(chat).toHaveBeenCalledWith(
       expect.objectContaining({ preferredProviderId: "preferred-provider" }),
+    );
+    expect(lookup).toHaveBeenCalledWith(
+      "preferred-provider",
+      "test-model",
+      "vercel-ai",
+      expect.objectContaining({ provider: "preferred-provider" }),
     );
   });
 
@@ -345,9 +378,16 @@ describe("Agent tool boundary", () => {
   });
 
   it("balances every provider tool call when the token budget stops the run", async () => {
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute: async () => "counted",
+    });
     const agent = new Agent(
       { ...config, maxTotalTokens: 10 },
-      new ToolRegistry(),
+      tools,
       {
         async chat() {
           return {
@@ -495,5 +535,436 @@ describe("Agent tool boundary", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Agent Capability Enforcement", () => {
+  it("accepts one pre-resolved matrix and skips a duplicate lookup", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "done" },
+    }));
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    const lookup = vi.spyOn(capabilities, "lookup");
+    const matrix = {
+      chat: true,
+      tools: false,
+      vision: false,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 256,
+    } as const;
+
+    await new Agent(config, new ToolRegistry(), { chat }, capabilities).run(
+      "go",
+      [],
+      undefined,
+      matrix,
+    );
+
+    expect(lookup).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 256 }));
+  });
+
+  it("strips tools when tools capability is false", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "no tools sent" },
+    }));
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute: async () => "ok",
+    });
+
+    const capabilityRegistry = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilityRegistry, "lookup").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: true,
+      streaming: false,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+
+    const agent = new Agent(config, registry, { chat }, capabilityRegistry);
+    await agent.run("go");
+
+    expect(chat).toHaveBeenCalledWith(expect.not.objectContaining({ tools: expect.anything() }));
+  });
+
+  it("strips images when vision capability is false", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "no images" },
+    }));
+
+    const capabilityRegistry = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilityRegistry, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: false,
+      streaming: false,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+
+    const agent = new Agent(config, new ToolRegistry(), { chat }, capabilityRegistry);
+    await agent.run("Here is an image: ![alt](http://example.com/img.png) and text.");
+
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            content: "Here is an image: [Image omitted due to model capability] and text.",
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("looks up capabilities once for every run, not once for every step", async () => {
+    const chat = vi
+      .fn<LLMClient["chat"]>()
+      .mockResolvedValueOnce({
+        finishReason: "tool-calls",
+        message: { role: "assistant", content: "", toolCalls: [] },
+        toolCalls: [{ toolCallId: "call-1", toolName: "count", args: { count: 1 } }],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        message: { role: "assistant", content: "done" },
+      });
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute: async () => "counted",
+    });
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    const lookup = vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+
+    const agent = new Agent(config, tools, { chat }, capabilities);
+    expect((await agent.run("go")).status).toBe("success");
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes disabled tool calls, diagnoses them, and asks for a tool-free response", async () => {
+    const hallucinatedCall = { toolCallId: "call-1", toolName: "count", args: { count: 1 } };
+    const chat = vi
+      .fn<LLMClient["chat"]>()
+      .mockResolvedValueOnce({
+        finishReason: "tool-calls",
+        message: { role: "assistant", content: "trying", toolCalls: [hallucinatedCall] },
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        message: { role: "assistant", content: "tool-free answer" },
+      });
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: true,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+    const events: Parameters<NonNullable<ConstructorParameters<typeof Agent>[4]>>[0][] = [];
+    const execute = vi.fn(async () => "must not run");
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute,
+    });
+    const agent = new Agent(config, tools, { chat }, capabilities, (event) => events.push(event));
+
+    const result = await agent.run("go");
+
+    expect(result.status).toBe("success");
+    expect(execute).not.toHaveBeenCalled();
+    expect(events).toContainEqual({
+      type: "capability-mismatch",
+      detail: "Model returned 1 tool call(s) but tools capability is disabled",
+    });
+    expect(result.messages).toEqual(
+      expect.arrayContaining([
+        { role: "assistant", content: "trying" },
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("Tool calls are disabled"),
+        }),
+      ]),
+    );
+    expect(chat).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messages: expect.not.arrayContaining([
+          expect.objectContaining({ toolCalls: expect.anything() }),
+        ]),
+      }),
+    );
+  });
+
+  it("denies calls outside the eligible tool map even when the registry contains them", async () => {
+    const deniedCalls = [
+      { toolCallId: "call-delegate", toolName: "delegate", args: {} },
+      { toolCallId: "call-hitl", toolName: "approve", args: {} },
+      { toolCallId: "call-unconfigured", toolName: "hidden", args: {} },
+    ];
+    const chat = vi
+      .fn<LLMClient["chat"]>()
+      .mockResolvedValueOnce({
+        finishReason: "tool-calls",
+        message: { role: "assistant", content: "trying", toolCalls: deniedCalls },
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        message: { role: "assistant", content: "safe answer" },
+      });
+    const execute = vi.fn(async () => "must not run");
+    const tools = new ToolRegistry();
+    for (const [name, requiresHITL] of [
+      ["delegate", false],
+      ["approve", true],
+      ["hidden", false],
+    ] as const) {
+      tools.register({
+        name,
+        description: name,
+        parameters: z.object({}),
+        requiresHITL,
+        execute,
+      });
+    }
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+    const events: Parameters<NonNullable<ConstructorParameters<typeof Agent>[4]>>[0][] = [];
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 2 },
+      tools,
+      { chat },
+      capabilities,
+      (event) => events.push(event),
+    );
+
+    const result = await agent.run("go");
+
+    expect(result.status).toBe("success");
+    expect(execute).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "capability-mismatch",
+        detail: expect.stringContaining("delegate, approve, hidden"),
+      }),
+    );
+    expect(result.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("not eligible"),
+        }),
+      ]),
+    );
+  });
+
+  it("applies model output and HITL reasoning bounds while forwarding prompt caching", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "bounded" },
+    }));
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      requiresHITL: true,
+      execute: async () => "counted",
+    });
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: true,
+      reasoning: false,
+      maxTokens: 512,
+    });
+
+    await new Agent({ ...config, maxOutputTokens: 1_024 }, tools, { chat }, capabilities).run("go");
+
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxOutputTokens: 512,
+        promptCaching: true,
+      }),
+    );
+    expect(chat).toHaveBeenCalledWith(expect.not.objectContaining({ tools: expect.anything() }));
+  });
+
+  it("uses the minimum positive fallback output limit when another target is unknown", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "bounded" },
+    }));
+    const root = process.cwd();
+    const providerConfig: Config = {
+      ROOT: root,
+      INBOX_ROOT: root,
+      SESSIONS_DIR: root,
+      AGENTS_DIR: root,
+      PROVIDER_ENDPOINT: "https://legacy.example/v1",
+      API_KEY_ENV: "LEGACY_KEY",
+      DEFAULT_MODEL: "test-model",
+      MAX_CONCURRENT_AGENTS: 1,
+      PROVIDERS: [
+        {
+          id: "known",
+          displayName: "Known",
+          protocol: "openai",
+          baseUrl: "https://known.example/v1",
+          apiKeyEnv: "KNOWN_KEY",
+          enabled: true,
+          priority: 0,
+        },
+        {
+          id: "unknown",
+          displayName: "Unknown",
+          protocol: "anthropic",
+          baseUrl: "https://unknown.example/v1",
+          apiKeyEnv: "UNKNOWN_KEY",
+          enabled: true,
+          priority: 1,
+        },
+      ],
+    };
+    const capabilities = new CapabilityRegistry({
+      workspaceRoot: root,
+      providerRegistry: new ProviderRegistry(providerConfig),
+    });
+    vi.spyOn(capabilities, "lookup")
+      .mockResolvedValueOnce({
+        chat: true,
+        tools: false,
+        vision: false,
+        streaming: false,
+        structuredOutputs: false,
+        promptCaching: false,
+        reasoning: false,
+        maxTokens: 1_024,
+      })
+      .mockResolvedValueOnce({
+        chat: true,
+        tools: false,
+        vision: false,
+        streaming: false,
+        structuredOutputs: false,
+        promptCaching: false,
+        reasoning: false,
+        maxTokens: 0,
+      });
+
+    await new Agent({ ...config, tools: [] }, new ToolRegistry(), { chat }, capabilities).run("go");
+
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 1_024 }));
+  });
+
+  it("uses the 4096 default output limit only when every fallback limit is unknown", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "defaulted" },
+    }));
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilities, "lookupModel").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: false,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+
+    await new Agent({ ...config, tools: [] }, new ToolRegistry(), { chat }, capabilities).run("go");
+
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 4_096 }));
+  });
+
+  it("adds schema adherence guidance only when native structured outputs are unavailable", async () => {
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute: async () => "counted",
+    });
+    const matrix = {
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: true,
+      maxTokens: 0,
+    } as const;
+    const withoutNative = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(withoutNative, "lookup").mockResolvedValue(matrix);
+    const fallbackChat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "done" },
+    }));
+    await new Agent(config, tools, { chat: fallbackChat }, withoutNative).run("go");
+
+    const withNative = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(withNative, "lookup").mockResolvedValue({ ...matrix, structuredOutputs: true });
+    const nativeChat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "done" },
+    }));
+    await new Agent(config, tools, { chat: nativeChat }, withNative).run("go");
+
+    expect(fallbackChat).toHaveBeenCalledWith(
+      expect.objectContaining({ system: expect.stringContaining("JSON schemas") }),
+    );
+    expect(nativeChat).toHaveBeenCalledWith(
+      expect.objectContaining({ system: expect.not.stringContaining("JSON schemas") }),
+    );
   });
 });

@@ -81,6 +81,9 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         name: `worker-${taskId}`,
         model: model || delegatingAgent.model,
         tools: delegatingAgent.tools.filter((toolName) => toolName !== "delegate"),
+        capabilities: delegatingAgent.capabilities
+          ? { ...delegatingAgent.capabilities }
+          : undefined,
       };
 
       const createdAt = new Date().toISOString();
@@ -149,7 +152,9 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
                 .catch(reportBackgroundError);
               return;
             }
-            deps.onWorkerTool?.(sessionId, e);
+            if (e.type === "tool:called" || e.type === "tool:completed") {
+              deps.onWorkerTool?.(sessionId, e);
+            }
           },
           deps.executionLimiter,
         );

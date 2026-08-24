@@ -188,14 +188,14 @@ The system's value grows with its capabilities. If improving the system requires
 
 ## 5. Deferred capability proposals
 
-Earlier design work proposed runtime skills, prompt templates, session branching, compaction, product context-file loading, plugin hot reload, and multi-provider registration. None is an adopted or implemented product capability today.
+Earlier design work proposed runtime skills, prompt templates, session branching, compaction, product context-file loading, plugin hot reload, and multi-provider registration. Multi-provider routing and capability-aware execution are now adopted and implemented; the remaining items in this section are still deferred proposals.
 
 These ideas require separate specifications and decisions after the identity/recovery phase. In particular:
 
 - `.agents/skills/` contains development workflows only;
 - a root product `skills/` directory or loader is prohibited by [ADR 0001](decisions/0001-development-agent-layer.md) until a runtime spec, ontology, security model, persistence design, and ADR authorize it;
 - the current server has no prompt-template, branching, compaction, context-file, or plugin-watcher implementation;
-- provider routing currently uses one configured endpoint and a model-name protocol allowlist, not a provider registry.
+- provider routing uses the server-owned registry and runtime policy adopted by [ADR 0006](decisions/0006-server-owned-provider-runtime.md); capability discovery follows the same opaque provider/model target and never makes a model-name prefix own configured routing.
 
 See [`architecture/TARGET_DIRECTION.md`](architecture/TARGET_DIRECTION.md) for directional constraints and [`architecture/RUNTIME_ONTOLOGY.md`](architecture/RUNTIME_ONTOLOGY.md) for the vocabulary that future identity and recovery designs should use.
 
