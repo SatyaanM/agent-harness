@@ -15,6 +15,7 @@ const logger = createLogger("dashboard.chat-input");
 interface PendingRequest {
   sessionId: string;
   content: string;
+  userMessageId: string;
   assistantMessageId: string;
   agentName?: string;
   error: string;
@@ -30,6 +31,7 @@ export default function ChatInput() {
   const updateMessage = useSessionStore((s) => s.updateMessage);
   const beginMessageStream = useSessionStore((s) => s.beginMessageStream);
   const finishMessageStream = useSessionStore((s) => s.finishMessageStream);
+  const failMessageStream = useSessionStore((s) => s.failMessageStream);
   const ttsEnabled = useTTSStore((s) => s.enabled);
   const playTTS = useTTSStore((s) => s.play);
   const pendingPrefill = useChatInputStore((s) => s.pendingPrefill);
@@ -44,6 +46,25 @@ export default function ChatInput() {
 
   const performRequest = async (request: Omit<PendingRequest, "error">, retryExisting = false) => {
     setSubmitting(true);
+    const existingMessages =
+      useSessionStore.getState().sessions.find((session) => session.sessionId === request.sessionId)
+        ?.messages ?? [];
+    if (!existingMessages.some((message) => message.id === request.userMessageId)) {
+      addMessage(request.sessionId, {
+        id: request.userMessageId,
+        role: "user",
+        content: request.content,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    if (!existingMessages.some((message) => message.id === request.assistantMessageId)) {
+      addMessage(request.sessionId, {
+        id: request.assistantMessageId,
+        role: "assistant",
+        content: "",
+        createdAt: new Date().toISOString(),
+      });
+    }
     beginMessageStream(request.sessionId, request.assistantMessageId);
     updateMessage(request.sessionId, request.assistantMessageId, "");
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -117,7 +138,7 @@ export default function ChatInput() {
       await reader?.cancel().catch(() => undefined);
       reader = undefined;
       const detail = error instanceof Error ? error.message : "Unknown network error";
-      updateMessage(request.sessionId, request.assistantMessageId, `Error: ${detail}`);
+      failMessageStream(request.sessionId, request.assistantMessageId);
       setPendingRequest({ ...request, error: detail });
     } finally {
       setSubmitting(false);
@@ -129,9 +150,10 @@ export default function ChatInput() {
 
     const content = input.trim();
     const assistantMessageId = crypto.randomUUID();
+    const userMessageId = crypto.randomUUID();
     const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
     addMessage(activeSessionId, {
-      id: crypto.randomUUID(),
+      id: userMessageId,
       role: "user",
       content,
       createdAt: new Date().toISOString(),
@@ -146,6 +168,7 @@ export default function ChatInput() {
     await performRequest({
       sessionId: activeSessionId,
       content,
+      userMessageId,
       assistantMessageId,
       agentName: activeSession?.agentName,
     });

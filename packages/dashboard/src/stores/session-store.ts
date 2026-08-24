@@ -68,6 +68,7 @@ interface SessionStore {
   updateMessage: (sessionId: string, messageId: string, content: string) => void;
   beginMessageStream: (sessionId: string, messageId: string) => void;
   finishMessageStream: (sessionId: string, messageId: string) => void;
+  failMessageStream: (sessionId: string, messageId: string) => void;
   syncFromServer: (data: ServerSession) => void;
   confirmFromServer: (data: ServerSession, messageId?: string) => void;
   hydrate: (sessions: ServerSession[]) => void;
@@ -303,6 +304,43 @@ export const useSessionStore = create<SessionStore>((set) => ({
           ...state.awaitingAuthoritativeMessageIds,
           [sessionId]: awaiting.includes(messageId) ? awaiting : [...awaiting, messageId],
         },
+      };
+    }),
+
+  failMessageStream: (sessionId, messageId) =>
+    set((state) => {
+      const boundary = state.streamTurnBoundaries[sessionId]?.[messageId];
+      const removedIds = new Set(
+        boundary?.userMessageId ? [boundary.userMessageId, messageId] : [messageId],
+      );
+      const sessions = state.sessions.map((session) =>
+        session.sessionId === sessionId
+          ? {
+              ...session,
+              messages: session.messages.filter((message) => !removedIds.has(message.id)),
+            }
+          : session,
+      );
+      const streamingMessageIds = { ...state.streamingMessageIds };
+      const streaming = (streamingMessageIds[sessionId] ?? []).filter((id) => id !== messageId);
+      if (streaming.length === 0) delete streamingMessageIds[sessionId];
+      else streamingMessageIds[sessionId] = streaming;
+      const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
+      const awaiting = (awaitingAuthoritativeMessageIds[sessionId] ?? []).filter(
+        (id) => id !== messageId,
+      );
+      if (awaiting.length === 0) delete awaitingAuthoritativeMessageIds[sessionId];
+      else awaitingAuthoritativeMessageIds[sessionId] = awaiting;
+      const streamTurnBoundaries = { ...state.streamTurnBoundaries };
+      const boundaries = { ...(streamTurnBoundaries[sessionId] ?? {}) };
+      delete boundaries[messageId];
+      if (Object.keys(boundaries).length === 0) delete streamTurnBoundaries[sessionId];
+      else streamTurnBoundaries[sessionId] = boundaries;
+      return {
+        sessions,
+        streamingMessageIds,
+        awaitingAuthoritativeMessageIds,
+        streamTurnBoundaries,
       };
     }),
 

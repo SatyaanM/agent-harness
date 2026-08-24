@@ -46,6 +46,7 @@ describe("ChatInput", () => {
   });
 
   it("keeps a visible retry action after a network failure and retries the same message", async () => {
+    const uuidSpy = vi.spyOn(crypto, "randomUUID");
     mockedSendMessage.mockRejectedValueOnce(new Error("offline"));
     mockedSendMessage.mockResolvedValueOnce(successfulStream("Recovered"));
     render(<ChatInput />);
@@ -69,6 +70,11 @@ describe("ChatInput", () => {
         expect.objectContaining({ role: "assistant", content: "Recovered" }),
       ]),
     );
+    expect(
+      useSessionStore.getState().sessions[0].messages.filter((m) => m.role === "user"),
+    ).toHaveLength(1);
+    expect(uuidSpy).toHaveBeenCalledTimes(2);
+    uuidSpy.mockRestore();
   });
 
   it("offers retry when the SSE stream reports an error", async () => {
@@ -175,5 +181,45 @@ describe("ChatInput", () => {
       ]),
     );
     expect(useSessionStore.getState().awaitingAuthoritativeMessageIds["session-a"]).toBeUndefined();
+  });
+
+  it("does not let a failed turn block a fresh confirmed turn", async () => {
+    mockedSendMessage.mockRejectedValueOnce(new Error("offline"));
+    mockedSendMessage.mockResolvedValueOnce(successfulStream("Durable B"));
+    mockedFetchSession.mockResolvedValueOnce(
+      createTestServerSession({
+        sessionId: "session-a",
+        messages: [
+          { role: "user", content: "Question B" },
+          { role: "assistant", content: "Durable B" },
+        ],
+      }),
+    );
+    render(<ChatInput />);
+
+    fireEvent.change(screen.getByPlaceholderText("Type a message..."), {
+      target: { value: "Question A" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByRole("alert");
+    expect(useSessionStore.getState().sessions[0]?.messages).toEqual([]);
+    expect(useSessionStore.getState().streamingMessageIds["session-a"]).toBeUndefined();
+    expect(useSessionStore.getState().awaitingAuthoritativeMessageIds["session-a"]).toBeUndefined();
+    expect(useSessionStore.getState().streamTurnBoundaries["session-a"]).toBeUndefined();
+
+    fireEvent.change(screen.getByPlaceholderText("Type a message..."), {
+      target: { value: "Question B" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(useSessionStore.getState().sessions[0]?.messages).toEqual([
+        expect.objectContaining({ id: "srv-0", role: "user", content: "Question B" }),
+        expect.objectContaining({ id: "srv-1", role: "assistant", content: "Durable B" }),
+      ]),
+    );
+    expect(useSessionStore.getState().streamingMessageIds["session-a"]).toBeUndefined();
+    expect(useSessionStore.getState().awaitingAuthoritativeMessageIds["session-a"]).toBeUndefined();
+    expect(useSessionStore.getState().streamTurnBoundaries["session-a"]).toBeUndefined();
   });
 });
