@@ -78,11 +78,13 @@ export class SessionManager {
   private executionLimiter: ExecutionLimiter | undefined;
   private providerRuntime: ProviderRuntimeState | undefined;
   private providerReconfiguration: Promise<void> | undefined;
+  private closeOperation: Promise<void> | undefined;
   private lifecycleWaiters = new Set<() => void>();
   private backgroundDeliveries = new Set<Promise<unknown>>();
   private db: ISqliteDatabase | undefined;
 
   async initialize(customDb?: ISqliteDatabase): Promise<void> {
+    if (this.closeOperation) await this.closeOperation;
     const config = getConfig();
     if (customDb) {
       this.db = customDb;
@@ -125,14 +127,35 @@ export class SessionManager {
     }
   }
 
-  close(): void {
-    if (this.db) {
-      try {
-        this.db.close();
-      } catch {
-        // best effort
-      }
+  async close(): Promise<void> {
+    if (this.closeOperation) {
+      await this.closeOperation;
+      return;
+    }
+    const operation = this.performClose();
+    this.closeOperation = operation;
+    try {
+      await operation;
+    } finally {
+      this.closeOperation = undefined;
+    }
+  }
+
+  private async performClose(): Promise<void> {
+    if (this.providerReconfiguration) await this.providerReconfiguration;
+    const reset = this.resetRuntimeGeneration(
+      new DOMException("Server is shutting down", "AbortError"),
+    );
+    this.providerReconfiguration = reset;
+    try {
+      await reset;
+      this.executionLimiter = undefined;
+      this.deletedSessions.clear();
+      const db = this.db;
       this.db = undefined;
+      db?.close();
+    } finally {
+      this.providerReconfiguration = undefined;
     }
   }
 
@@ -146,15 +169,6 @@ export class SessionManager {
     const orphaned = taskRepo.listByStatus(["running", "queued"]);
     for (const task of orphaned) {
       const now = Date.now();
-      taskRepo.update(task.task_id, {
-        status: "abandoned",
-        completedAt: now,
-        updatedAt: now,
-        errorCode: "TASK_ABANDONED_ON_STARTUP",
-        errorMessage:
-          "Task was abandoned due to an ungraceful server termination or process crash.",
-      });
-
       const workerSession = task.worker_session_id
         ? sessionRepo.get(task.worker_session_id)
         : undefined;
@@ -168,19 +182,36 @@ export class SessionManager {
         receivedAt: new Date(now).toISOString(),
       };
 
-      mailboxRepo.enqueue({
-        parentSessionId: task.parent_session_id,
-        taskId: task.task_id,
-        eventType: "worker_abandoned",
-        payload: pending,
-        createdAt: now,
-      });
+      this.db.immediateTransaction(() => {
+        const updated = taskRepo.update(task.task_id, {
+          status: "abandoned",
+          completedAt: now,
+          updatedAt: now,
+          errorCode: "TASK_ABANDONED_ON_STARTUP",
+          errorMessage:
+            "Task was abandoned due to an ungraceful server termination or process crash.",
+        });
+        if (!updated) throw new Error(`Orphaned task ${task.task_id} disappeared during startup`);
 
+        mailboxRepo.enqueue({
+          parentSessionId: task.parent_session_id,
+          taskId: task.task_id,
+          eventType: "worker_abandoned",
+          payload: pending,
+          createdAt: now,
+        });
+      })();
+
+      // Emit only after both durable writes commit. A failed enqueue rolls the
+      // task transition back so the next startup can retry the whole unit.
       this.onWorkerCompleted(task.parent_session_id, pending);
     }
   }
 
   getOrCreate(sessionId: string): SessionRuntime {
+    if (this.closeOperation) {
+      throw new Error("Session manager is closing");
+    }
     if (this.providerReconfiguration) {
       throw new Error("Provider settings reconfiguration is in progress");
     }
@@ -246,12 +277,19 @@ export class SessionManager {
   }
 
   private async performSettingsReconfiguration(): Promise<void> {
-    const reason = new DOMException("Server settings changed", "AbortError");
+    await this.resetRuntimeGeneration(new DOMException("Server settings changed", "AbortError"));
+  }
+
+  private async resetRuntimeGeneration(reason: DOMException): Promise<void> {
     for (const controllers of this.sessionControllers.values()) {
       for (const controller of controllers) controller.abort(reason);
     }
     for (const worker of this.workerControllers.values()) worker.controller.abort(reason);
     await this.waitForActiveWorkToSettle();
+    this.sessionControllers.clear();
+    this.workerControllers.clear();
+    this.backgroundDeliveries.clear();
+    this.lifecycleWaiters.clear();
     this.runtimes.clear();
     this.providerRuntime = undefined;
   }

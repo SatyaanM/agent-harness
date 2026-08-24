@@ -76,6 +76,7 @@ Update agent configuration (frontmatter/schema) to support optional `model` and 
 - Add CRUD endpoints for `ProviderEntry` management.
 - Use protocol-specific authentication and response parsing for OpenAI and Anthropic model discovery.
 - After an accepted settings write, abort active work and unload cached runtimes before the new configuration generation is used.
+- Await server shutdown cleanup and clear the provider generation before closing SQLite, so sequential reinitialization cannot reuse a stale endpoint or closed runtime.
 - Bound settings persistence to 20 accepted updates per client per minute; reject excess requests before filesystem mutation or runtime reconfiguration.
 
 ### 5. Fallback Mechanism

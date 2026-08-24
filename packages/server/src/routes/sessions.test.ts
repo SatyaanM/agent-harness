@@ -29,7 +29,7 @@ async function fixture() {
 }
 
 afterEach(async () => {
-  sessionManager.close();
+  await sessionManager.close();
   if (originalRoot === undefined) delete process.env.ROOT;
   else process.env.ROOT = originalRoot;
   resetConfig();
@@ -297,7 +297,7 @@ describe("session collection and durable diagnostics", () => {
       // Verify deleted from SQLite (preventing resurrection)
       expect(sessionRepo.get(sessionId)).toBeUndefined();
     } finally {
-      sessionManager.close();
+      await sessionManager.close();
     }
   });
 });

@@ -109,7 +109,7 @@ export async function startEphemeralTestStack(
   }
 
   resetConfig();
-  sessionManager.close();
+  await sessionManager.close();
 
   // Initialize SessionManager with isolated SQLite DB
   await sessionManager.initialize();
@@ -167,7 +167,7 @@ export async function startEphemeralTestStack(
     } catch {}
 
     try {
-      sessionManager.close();
+      await sessionManager.close();
     } catch {}
 
     // Restore environment

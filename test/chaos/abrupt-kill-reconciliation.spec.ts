@@ -20,8 +20,8 @@ describe("Chaos Crash Injection & Orphan Task Reconciliation", () => {
     dbPath = path.join(tmpDir, "harness.db");
   });
 
-  afterEach(() => {
-    sessionManager.close();
+  afterEach(async () => {
+    await sessionManager.close();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     } catch {}

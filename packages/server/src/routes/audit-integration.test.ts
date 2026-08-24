@@ -18,8 +18,8 @@ describe("Audit Integration in Server Routes", () => {
     await sessionManager.initialize(db);
   });
 
-  afterEach(() => {
-    sessionManager.close();
+  afterEach(async () => {
+    await sessionManager.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

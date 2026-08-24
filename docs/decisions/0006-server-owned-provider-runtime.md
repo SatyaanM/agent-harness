@@ -24,6 +24,8 @@ A provider attempt reserves one request and a conservative input-plus-maximum-ou
 
 After a valid settings snapshot is atomically persisted, the server aborts active parent and worker controllers, waits for their terminal cleanup, unloads all loaded sessions, discards provider health/rate state, and lazily constructs a new generation. Deleting a parent aborts but keeps each active parent controller tracked until the chat route's `clearSession` terminal `finally`; cancelled/deleted workers remain tracked until the delegation terminal path calls `onWorkerSettled`. Reconfiguration therefore cannot overlap an old-generation provider call or durable task/mailbox cleanup. Durable transcripts, mailbox events, and task terminal handling remain authoritative; no loaded runtime silently retains stale clients.
 
+Server shutdown uses the same awaited terminal-cleanup barrier before clearing cached runtimes, provider health/rate state, and the execution limiter, and only then closes SQLite. A later initialization therefore cannot reuse an old provider generation or a runtime backed by a closed database. Startup orphan reconciliation transitions each task and enqueues its diagnostic mailbox event in one outer immediate transaction; the WebSocket/wake notification occurs only after commit, so an enqueue failure leaves the task eligible for an exactly-once retry on the next startup.
+
 ## Alternatives considered
 
 - Mutating clients in place was rejected because runs could mix endpoints and policies within one execution.
@@ -33,4 +35,4 @@ After a valid settings snapshot is atomically persisted, the server aborts activ
 
 ## Consequences
 
-Settings changes intentionally cancel in-flight work and require the next delivery to create a fresh runtime. Rate counters and circuits are process-local and reset on restart or accepted reconfiguration. Fixed-window admission is conservative and may underutilize a provider, but configured limits are explicit and bounded.
+Settings changes and awaited server shutdown intentionally cancel in-flight work and require the next delivery or initialization to create a fresh runtime. Rate counters and circuits are process-local and reset on restart or accepted reconfiguration. Fixed-window admission is conservative and may underutilize a provider, but configured limits are explicit and bounded.
