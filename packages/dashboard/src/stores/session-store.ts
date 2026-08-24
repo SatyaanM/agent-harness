@@ -64,6 +64,7 @@ interface SessionStore {
   beginMessageStream: (sessionId: string, messageId: string) => void;
   finishMessageStream: (sessionId: string, messageId: string) => void;
   syncFromServer: (data: ServerSession) => void;
+  confirmFromServer: (data: ServerSession) => void;
   hydrate: (sessions: ServerSession[]) => void;
   removeSession: (sessionId: string) => void;
   renameSession: (sessionId: string, title?: string) => void;
@@ -85,6 +86,58 @@ export interface ServerSession {
   title?: string;
   createdAt?: string;
   messages: ServerMessage[];
+}
+
+function mergeServerSession(
+  state: Pick<SessionStore, "sessions" | "streamingMessageIds" | "awaitingAuthoritativeMessageIds">,
+  data: ServerSession,
+  confirmAwaiting: boolean,
+): Partial<SessionStore> {
+  const messages = data.messages.map((message, index) => serverMessageToClient(message, index));
+  const existing = state.sessions.find((session) => session.sessionId === data.sessionId);
+  if (!existing) {
+    return {
+      sessions: [
+        ...state.sessions,
+        {
+          sessionId: data.sessionId,
+          messages,
+          status: "active",
+          agentName: data.agentName ?? "orchestrator",
+          title: data.title,
+          createdAt: data.createdAt ?? new Date().toISOString(),
+        },
+      ],
+    };
+  }
+
+  const mergedMessages = reconcileOptimisticMessages(
+    existing.messages,
+    messages,
+    new Set(state.streamingMessageIds[data.sessionId] ?? []),
+    new Set(state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []),
+    confirmAwaiting,
+  );
+  const remainingAwaiting = (state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []).filter(
+    (id) => mergedMessages.some((message) => message.id === id),
+  );
+  const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
+  if (remainingAwaiting.length === 0) delete awaitingAuthoritativeMessageIds[data.sessionId];
+  else awaitingAuthoritativeMessageIds[data.sessionId] = remainingAwaiting;
+
+  return {
+    awaitingAuthoritativeMessageIds,
+    sessions: state.sessions.map((session) =>
+      session.sessionId === data.sessionId
+        ? {
+            ...session,
+            messages: mergedMessages,
+            agentName: data.agentName ?? session.agentName,
+            title: data.title,
+          }
+        : session,
+    ),
+  };
 }
 
 export const useSessionStore = create<SessionStore>((set) => ({
@@ -203,53 +256,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
       sessions: state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, title } : s)),
     })),
 
-  syncFromServer: (data) =>
-    set((state) => {
-      const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
-      const existing = state.sessions.find((s) => s.sessionId === data.sessionId);
-      if (!existing) {
-        return {
-          sessions: [
-            ...state.sessions,
-            {
-              sessionId: data.sessionId,
-              messages,
-              status: "active",
-              agentName: data.agentName ?? "orchestrator",
-              title: data.title,
-              createdAt: data.createdAt ?? new Date().toISOString(),
-            },
-          ],
-        };
-      }
-
-      const mergedMessages = reconcileOptimisticMessages(
-        existing.messages,
-        messages,
-        new Set(state.streamingMessageIds[data.sessionId] ?? []),
-        new Set(state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []),
-      );
-      const remainingAwaiting = (
-        state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []
-      ).filter((id) => mergedMessages.some((message) => message.id === id));
-      const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
-      if (remainingAwaiting.length === 0) delete awaitingAuthoritativeMessageIds[data.sessionId];
-      else awaitingAuthoritativeMessageIds[data.sessionId] = remainingAwaiting;
-
-      return {
-        awaitingAuthoritativeMessageIds,
-        sessions: state.sessions.map((s) =>
-          s.sessionId === data.sessionId
-            ? {
-                ...s,
-                messages: mergedMessages,
-                agentName: data.agentName ?? s.agentName,
-                title: data.title,
-              }
-            : s,
-        ),
-      };
-    }),
+  syncFromServer: (data) => set((state) => mergeServerSession(state, data, false)),
+  confirmFromServer: (data) => set((state) => mergeServerSession(state, data, true)),
 }));
 
 export function reconcileOptimisticMessages(
@@ -257,6 +265,7 @@ export function reconcileOptimisticMessages(
   serverMessages: Message[],
   streamingMessageIds: ReadonlySet<string> = new Set(),
   awaitingAuthoritativeMessageIds: ReadonlySet<string> = new Set(),
+  confirmAwaiting = false,
 ): Message[] {
   const optimistic = existingMessages.filter((m) => !m.id.startsWith("srv-"));
   if (optimistic.length === 0) return serverMessages;
@@ -286,7 +295,9 @@ export function reconcileOptimisticMessages(
         uncommitted.push(opt);
       }
     } else if (awaitingAuthoritativeMessageIds.has(opt.id)) {
-      if (currentTurnHasOptimisticUser && !currentTurnIsCommitted) uncommitted.push(opt);
+      if (!confirmAwaiting || (currentTurnHasOptimisticUser && !currentTurnIsCommitted)) {
+        uncommitted.push(opt);
+      }
     } else if (!currentTurnIsCommitted || streamingMessageIds.has(opt.id)) {
       uncommitted.push(opt);
     }

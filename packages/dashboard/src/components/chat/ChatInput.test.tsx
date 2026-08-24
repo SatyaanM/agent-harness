@@ -148,4 +148,30 @@ describe("ChatInput", () => {
     expect(useSessionStore.getState().awaitingAuthoritativeMessageIds["session-a"]).toHaveLength(1);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("replaces the placeholder after a successful authoritative confirmation", async () => {
+    mockedSendMessage.mockResolvedValueOnce(successfulStream("Durable answer"));
+    mockedFetchSession.mockResolvedValueOnce(
+      createTestServerSession({
+        sessionId: "session-a",
+        messages: [
+          { role: "user", content: "Hello" },
+          { role: "assistant", content: "Durable answer" },
+        ],
+      }),
+    );
+    render(<ChatInput />);
+    fireEvent.change(screen.getByPlaceholderText("Type a message..."), {
+      target: { value: "Hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(useSessionStore.getState().sessions[0]?.messages).toEqual([
+        expect.objectContaining({ id: "srv-0", role: "user", content: "Hello" }),
+        expect.objectContaining({ id: "srv-1", role: "assistant", content: "Durable answer" }),
+      ]),
+    );
+    expect(useSessionStore.getState().awaitingAuthoritativeMessageIds["session-a"]).toBeUndefined();
+  });
 });

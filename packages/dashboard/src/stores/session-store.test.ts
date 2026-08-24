@@ -130,7 +130,7 @@ describe("session server synchronization", () => {
     ]);
   });
 
-  it("keeps a correlated streaming placeholder updateable across intermediate authoritative syncs", () => {
+  it("preserves a completed stream through a repeated intermediate sync without confirmation", () => {
     useSessionStore.getState().addSession(
       createTestSession({
         sessionId: "s-1",
@@ -170,6 +170,25 @@ describe("session server synchronization", () => {
       expect.objectContaining({ id: "opt-assistant", content: "First delta continued" }),
     );
     useSessionStore.getState().syncFromServer(
+      makeServerSession({
+        messages: [
+          { role: "user", content: "Research it" },
+          {
+            role: "assistant",
+            content: "I will inspect the source.",
+            toolCalls: [{ toolCallId: "call-1", toolName: "inspect", args: {} }],
+          },
+          { role: "tool", content: "source result", toolCallId: "call-1" },
+        ],
+      }),
+    );
+    expect(useSessionStore.getState().sessions[0]?.messages.at(-1)).toEqual(
+      expect.objectContaining({ id: "opt-assistant", content: "First delta continued" }),
+    );
+    expect(useSessionStore.getState().awaitingAuthoritativeMessageIds["s-1"]).toEqual([
+      "opt-assistant",
+    ]);
+    useSessionStore.getState().confirmFromServer(
       makeServerSession({
         messages: [
           { role: "user", content: "Research it" },
@@ -224,7 +243,7 @@ describe("session server synchronization", () => {
     useSessionStore.getState().finishMessageStream("s-1", "opt-assistant");
 
     expect(useSessionStore.getState().sessions[0]?.messages.at(-1)?.id).toBe("opt-assistant");
-    useSessionStore.getState().syncFromServer(
+    useSessionStore.getState().confirmFromServer(
       makeServerSession({
         messages: [
           { role: "user", content: "Question" },
@@ -259,7 +278,7 @@ describe("session server synchronization", () => {
       expect.objectContaining({ id: "opt-assistant", content: "answer" }),
     ]);
 
-    useSessionStore.getState().syncFromServer(
+    useSessionStore.getState().confirmFromServer(
       makeServerSession({
         messages: [
           { role: "user", content: "Question" },
