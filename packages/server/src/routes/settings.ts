@@ -9,15 +9,18 @@ import {
   describeError,
   getConfig,
   getConfigRoot,
+  ProviderEntrySchema,
+  ProviderRegistry,
   parseBoundary,
-  parseJsonResponseBoundary,
   resetConfig,
   stringifyJsonBounded,
 } from "@agent-harness/core";
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
+import { fetchProviderModels } from "../provider-models.js";
 import { sessionManager } from "../session-manager.js";
 
 const logger = createLogger("server.settings");
@@ -32,6 +35,7 @@ const SETTING_KEYS: PersistedSettingKey[] = [
   "API_KEY_ENV",
   "DEFAULT_MODEL",
   "MAX_CONCURRENT_AGENTS",
+  "PROVIDERS",
 ];
 const PersistedSettingsSchema = ConfigSchema.pick({
   INBOX_ROOT: true,
@@ -41,30 +45,31 @@ const PersistedSettingsSchema = ConfigSchema.pick({
   API_KEY_ENV: true,
   DEFAULT_MODEL: true,
   MAX_CONCURRENT_AGENTS: true,
+  PROVIDERS: true,
 })
   .partial()
   .strict();
 const SettingsUpdateSchema = PersistedSettingsSchema;
 const MAX_SETTINGS_BYTES = 2_000_000;
-const ModelsResponseSchema = z.object({
-  object: z.string().max(128),
-  data: z
-    .array(
-      z.object({
-        id: z.string().min(1).max(512),
-        object: z.string().max(128),
-        created: z.number().finite(),
-        owned_by: z.string().max(512),
-      }),
-    )
-    .max(10_000),
-});
+const ProviderParamsSchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+  })
+  .strict();
+const ProviderConnectionRequestSchema = z.object({ provider: ProviderEntrySchema }).strict();
 
 function getSettingsFile(): string {
   return path.join(getConfigRoot(), ".harness", "settings.json");
 }
 
-export const settingsRouter: Router = Router();
+const SETTINGS_UPDATE_LIMIT = 20;
+const SETTINGS_UPDATE_WINDOW_MS = 60_000;
+
+const settingsRouter: Router = Router();
 
 settingsRouter.get("/", (_req, res) => {
   res.json(getConfig());
@@ -75,29 +80,82 @@ settingsRouter.get(
   asyncHandler(async (_req, res) => {
     try {
       const config = getConfig();
-      const apiKey = process.env[config.API_KEY_ENV];
-      const response = await fetch(`${config.PROVIDER_ENDPOINT.replace(/\/$/u, "")}/models`, {
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to fetch models: ${response.status}`);
+      const registry = new ProviderRegistry(config);
+      const providers = registry.getProviders();
+
+      const fetchPromises = providers.map((provider) => fetchProviderModels(provider));
+
+      const results = await Promise.allSettled(fetchPromises);
+
+      const successful = results
+        .filter((r) => r.status === "fulfilled")
+        .map((r) => ("value" in r ? r.value : []));
+
+      const failed = results.filter((r) => r.status === "rejected");
+
+      if (successful.length === 0 && providers.length > 0) {
+        // Log the first failure reason for debugging
+        if (failed.length > 0) {
+          const firstFailure = failed[0];
+          if (firstFailure && "reason" in firstFailure) {
+            logger.warn("All providers failed to fetch models", {
+              ...describeError(firstFailure.reason),
+            });
+          }
+        }
+        throw new Error("All providers failed to fetch models");
       }
-      const data = await parseJsonResponseBoundary(
-        response,
-        ModelsResponseSchema,
-        "models response",
-        2_000_000,
-      );
-      res.json(data);
+
+      const allModels = successful.flat();
+
+      // Deduplicate by model ID
+      const seen = new Set<string>();
+      const deduplicated = allModels.filter((m) => {
+        if (!m || typeof m.id !== "string") return false;
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
+
+      res.json({
+        object: "list",
+        data: deduplicated,
+      });
     } catch (error) {
-      logger.error("Failed to fetch models", { ...describeError(error) });
+      logger.error("Failed to aggregate models", { ...describeError(error) });
       res.status(502).json({ error: "Failed to fetch models" });
     }
   }),
 );
 
-settingsRouter.put("/", (req, res) => {
+settingsRouter.post(
+  "/providers/:id/test",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(ProviderParamsSchema, req.params, res);
+    if (!params) return;
+    const body = validateRequest(ProviderConnectionRequestSchema, req.body, res);
+    if (!body) return;
+    if (body.provider.id !== params.id) {
+      res.status(400).json({
+        error: { code: "invalid_request", message: "Provider ID must match route identifier" },
+      });
+      return;
+    }
+    const provider = body.provider;
+    try {
+      const models = await fetchProviderModels(provider);
+      res.json({ connected: true, modelCount: models.length });
+    } catch (error) {
+      logger.warn("Provider connectivity test failed", {
+        providerId: provider.id,
+        ...describeError(error),
+      });
+      res.status(502).json({ error: "Provider connectivity test failed" });
+    }
+  }),
+);
+
+const settingsUpdateHandler = asyncHandler(async (req, res) => {
   const body = validateRequest(SettingsUpdateSchema, req.body, res);
   if (!body) return;
   let config: Config;
@@ -123,6 +181,7 @@ settingsRouter.put("/", (req, res) => {
     const parsed = parseBoundary(ConfigSchema, updated, "settings update");
     savePersistedSettings(parsed);
     resetConfig();
+    await sessionManager.reconfigureAfterSettingsUpdate();
     sessionManager.audit({
       actorType: "user",
       actorId: "user",
@@ -137,6 +196,30 @@ settingsRouter.put("/", (req, res) => {
     res.status(500).json({ error: "Failed to save settings" });
   }
 });
+
+export function createSettingsRouter(): Router {
+  const router = Router();
+  router.use(settingsRouter);
+  router.put(
+    "/",
+    rateLimit({
+      windowMs: SETTINGS_UPDATE_WINDOW_MS,
+      limit: SETTINGS_UPDATE_LIMIT,
+      standardHeaders: "draft-8",
+      legacyHeaders: false,
+      handler: (_req, res) => {
+        res.status(429).json({
+          error: {
+            code: "rate_limited",
+            message: "Too many settings updates; retry later",
+          },
+        });
+      },
+    }),
+    settingsUpdateHandler,
+  );
+  return router;
+}
 
 function savePersistedSettings(settings: Config): void {
   const file = getSettingsFile();

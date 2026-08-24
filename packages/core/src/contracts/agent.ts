@@ -23,6 +23,12 @@ export const AgentConfigSchema = z
   .object({
     name: z.string().min(1).max(128),
     model: z.string().min(1).max(256),
+    provider: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)
+      .optional(),
     tools: z.array(z.string().min(1).max(128)).max(128),
     maxSteps: z.number().int().positive().max(1_000),
     maxToolCalls: z.number().int().positive().max(10_000).optional(),

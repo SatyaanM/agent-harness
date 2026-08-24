@@ -26,6 +26,53 @@ const ProviderEndpointSchema = z
     );
   }, "must be an HTTP(S) URL without credentials, query, or fragment");
 
+export const ProviderProtocol = z.enum(["openai", "anthropic"]);
+export type ProviderProtocol = z.infer<typeof ProviderProtocol>;
+
+export const ProviderEntrySchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u, "contains unsupported characters"),
+    displayName: z.string().min(1).max(256),
+    protocol: ProviderProtocol,
+    baseUrl: ProviderEndpointSchema,
+    apiKeyEnv: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Z_][A-Z0-9_]*$/u, "must be an uppercase environment variable name"),
+    supportedModels: z.array(z.string().min(1).max(512)).max(10_000).optional(),
+    rateLimit: z
+      .object({
+        requestsPerMinute: z.number().int().positive().max(100_000_000).optional(),
+        tokensPerMinute: z.number().int().positive().max(1_000_000_000).optional(),
+      })
+      .strict()
+      .optional(),
+    enabled: z.boolean().default(true),
+    priority: z.number().int().min(-1_000_000).max(1_000_000).default(0),
+  })
+  .strict();
+export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
+const ProvidersSchema = z
+  .array(ProviderEntrySchema)
+  .max(1_000)
+  .superRefine((providers, context) => {
+    const seen = new Set<string>();
+    for (const [index, provider] of providers.entries()) {
+      if (seen.has(provider.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "id"],
+          message: "provider IDs must be unique",
+        });
+      }
+      seen.add(provider.id);
+    }
+  });
 export const ConfigSchema = z
   .object({
     ROOT: AbsolutePathSchema.default(process.cwd()),
@@ -46,6 +93,7 @@ export const ConfigSchema = z
       .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u, "contains unsupported characters")
       .default("opencode-go/qwen3.7-plus"),
     MAX_CONCURRENT_AGENTS: z.coerce.number().int().min(1).max(1_000).default(10),
+    PROVIDERS: ProvidersSchema.optional(),
   })
   .strict();
 const PersistedConfigSchema = ConfigSchema.partial().strict();
@@ -105,6 +153,7 @@ export function getConfig(): Config {
     API_KEY_ENV: process.env.API_KEY_ENV ?? persisted.API_KEY_ENV,
     DEFAULT_MODEL: process.env.DEFAULT_MODEL ?? persisted.DEFAULT_MODEL,
     MAX_CONCURRENT_AGENTS: process.env.MAX_CONCURRENT_AGENTS ?? persisted.MAX_CONCURRENT_AGENTS,
+    PROVIDERS: persisted.PROVIDERS,
   });
 
   return cachedConfig;

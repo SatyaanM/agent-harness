@@ -154,6 +154,7 @@ export class Agent {
                 messages: projectToolResultsForModel(this.messages, maxToolResultChars),
                 system: this.config.instructions,
                 model: this.config.model,
+                ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
                 ...(llmTools ? { tools: llmTools } : {}),
                 maxOutputTokens,
                 signal,

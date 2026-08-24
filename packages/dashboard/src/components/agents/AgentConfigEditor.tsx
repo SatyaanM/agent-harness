@@ -38,6 +38,7 @@ function configToMarkdown(config: AgentConfig): string {
   const lines: string[] = ["---"];
   lines.push(`name: ${config.name}`);
   lines.push(`model: ${config.model}`);
+  if (config.provider !== undefined) lines.push(`provider: ${config.provider}`);
   lines.push(`maxSteps: ${config.maxSteps}`);
   if (config.description !== undefined) lines.push(`description: ${config.description}`);
   for (const key of [

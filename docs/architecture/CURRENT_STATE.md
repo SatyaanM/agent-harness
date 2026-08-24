@@ -17,7 +17,7 @@ flowchart LR
   Server --> Manager["SessionManager"]
   Manager --> Runtime["SessionRuntime per loaded conversation"]
   Runtime --> Agent["Agent.run invocation"]
-  Agent --> LLM["One configured provider endpoint"]
+  Agent --> LLM["Provider registry and transient fallback chain"]
   Agent --> Tools["ToolRegistry"]
   Tools --> Worker["Background Worker"]
   Runtime --> SQLite["SQLite Database (.harness/harness.db WAL Mode)"]
@@ -50,7 +50,7 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 
 ### Server
 
-- [`SessionManager`](../../packages/server/src/session-manager.ts) owns loaded `SessionRuntime` objects, SQLite connection lifecycle, audit logging for administrative actions and tool executions (`tool.exec.*`), and running worker `AbortController` objects. On boot, `SessionManager.initialize()` executes startup worker reconciliation, transitioning orphaned `running`/`queued` tasks to `abandoned` and enqueuing diagnostic delivery cards.
+- [`SessionManager`](../../packages/server/src/session-manager.ts) owns loaded `SessionRuntime` objects, SQLite connection lifecycle, audit logging for administrative actions and tool executions (`tool.exec.*`), and running worker `AbortController` objects. Its awaited close path aborts active work, waits for terminal cleanup, clears runtime/provider state, and then closes SQLite so reinitialization constructs a fresh provider generation. On boot, `SessionManager.initialize()` executes startup worker reconciliation, atomically transitioning each orphaned `running`/`queued` task to `abandoned` with its diagnostic mailbox event before emitting delivery notifications.
 - [`ServerTracer`](../../packages/server/src/telemetry/tracer.ts) implements OpenTelemetry tracing via `AsyncLocalStorage` context propagation and `createBatchOtlpHttpExporter` with configurable batching thresholds and background timer flushes.
 - [`MetricRegistry`](../../packages/server/src/telemetry/metrics.ts) and [`metricsRouter`](../../packages/server/src/routes/metrics.ts) expose Prometheus text, OpenMetrics (`# EOF\n` trailer), and JSON format snapshots for active/queued executions, token counters, and persisted/loaded session counts via `SessionRepository.count()`.
 - [`chatRouter`](../../packages/server/src/routes/chat.ts) validates a message, aborts the delivery when its client disconnects, awaits a full `SessionRuntime.deliver()`, and only then slices the complete final summary into SSE-shaped chunks. An explicit retry is routed through `SessionRuntime.retry()`, which requires a matching durable user message and replays it without appending a duplicate transcript record. This is response chunking, not live model token streaming.
@@ -96,7 +96,7 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 | Server-discovered plugin manifests | Partial | Inbox-renderer and command metadata plus enable flags exist. Components remain statically imported; no arbitrary runtime module loading. |
 | Plugin pages, chat cards, settings panels, tools, skills | Intent only | They are described in architecture prose but absent from `PluginManifestSchema`. |
 | Plugin hot reload | Not implemented | No watcher, reload endpoint, or plugin-change WebSocket event exists. A later GET rescans manifests only. |
-| Multi-provider support | Partial | One endpoint/key setting is used. A hard-coded model-name set chooses Anthropic format; every other model uses OpenAI chat format. There is no provider registry or per-agent endpoint. |
+| Multi-provider support | Implemented | Strict persisted provider entries declare protocol, endpoint, key source, model patterns, enabled state, priority, and optional RPM/TPM budgets. `SessionManager` owns one provider generation shared by loaded sessions, including process-wide admission and one-minute circuit state. Agent frontmatter can prefer an eligible provider. Only local/configured rate denial and upstream 429/5xx advance to fallback; cancellation and other 4xx errors propagate without replay. OpenAI and Anthropic discovery use protocol-specific authentication/envelopes and return normalized, credential-safe model metadata. Settings persistence is limited to 20 updates per client per minute before filesystem access. Accepted settings changes abort active work, await terminal cleanup, unload runtimes, and replace the provider generation. Legacy endpoint/key configuration creates a synthetic provider when no registry is present. |
 | Four-tier capability discovery | Library present, execution integration absent | `CapabilityRegistry.lookup()` exists, but the active `Agent` path does not call it. |
 | Max concurrent agents | Implemented | A process-wide FIFO `ExecutionLimiter` bounds parent and worker model executions, removes canceled waiters without consuming capacity, rejects work beyond a bounded wait queue, updates from `MAX_CONCURRENT_AGENTS`, and exposes active/queued counts through `/api/metrics`. |
 | Recursive delegation | Deliberately disabled | Workers no longer inherit the parent-bound `delegate` tool. Proper recursive delegation remains a future session-scoped design rather than misattributing nested work. |
@@ -134,6 +134,6 @@ Privileged operations are default-off or application-bounded: shell and network 
 2. Mailbox acknowledgement and transcript materialization remain separate writes. Task-based replay is lossless for current worker completions, but there is no schema-versioned delivery-event identity for future event types.
 3. Durable delivery is stronger than worker execution recovery after append: an in-flight worker disappears on restart with no terminal reconciliation.
 4. Boot hydration repairs missing open sessions, but it restores ordinary tabs as history only; a pending mailbox is woken only through the explicit open endpoint or a later message.
-5. Capability discovery is present but not integrated into active execution, and provider routing remains a hard-coded protocol choice rather than a registry.
+5. Capability discovery is present but not integrated into active execution; provider routing uses the registry, but capability requirements do not yet participate in provider eligibility.
 6. CORS and loopback binding are not authentication or process isolation; deliberately exposed deployments need an authenticating reverse proxy and OS/network containment.
 7. Provider routing, dashboard resynchronization, and broad UI behavior remain substantially less tested than the critical agent/persistence path.

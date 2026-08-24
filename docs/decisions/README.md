@@ -16,3 +16,4 @@ Use zero-padded sequential filenames. Status values are Proposed, Accepted, Supe
 - [0003 - Standardize runtime correlation, structured logging, and error envelopes](0003-structured-logging-correlation-error-envelope.md) - Accepted
 - [0004 - Adopt embedded SQLite with WAL mode for ACID persistence and delivery](0004-acid-storage-and-relational-persistence.md) - Accepted
 - [0005 - Tamper-evident audit ledger and OpenTelemetry observability](0005-tamper-evident-audit-and-opentelemetry-observability.md) - Accepted
+- [0006 - Server-owned provider runtime](0006-server-owned-provider-runtime.md) - Accepted

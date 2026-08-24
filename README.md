@@ -13,7 +13,7 @@ An **orchestrator agent** can delegate tasks to background **worker agents** and
 - **Knowledge inbox** — Agents deposit files (reports, diagrams, data) for user review
 - **File explorer** — Browse, drag-and-drop, rename, and delete inbox files
 - **In-place editing** — Edit and save markdown and Excalidraw files directly in the dashboard
-- **Configurable LLM endpoint** — One OpenAI-compatible or Anthropic-compatible endpoint at a time
+- **Multi-provider model routing** — Configure prioritized OpenAI- and Anthropic-compatible providers with per-agent overrides and transient-failure fallback
 - **Capability discovery library** — Manual, cache, models.dev, and probe tiers exist in core but are not yet enforced by the live agent path
 - **File-based agent config** — Define agents as `.md` files with YAML frontmatter
 - **Manifest-backed built-ins** — Enabled inbox renderers and command metadata are discovered by the server
@@ -83,7 +83,7 @@ Navigate to **http://localhost:3000**. Click **+** in the right panel to create 
 
 ## Using Any LLM Provider
 
-The app configures one provider endpoint and key source at a time. It can talk to OpenAI-compatible (`/chat/completions`) or Anthropic-compatible (`/messages`) endpoints, subject to the model-routing limitation below.
+The app can route across multiple OpenAI-compatible (`/chat/completions`) and Anthropic-compatible (`/messages`) providers. Configure provider entries in Settings with an ID, protocol, base URL, API-key environment variable, supported-model patterns, enabled state, and priority. The legacy endpoint and key settings remain the backward-compatible default when no provider entries are configured.
 
 | Setting | Env var | Default | Purpose |
 |---|---|---|---|
@@ -113,7 +113,7 @@ PROVIDER_ENDPOINT=https://openrouter.ai/api/v1
 PROVIDER_ENDPOINT=http://localhost:11434/v1
 ```
 
-**Model routing note:** a small set of models (`minimax-m3`, `minimax-m2.x`, `qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-plus`) are sent to the **Anthropic** message format; everything else uses the **OpenAI** chat-completions format. Pick a model that matches your provider's protocol, and set it in agent configs or `DEFAULT_MODEL`.
+**Model routing note:** configured provider entries declare their protocol, optional exact or `*` wildcard model patterns, and optional request/token minute budgets. Lower priorities are attempted first. An agent's optional `provider` frontmatter field selects its preferred eligible provider. Provider IDs and model IDs (including `/`) stay separate and configured model IDs are sent unchanged. A local rate denial or upstream HTTP 429/5xx advances to a fallback; upstream transient failures also open the provider's shared one-minute circuit. Cancellation and non-transient 4xx failures are never replayed. Saving settings aborts active runs, waits for their terminal cleanup, and unloads cached runtimes before the next configuration generation. The legacy synthetic provider retains historical prefix/protocol compatibility when the registry is absent.
 
 **Capability discovery status:** core contains manual, cache, models.dev, and probe tiers, but `Agent.run()` does not currently call the registry. Treat configured tools and provider compatibility as operator responsibility until that integration is designed and tested.
 
@@ -221,6 +221,7 @@ tasks to specialized worker agents.
 | `maxOutputTokens` | number | no | Per-provider-call output cap; defaults to 4,096 tokens |
 | `maxTotalTokens` | number | no | Run-wide token cap; uses provider usage or a conservative fallback estimate and defaults to 100,000 tokens |
 | `runTimeoutMs` | number | no | Run deadline; defaults to 300,000 ms and aborts provider/tool work through an `AbortSignal` |
+| `provider` | string | no | Preferred configured provider ID; eligible fallback providers remain available for transient 429/5xx failures |
 | `capabilities` | object | no | Manual capability overrides |
 | `modelIdMapping` | string | no | Explicit models.dev ID |
 

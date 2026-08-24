@@ -76,6 +76,27 @@ describe("Fake LLM Provider Service", () => {
     expect(data.data.some((m) => m.id === "opencode-go/qwen3.7-plus")).toBe(true);
   });
 
+  it("returns an Anthropic model-list envelope when discovery uses Anthropic headers", async () => {
+    const res = await fetch(`${fakeServer.url}/v1/models`, {
+      headers: { "anthropic-version": "2023-06-01", "x-api-key": "fake-key" },
+    });
+    expect(res.status).toBe(200);
+    const data = z
+      .object({
+        data: z.array(
+          z.object({
+            id: z.string(),
+            type: z.literal("model"),
+            display_name: z.string(),
+            created_at: z.string().datetime(),
+          }),
+        ),
+        has_more: z.boolean(),
+      })
+      .parse(await res.json());
+    expect(data.data.some((model) => model.id === "claude-3-5-sonnet-20241022")).toBe(true);
+  });
+
   it("handles OpenAI /v1/chat/completions with simple-reply scenario", async () => {
     const res = await fetch(`${fakeServer.url}/v1/chat/completions`, {
       method: "POST",

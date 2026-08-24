@@ -79,6 +79,24 @@ function handlePreflightOrInfo(
 
   if (pathname === "/v1/models" || pathname === "/models") {
     res.writeHead(200, { "Content-Type": "application/json" });
+    if (req.headers["anthropic-version"] !== undefined) {
+      res.end(
+        JSON.stringify({
+          data: [
+            {
+              type: "model",
+              id: "claude-3-5-sonnet-20241022",
+              display_name: "Claude 3.5 Sonnet",
+              created_at: "2024-10-22T00:00:00Z",
+            },
+          ],
+          has_more: false,
+          first_id: "claude-3-5-sonnet-20241022",
+          last_id: "claude-3-5-sonnet-20241022",
+        }),
+      );
+      return true;
+    }
     res.end(
       JSON.stringify({
         object: "list",

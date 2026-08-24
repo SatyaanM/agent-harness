@@ -283,6 +283,20 @@ export async function sendMessage(
   return res.body;
 }
 
+const ProviderEntrySchema = z
+  .object({
+    id: z.string().min(1).max(128),
+    displayName: z.string().min(1).max(256),
+    protocol: z.enum(["openai", "anthropic"]),
+    baseUrl: z.string().url(),
+    apiKeyEnv: z.string().min(1).max(128),
+    supportedModels: z.array(z.string().min(1).max(512)).max(10_000).optional(),
+    enabled: z.boolean(),
+    priority: z.number().int(),
+  })
+  .passthrough();
+export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
+
 const HarnessSettingsSchema = z.object({
   ROOT: z.string(),
   INBOX_ROOT: z.string(),
@@ -292,6 +306,7 @@ const HarnessSettingsSchema = z.object({
   API_KEY_ENV: z.string(),
   DEFAULT_MODEL: z.string(),
   MAX_CONCURRENT_AGENTS: z.number().int().positive(),
+  PROVIDERS: z.array(ProviderEntrySchema).optional(),
 });
 export type HarnessSettings = z.infer<typeof HarnessSettingsSchema>;
 
@@ -330,6 +345,26 @@ export async function fetchModels(): Promise<ModelsResponse> {
   const res = await fetch(`${BASE_URL}/api/settings/models`);
   if (!res.ok) throw new Error("Failed to fetch models");
   return parseJsonResponse(res, ModelsResponseSchema, "models response");
+}
+
+const ProviderConnectionSchema = z.object({
+  connected: z.literal(true),
+  modelCount: z.number().int().nonnegative(),
+});
+
+export async function testProviderConnection(
+  provider: ProviderEntry,
+): Promise<z.infer<typeof ProviderConnectionSchema>> {
+  const res = await fetch(
+    `${BASE_URL}/api/settings/providers/${encodeURIComponent(provider.id)}/test`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider }),
+    },
+  );
+  if (!res.ok) throw new Error("Provider connectivity test failed");
+  return parseJsonResponse(res, ProviderConnectionSchema, "provider connectivity response");
 }
 
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;

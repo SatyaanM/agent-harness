@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,10 +16,12 @@ import {
   fetchSettings,
   type HarnessSettings,
   type ModelInfo,
+  type ProviderEntry,
+  testProviderConnection,
   updateSettings,
 } from "@/lib/api";
 
-const FIELD_LABELS: Record<keyof HarnessSettings, string> = {
+const FIELD_LABELS: Record<Exclude<keyof HarnessSettings, "PROVIDERS">, string> = {
   ROOT: "Root Directory",
   INBOX_ROOT: "Inbox Directory",
   SESSIONS_DIR: "Sessions Directory",
@@ -30,7 +32,7 @@ const FIELD_LABELS: Record<keyof HarnessSettings, string> = {
   MAX_CONCURRENT_AGENTS: "Max Concurrent Agents",
 };
 
-type EditableSetting = Exclude<keyof HarnessSettings, "ROOT">;
+type EditableSetting = Exclude<keyof HarnessSettings, "ROOT" | "PROVIDERS">;
 
 const PATH_FIELDS: EditableSetting[] = ["INBOX_ROOT", "SESSIONS_DIR", "AGENTS_DIR"];
 const URL_FIELDS: EditableSetting[] = ["PROVIDER_ENDPOINT"];
@@ -67,6 +69,10 @@ export function SettingsForm() {
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderEntry[]>([]);
+  const [providerKeys, setProviderKeys] = useState<string[]>([]);
+  const [providerStatus, setProviderStatus] = useState<Record<string, string>>({});
+  const nextProviderKey = useRef(0);
 
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
@@ -86,6 +92,8 @@ export function SettingsForm() {
       .then((data) => {
         setSettings(data);
         setDraft(editableSettings(data));
+        setProviders(data.PROVIDERS ?? []);
+        setProviderKeys((data.PROVIDERS ?? []).map(() => `provider-${nextProviderKey.current++}`));
       })
       .catch(() => setError("Failed to load settings"));
 
@@ -152,14 +160,54 @@ export function SettingsForm() {
     setError(null);
     setSuccess(false);
     try {
-      const updated = await updateSettings(draft);
+      const updated = await updateSettings({ ...draft, PROVIDERS: providers });
       setSettings(updated);
       setDraft(editableSettings(updated));
+      setProviders(updated.PROVIDERS ?? []);
       setSuccess(true);
     } catch {
       setError("Failed to save settings");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function updateProvider(index: number, update: Partial<ProviderEntry>) {
+    setProviders((current) =>
+      current.map((provider, providerIndex) =>
+        providerIndex === index ? { ...provider, ...update } : provider,
+      ),
+    );
+    setSuccess(false);
+  }
+
+  function addProvider() {
+    const suffix = providers.length + 1;
+    setProviders((current) => [
+      ...current,
+      {
+        id: `provider-${suffix}`,
+        displayName: `Provider ${suffix}`,
+        protocol: "openai",
+        baseUrl: "https://api.example.com/v1",
+        apiKeyEnv: "PROVIDER_API_KEY",
+        enabled: true,
+        priority: suffix - 1,
+      },
+    ]);
+    setProviderKeys((current) => [...current, `provider-${nextProviderKey.current++}`]);
+  }
+
+  async function testProvider(provider: ProviderEntry) {
+    setProviderStatus((current) => ({ ...current, [provider.id]: "Testing..." }));
+    try {
+      const result = await testProviderConnection(provider);
+      setProviderStatus((current) => ({
+        ...current,
+        [provider.id]: `Connected (${result.modelCount} models)`,
+      }));
+    } catch {
+      setProviderStatus((current) => ({ ...current, [provider.id]: "Connection failed" }));
     }
   }
 
@@ -249,6 +297,149 @@ export function SettingsForm() {
           )}
         </div>
       ))}
+
+      <section className="mt-4 flex flex-col gap-3" aria-labelledby="provider-settings-heading">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 id="provider-settings-heading" className="text-sm font-semibold">
+              Model Providers
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Ordered by priority; lower values are attempted first.
+            </p>
+          </div>
+          <Button type="button" variant="outline" onClick={addProvider} disabled={saving}>
+            Add Provider
+          </Button>
+        </div>
+        {providers.length === 0 && (
+          <p className="rounded border p-3 text-sm text-muted-foreground">
+            No provider registry configured. The legacy endpoint remains active.
+          </p>
+        )}
+        {providers.map((provider, index) => (
+          <div key={providerKeys[index]} className="grid gap-3 rounded border p-3 md:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`provider-${index}-id`}>Provider ID</Label>
+              <Input
+                id={`provider-${index}-id`}
+                value={provider.id}
+                onChange={(event) => updateProvider(index, { id: event.target.value })}
+                disabled={saving}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`provider-${index}-name`}>Display Name</Label>
+              <Input
+                id={`provider-${index}-name`}
+                value={provider.displayName}
+                onChange={(event) => updateProvider(index, { displayName: event.target.value })}
+                disabled={saving}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`provider-${index}-protocol`}>Protocol</Label>
+              <select
+                id={`provider-${index}-protocol`}
+                className="h-10 rounded-md border bg-background px-3 text-sm"
+                value={provider.protocol}
+                onChange={(event) => {
+                  const protocol = event.target.value;
+                  if (protocol === "openai" || protocol === "anthropic") {
+                    updateProvider(index, { protocol });
+                  }
+                }}
+                disabled={saving}
+              >
+                <option value="openai">OpenAI compatible</option>
+                <option value="anthropic">Anthropic compatible</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`provider-${index}-priority`}>Priority</Label>
+              <Input
+                id={`provider-${index}-priority`}
+                type="number"
+                value={provider.priority}
+                onChange={(event) =>
+                  updateProvider(index, { priority: Number(event.target.value) })
+                }
+                disabled={saving}
+              />
+            </div>
+            <div className="flex flex-col gap-1 md:col-span-2">
+              <Label htmlFor={`provider-${index}-url`}>Base URL</Label>
+              <Input
+                id={`provider-${index}-url`}
+                value={provider.baseUrl}
+                onChange={(event) => updateProvider(index, { baseUrl: event.target.value })}
+                disabled={saving}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`provider-${index}-key`}>API Key Environment Variable</Label>
+              <Input
+                id={`provider-${index}-key`}
+                value={provider.apiKeyEnv}
+                onChange={(event) => updateProvider(index, { apiKeyEnv: event.target.value })}
+                disabled={saving}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`provider-${index}-models`}>Supported Models</Label>
+              <Input
+                id={`provider-${index}-models`}
+                value={provider.supportedModels?.join(", ") ?? ""}
+                placeholder="gpt-4*, custom-model"
+                onChange={(event) =>
+                  updateProvider(index, {
+                    supportedModels: event.target.value
+                      .split(",")
+                      .map((value) => value.trim())
+                      .filter(Boolean),
+                  })
+                }
+                disabled={saving}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={provider.enabled}
+                onChange={(event) => updateProvider(index, { enabled: event.target.checked })}
+                disabled={saving}
+              />
+              Enabled
+            </label>
+            <div className="flex items-center justify-end gap-2">
+              {providerStatus[provider.id] && (
+                <span role="status" className="text-xs text-muted-foreground">
+                  {providerStatus[provider.id]}
+                </span>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void testProvider(provider)}
+                disabled={saving}
+              >
+                Test Connection
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  setProviders((current) => current.filter((_, i) => i !== index));
+                  setProviderKeys((current) => current.filter((_, i) => i !== index));
+                }}
+                disabled={saving}
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
+        ))}
+      </section>
 
       {error && (
         <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">

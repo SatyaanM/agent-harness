@@ -14,7 +14,7 @@ import inboxRouter from "./routes/inbox.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { pluginsRouter } from "./routes/plugins.js";
 import { sessionsRouter } from "./routes/sessions.js";
-import { settingsRouter } from "./routes/settings.js";
+import { createSettingsRouter } from "./routes/settings.js";
 import { ttsRouter } from "./routes/tts.js";
 import { workersRouter } from "./routes/workers.js";
 import { parseServerConfig } from "./server-config.js";
@@ -48,7 +48,7 @@ export function createApp(options?: {
   app.use("/api/chat", chatRouter);
   app.use("/api/agents", agentsRouter);
   app.use("/api/workers", workersRouter);
-  app.use("/api/settings", settingsRouter);
+  app.use("/api/settings", createSettingsRouter());
   app.use("/api/tts", ttsRouter);
   app.use("/api/plugins", pluginsRouter);
 

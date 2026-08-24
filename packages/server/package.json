@@ -17,6 +17,7 @@
     "cors": "^2.x",
     "dotenv": "^17.4.2",
     "express": "^4.x",
+    "express-rate-limit": "8.6.2",
     "fs-extra": "catalog:",
     "gray-matter": "catalog:",
     "helmet": "^7.x",
