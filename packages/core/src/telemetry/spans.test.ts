@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { Agent } from "../agent/agent.js";
 import { createDelegateTool } from "../agent/delegation.js";
+import { resetModelsDevCache } from "../capability/models-dev-client.js";
 import { CapabilityRegistry } from "../capability/registry.js";
 import {
   type ISpan,
@@ -116,9 +117,16 @@ describe("Distributed Span Instrumentation", () => {
   beforeEach(() => {
     tracer = new TestTracer();
     setGlobalTracer(tracer);
+    resetModelsDevCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
+    resetModelsDevCache();
     resetGlobalTracer();
   });
 

@@ -4,7 +4,7 @@ read_when:
   - When implementing capability-aware request modification in the agent execution loop
   - When debugging missing tools or stripped vision parts in LLM payloads
 ---
-Status: Draft
+Status: Implemented
 
 ## Problem and evidence
 
@@ -71,7 +71,7 @@ The agent MUST monitor the LLM's responses for capability mismatches. If the mod
 7. **Backward Compatibility**: Existing agents with no `capabilities` field in their frontmatter operate identically to their current behavior (utilizing Tier 2-4 lookups or the permissive default if lookups fail).
 8. **Performance Target**: The capability lookup process adds less than 5ms to the startup time of an agent run.
 
-## Open questions and decisions
+## Decisions
 
-- **Diagnostic Handling**: Should a `capability-mismatch` diagnostic interrupt the run, or merely log and continue execution by failing the specific tool call? *Decision needed: suggest warning and returning a system message to the LLM indicating the tool call is disallowed.*
-- **Vision Stripping Detail**: If an image is stripped from a message, should a placeholder (e.g., `[Image omitted due to model capability]`) be inserted in its place to provide context to the LLM?
+- **Diagnostic handling**: A disabled tool call is removed from the assistant message, emitted as a warning and `capability-mismatch` event, and followed by a system denial asking the model for a text-only response. It is never executed.
+- **Vision stripping detail**: Stripped image markdown is replaced with `[Image omitted due to model capability]` so surrounding text retains context.

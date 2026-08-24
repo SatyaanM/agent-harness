@@ -112,13 +112,19 @@ export class Agent {
     }
 
     const modelParts = this.config.model.split("/");
-    const providerId = modelParts.length > 1 ? modelParts[0] || "default" : "default";
+    const providerId =
+      this.config.provider ?? (modelParts.length > 1 ? modelParts[0] || "default" : "default");
     const modelId = modelParts.length > 1 ? modelParts.slice(1).join("/") : this.config.model;
 
     let matrix: CapabilityMatrix;
     try {
       matrix = await this.capabilityRegistry.lookup(providerId, modelId, "vercel-ai", this.config);
-    } catch {
+    } catch (error) {
+      this.logger.warn("Capability lookup failed; using permissive defaults", {
+        providerId,
+        modelId,
+        ...describeError(error),
+      });
       matrix = {
         chat: true,
         tools: true,
@@ -135,16 +141,16 @@ export class Agent {
       .map((name) => this.toolRegistry.get(name))
       .filter((t): t is NonNullable<typeof t> => t != null);
 
-    const llmTools: LLMToolDefinition[] | undefined =
-      matrix.tools && tools.length
-        ? tools
-            .filter((t) => !t.requiresHITL || matrix.reasoning)
-            .map((t) => ({
-              name: t.name,
-              description: t.description,
-              parameters: t.parameters,
-            }))
-        : undefined;
+    const eligibleTools = matrix.tools
+      ? tools.filter((tool) => !tool.requiresHITL || matrix.reasoning)
+      : [];
+    const llmTools: LLMToolDefinition[] | undefined = eligibleTools.length
+      ? eligibleTools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        }))
+      : undefined;
 
     const maxToolCalls = this.config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     const maxToolResultChars = this.config.maxToolResultChars ?? DEFAULT_MAX_TOOL_RESULT_CHARS;
@@ -243,17 +249,30 @@ export class Agent {
 
           // Emit diagnostic and discard hallucinated tool calls when tools are disabled
           if (!matrix.tools && responseToolCalls.length > 0) {
+            const detail = `Model returned ${responseToolCalls.length} tool call(s) but tools capability is disabled`;
             this.onEvent?.({
               type: "capability-mismatch",
-              detail: `Model returned ${responseToolCalls.length} tool call(s) but tools capability is disabled`,
+              detail,
+            });
+            this.logger.warn("Capability mismatch", {
+              capability: "tools",
+              model: this.config.model,
+              toolCallCount: responseToolCalls.length,
             });
             responseToolCalls = [];
           }
 
           const responseMessage = responseToolCalls.length
             ? { ...response.message, toolCalls: responseToolCalls }
-            : response.message;
+            : stripToolCalls(response.message);
           this.messages.push(responseMessage);
+          if (!matrix.tools && response.finishReason === "tool-calls") {
+            this.messages.push({
+              role: "system",
+              content:
+                "Tool calls are disabled for this model. Do not call tools; answer using text only.",
+            });
+          }
           this.onEvent?.({ type: "step", messages: [...this.messages] });
 
           totalTokensUsed += tokenCharge(
@@ -449,6 +468,18 @@ function projectToolResultsForModel(messages: Message[], limit: number): Message
       ? { ...message, content: boundToolResult(message.content, limit) }
       : message,
   );
+}
+
+function stripToolCalls(
+  message: Extract<Message, { role: "assistant" }>,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    content: message.content,
+    ...(message.reasoning === undefined ? {} : { reasoning: message.reasoning }),
+    ...(message.meta === undefined ? {} : { meta: message.meta }),
+    ...(message.createdAt === undefined ? {} : { createdAt: message.createdAt }),
+  };
 }
 
 function tokenCharge(response: LLMResponse, messages: Message[], instructions: string): number {

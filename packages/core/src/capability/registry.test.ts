@@ -1,12 +1,23 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetModelsDevCache } from "./models-dev-client.js";
 import { CapabilityRegistry } from "./registry.js";
 
 const tempDirs: string[] = [];
 
+beforeEach(() => {
+  resetModelsDevCache();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 404 })),
+  );
+});
+
 afterEach(async () => {
+  vi.unstubAllGlobals();
+  resetModelsDevCache();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -45,5 +56,21 @@ describe("CapabilityRegistry manual overrides", () => {
     // Unspecified fields should retain default values from base matrix
     expect(capabilities.chat).toBe(true);
     expect(capabilities.vision).toBe(true);
+  });
+
+  it("does not persist agent-scoped overrides into the shared model cache", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
+    tempDirs.push(root);
+    const registry = new CapabilityRegistry({ workspaceRoot: root });
+
+    const restricted = await registry.lookup("provider", "model", "sdk", {
+      capabilities: { tools: false, promptCaching: true },
+    });
+    const unrestricted = await registry.lookup("provider", "model", "sdk");
+
+    expect(restricted.tools).toBe(false);
+    expect(restricted.promptCaching).toBe(true);
+    expect(unrestricted.tools).toBe(true);
+    expect(unrestricted.promptCaching).toBe(false);
   });
 });

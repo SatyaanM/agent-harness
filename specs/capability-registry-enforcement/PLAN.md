@@ -6,7 +6,7 @@ read_when:
 
 # Capability Registry Enforcement Implementation Plan
 
-Status: Draft
+Status: Implemented
 
 ## Inputs
 - Governing Specification: `specs/capability-registry-enforcement/SPEC.md`

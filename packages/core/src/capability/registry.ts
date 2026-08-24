@@ -33,16 +33,10 @@ export class CapabilityRegistry {
 
     if (agentConfig?.capabilities) {
       // Merge user's partial overrides on top of the resolved base matrix
-      const manual: CapabilityMatrix = { ...base, ...agentConfig.capabilities };
-      await this.cacheEntry({
-        provider,
-        model,
-        sdk,
-        caps: manual,
-        source: "manual",
-        probedAt: new Date().toISOString(),
-      });
-      return manual;
+      // Tier-1 bounds belong to this agent invocation. Persisting the merged
+      // matrix would leak one agent's restrictions into every agent using the
+      // same provider/model/SDK cache key.
+      return { ...base, ...agentConfig.capabilities };
     }
 
     return base;

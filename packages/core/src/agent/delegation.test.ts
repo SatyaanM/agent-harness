@@ -19,6 +19,21 @@ import type { AgentConfig } from "./types.js";
 
 const tempDirs: string[] = [];
 
+function createPermissiveCapabilityRegistry(workspaceRoot: string): CapabilityRegistry {
+  const registry = new CapabilityRegistry({ workspaceRoot });
+  vi.spyOn(registry, "lookup").mockResolvedValue({
+    chat: true,
+    tools: true,
+    vision: true,
+    streaming: false,
+    structuredOutputs: false,
+    promptCaching: false,
+    reasoning: false,
+    maxTokens: 0,
+  });
+  return registry;
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -44,6 +59,7 @@ describe("delegation controls", () => {
       tools: ["delegate", "safe"],
       maxSteps: 2,
       instructions: "Test",
+      capabilities: { vision: false, promptCaching: true },
     };
     const registry = new ToolRegistry();
     for (const name of parentConfig.tools) {
@@ -70,13 +86,24 @@ describe("delegation controls", () => {
     const completion = new Promise<PendingMessage>((resolve) => {
       resolveCompletion = resolve;
     });
+    const capabilityRegistry = new CapabilityRegistry({ workspaceRoot: sessionsDir });
+    const lookup = vi.spyOn(capabilityRegistry, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: false,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: true,
+      reasoning: false,
+      maxTokens: 0,
+    });
     const delegate = createDelegateTool({
       sessionsDir,
       sessionId: "parent-session",
       resolveConfig: () => parentConfig,
       toolRegistry: registry,
       llmClient,
-      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      capabilityRegistry,
       onWorkerCompleted: (_sessionId, pending) => resolveCompletion?.(pending),
     });
 
@@ -87,6 +114,15 @@ describe("delegation controls", () => {
 
     expect(observed).toHaveLength(1);
     expect(observed[0]?.tools?.map((tool) => tool.name)).toEqual(["safe"]);
+    expect(lookup).toHaveBeenCalledWith(
+      "default",
+      "fake-model",
+      "vercel-ai",
+      expect.objectContaining({
+        tools: ["safe"],
+        capabilities: { vision: false, promptCaching: true },
+      }),
+    );
     await expect(store.peekMailbox("parent-session")).resolves.toEqual([
       expect.objectContaining({ status: "done", summary: "worker complete" }),
     ]);
@@ -133,7 +169,7 @@ describe("delegation controls", () => {
           };
         },
       },
-      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      capabilityRegistry: createPermissiveCapabilityRegistry(sessionsDir),
       isSessionAvailable: () => parentAvailable,
       onWorkerSettled: settled,
     });
@@ -192,7 +228,7 @@ describe("delegation controls", () => {
           return { finishReason: "stop", message: { role: "assistant", content: "done" } };
         },
       },
-      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      capabilityRegistry: createPermissiveCapabilityRegistry(sessionsDir),
       onWorkerSpawned: () => {
         throw new Error("Synchronous spawning error");
       },
@@ -264,7 +300,7 @@ describe("delegation controls", () => {
           throw new Error("LLM worker crash");
         },
       },
-      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      capabilityRegistry: createPermissiveCapabilityRegistry(sessionsDir),
       onWorkerCompleted: (_sessionId, pending) => resolveCompletion?.(pending),
     });
 

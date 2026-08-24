@@ -81,7 +81,9 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         name: `worker-${taskId}`,
         model: model || delegatingAgent.model,
         tools: delegatingAgent.tools.filter((toolName) => toolName !== "delegate"),
-        capabilities: delegatingAgent.capabilities,
+        capabilities: delegatingAgent.capabilities
+          ? { ...delegatingAgent.capabilities }
+          : undefined,
       };
 
       const createdAt = new Date().toISOString();
