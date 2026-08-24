@@ -6,7 +6,7 @@ read_when:
 
 # Conversation Compaction Implementation Plan
 
-Status: Draft
+Status: Implemented
 
 ## Inputs
 - Governing Specification: `specs/conversation-compaction/SPEC.md`

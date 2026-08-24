@@ -224,6 +224,10 @@ tasks to specialized worker agents.
 | `provider` | string | no | Preferred configured provider ID; eligible fallback providers remain available for transient 429/5xx failures |
 | `capabilities` | object | no | Manual capability overrides |
 | `modelIdMapping` | string | no | Explicit models.dev ID |
+| `compaction` | boolean | no | Set to `false` to bypass automatic conversation compaction; enabled by default when SQLite context is available. |
+| `compactionThreshold` | number | no | Fraction of the configured context window that triggers compaction; defaults to `0.8`. |
+| `compactionKeepRecentMessages` | number | no | Recent active messages retained verbatim during compaction; defaults to `8`. |
+| `compactionChunkMessages` | number | no | Maximum oldest contiguous messages summarized per compaction; defaults to `50`. |
 
 **Available tools:** `readFile`, `writeFile`, `editFile`, `listDirectory`, `glob`, and `grep`. The privileged `runCommand` and `webFetch` tools are disabled by default; opt in with `ENABLE_RUN_COMMAND=true` and `ENABLE_WEB_FETCH=true` after reviewing [the security boundary](docs/SECURITY.md).
 
@@ -238,6 +242,7 @@ GET    /api/sessions/meta           # Metadata-list alias
 GET    /api/sessions/diagnostics    # List safe invalid-record diagnostics
 POST   /api/sessions                # Create session
 GET    /api/sessions/:id            # Get session
+GET    /api/sessions/:id/messages   # Fetch an original sequence range for a compacted block
 PATCH  /api/sessions/:id            # Rename or clear a session title
 DELETE /api/sessions/:id            # Delete session
 GET    /api/agents                  # List agent configs

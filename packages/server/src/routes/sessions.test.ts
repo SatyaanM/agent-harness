@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   createDatabaseConnection,
   createSessionData,
+  MessageRepository,
   resetConfig,
   SessionRepository,
   SessionRuntime,
@@ -299,5 +300,88 @@ describe("session collection and durable diagnostics", () => {
     } finally {
       await sessionManager.close();
     }
+  });
+
+  it("exposes compaction metadata and bounded original transcript ranges", async () => {
+    const { app, root, store } = await fixture();
+    const db = createDatabaseConnection(path.join(root, "compaction-routes.db"));
+    new SqliteMigrator(db).up();
+    await sessionManager.initialize(db);
+    new SessionRepository(db).create({
+      id: "compacted-session",
+      agentName: "orchestrator",
+      prompt: "original prompt",
+    });
+    const messageRepo = new MessageRepository(db);
+    messageRepo.create({
+      id: "original-0",
+      sessionId: "compacted-session",
+      role: "user",
+      content: "first original",
+      sequenceNum: 0,
+      createdAt: 1000,
+    });
+    messageRepo.create({
+      id: "original-1",
+      sessionId: "compacted-session",
+      role: "assistant",
+      content: "second original",
+      sequenceNum: 1,
+      createdAt: 1001,
+    });
+    const record = messageRepo.createCompaction({
+      sessionId: "compacted-session",
+      summaryContent: "derived summary",
+      startSequence: 0,
+      endSequence: 1,
+      originalTokenEstimate: 20,
+      summaryTokenEstimate: 4,
+      compactedAt: 2000,
+      modelUsed: "fake-model",
+    });
+    await store.save(
+      createSessionData({
+        sessionId: "compacted-session",
+        taskId: "compacted-task",
+        prompt: "original prompt",
+        messages: [
+          { role: "user", content: "first original" },
+          { role: "assistant", content: "second original" },
+        ],
+      }),
+    );
+
+    const sessionResponse = await request(app).get("/api/sessions/compacted-session");
+    expect(sessionResponse.status).toBe(200);
+    expect(
+      sessionResponse.body.messages.map((entry: { content: string }) => entry.content),
+    ).toEqual(["first original", "second original"]);
+    expect(sessionResponse.body.compactions).toEqual([
+      {
+        summaryMessageId: record.summary_message_id,
+        startSequence: 0,
+        endSequence: 1,
+        originalTokenEstimate: 20,
+        summaryTokenEstimate: 4,
+        compactedAt: new Date(2000).toISOString(),
+        modelUsed: "fake-model",
+      },
+    ]);
+
+    const rangeResponse = await request(app).get(
+      "/api/sessions/compacted-session/messages?startSequence=0&endSequence=1",
+    );
+    expect(rangeResponse.status).toBe(200);
+    expect(rangeResponse.body).toEqual({
+      messages: [
+        expect.objectContaining({ role: "user", content: "first original", sequenceNum: 0 }),
+        expect.objectContaining({ role: "assistant", content: "second original", sequenceNum: 1 }),
+      ],
+    });
+
+    const invalidRange = await request(app).get(
+      "/api/sessions/compacted-session/messages?startSequence=2&endSequence=1",
+    );
+    expect(invalidRange.status).toBe(400);
   });
 });

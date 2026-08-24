@@ -1,7 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
-import { parseBoundary } from "../../validation.js";
-import type { ISqliteDatabase, MessageRole, MessageRow } from "./types.js";
+import { type Message, MessageSchema } from "../../contracts/agent.js";
+import { parseBoundary, parseJsonBoundary } from "../../validation.js";
+import type { CompactionRecordRow, ISqliteDatabase, MessageRole, MessageRow } from "./types.js";
 
 const MessageRoleSchema = z.enum(["user", "assistant", "system", "tool"]);
 
@@ -18,6 +19,22 @@ const MessageInputSchema = z.object({
   createdAt: z.number().int().nonnegative().optional(),
   metadata: z.record(z.unknown()).nullable().optional(),
 });
+
+const CompactionInputSchema = z
+  .object({
+    sessionId: z.string().min(1).max(128),
+    summaryMessageId: z.string().min(1).max(128),
+    startSequence: z.number().int().nonnegative(),
+    endSequence: z.number().int().nonnegative(),
+    originalTokenEstimate: z.number().int().nonnegative(),
+    summaryTokenEstimate: z.number().int().nonnegative(),
+    compactedAt: z.number().int().nonnegative(),
+    modelUsed: z.string().min(1).max(256),
+  })
+  .strict();
+
+const JsonRecordSchema = z.record(z.unknown());
+const ToolCallsSchema = z.array(z.record(z.unknown())).max(10_000);
 
 export class MessageRepository {
   constructor(private readonly db: ISqliteDatabase) {}
@@ -169,6 +186,11 @@ export class MessageRepository {
     compactedAt: number;
     modelUsed: string;
   }): void {
+    const validated = parseBoundary(
+      CompactionInputSchema,
+      input,
+      "MessageRepository.recordCompaction",
+    );
     const stmt = this.db.prepare<[string, string, number, number, number, number, number, string]>(`
       INSERT INTO compaction_records (
         session_id, summary_message_id, start_sequence, end_sequence,
@@ -176,78 +198,176 @@ export class MessageRepository {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
-      input.sessionId,
-      input.summaryMessageId,
-      input.startSequence,
-      input.endSequence,
-      input.originalTokenEstimate,
-      input.summaryTokenEstimate,
-      input.compactedAt,
-      input.modelUsed,
+      validated.sessionId,
+      validated.summaryMessageId,
+      validated.startSequence,
+      validated.endSequence,
+      validated.originalTokenEstimate,
+      validated.summaryTokenEstimate,
+      validated.compactedAt,
+      validated.modelUsed,
     );
   }
 
-  getCompactedRanges(sessionId: string): Array<{
-    start_sequence: number;
-    end_sequence: number;
-    summary_message_id: string;
-  }> {
-    const stmt = this.db.prepare<
-      [string],
-      { start_sequence: number; end_sequence: number; summary_message_id: string }
-    >(
-      "SELECT start_sequence, end_sequence, summary_message_id FROM compaction_records WHERE session_id = ? ORDER BY start_sequence ASC",
+  createCompaction(input: {
+    sessionId: string;
+    summaryContent: string;
+    startSequence: number;
+    endSequence: number;
+    originalTokenEstimate: number;
+    summaryTokenEstimate: number;
+    compactedAt: number;
+    modelUsed: string;
+  }): CompactionRecordRow {
+    return this.db.immediateTransaction(() => {
+      const summary = this.create({
+        sessionId: input.sessionId,
+        role: "system",
+        content: input.summaryContent,
+        sequenceNum: this.getNextSequenceNum(input.sessionId),
+        createdAt: input.compactedAt,
+        metadata: {
+          meta: {
+            kind: "compaction_summary",
+            startSequence: input.startSequence,
+            endSequence: input.endSequence,
+          },
+        },
+      });
+      this.recordCompaction({
+        sessionId: input.sessionId,
+        summaryMessageId: summary.id,
+        startSequence: input.startSequence,
+        endSequence: input.endSequence,
+        originalTokenEstimate: input.originalTokenEstimate,
+        summaryTokenEstimate: input.summaryTokenEstimate,
+        compactedAt: input.compactedAt,
+        modelUsed: input.modelUsed,
+      });
+      const created = this.getCompactionBySummary(summary.id);
+      if (!created) throw new Error("Compaction record was not persisted");
+      return created;
+    })();
+  }
+
+  getCompactionBySummary(summaryMessageId: string): CompactionRecordRow | undefined {
+    return this.db
+      .prepare<[string], CompactionRecordRow>(
+        `SELECT id, session_id, summary_message_id, start_sequence, end_sequence,
+                original_token_estimate, summary_token_estimate, compacted_at, model_used
+         FROM compaction_records WHERE summary_message_id = ?`,
+      )
+      .get(summaryMessageId);
+  }
+
+  getCompactedRanges(sessionId: string): CompactionRecordRow[] {
+    const stmt = this.db.prepare<[string], CompactionRecordRow>(
+      `SELECT id, session_id, summary_message_id, start_sequence, end_sequence,
+              original_token_estimate, summary_token_estimate, compacted_at, model_used
+       FROM compaction_records WHERE session_id = ? ORDER BY start_sequence ASC`,
     );
     return stmt.all(sessionId);
   }
 
-  /**
-   * Retrieves the active context for a session by replacing compacted message ranges
-   * with their corresponding summary messages.
-   *
-   * TODO(perf): Currently loads all messages into memory via listBySession. For long-lived
-   * sessions, this should be optimized to perform range exclusion and summary substitution
-   * directly at the SQL query level.
-   */
+  listRange(sessionId: string, startSequence: number, endSequence: number): MessageRow[] {
+    return this.db
+      .prepare<[string, number, number], MessageRow>(
+        `SELECT id, session_id, run_id, role, content, reasoning, tool_calls, tool_call_id,
+                sequence_num, created_at, metadata
+         FROM messages
+         WHERE session_id = ? AND sequence_num BETWEEN ? AND ?
+         ORDER BY sequence_num ASC`,
+      )
+      .all(sessionId, startSequence, endSequence);
+  }
+
   getActiveContext(sessionId: string): MessageRow[] {
-    const allMessages = this.listBySession(sessionId);
+    const allMessages = this.db
+      .prepare<[string], MessageRow>(
+        `SELECT id, session_id, run_id, role, content, reasoning, tool_calls, tool_call_id,
+                sequence_num, created_at, metadata
+         FROM messages WHERE session_id = ? ORDER BY sequence_num ASC`,
+      )
+      .all(sessionId);
     const ranges = this.getCompactedRanges(sessionId);
 
     const activeMessages: MessageRow[] = [];
     const summaryIds = new Set(ranges.map((r) => r.summary_message_id));
-    const rangeIndexMap = new Map(ranges.map((r) => [r.start_sequence, r]));
-
-    let currentRange: {
-      start_sequence: number;
-      end_sequence: number;
-      summary_message_id: string;
-    } | null = null;
+    const messagesById = new Map(allMessages.map((message) => [message.id, message]));
+    let rangeIndex = 0;
 
     for (const msg of allMessages) {
       if (summaryIds.has(msg.id)) continue;
-
-      if (rangeIndexMap.has(msg.sequence_num)) {
-        currentRange = rangeIndexMap.get(msg.sequence_num) ?? null;
-        const summaryMsg = allMessages.find((m) => m.id === currentRange?.summary_message_id);
-        if (summaryMsg) {
-          activeMessages.push(summaryMsg);
-        }
+      const range = ranges[rangeIndex];
+      if (range && msg.sequence_num === range.start_sequence) {
+        const summary = messagesById.get(range.summary_message_id);
+        if (!summary) throw new Error(`Missing compaction summary ${range.summary_message_id}`);
+        activeMessages.push(summary);
       }
-
-      if (currentRange) {
-        if (
-          msg.sequence_num >= currentRange.start_sequence &&
-          msg.sequence_num <= currentRange.end_sequence
-        ) {
-          continue;
-        } else {
-          currentRange = null;
-        }
+      if (
+        range &&
+        msg.sequence_num >= range.start_sequence &&
+        msg.sequence_num <= range.end_sequence
+      ) {
+        if (msg.sequence_num === range.end_sequence) rangeIndex += 1;
+        continue;
       }
-
       activeMessages.push(msg);
     }
 
     return activeMessages;
+  }
+
+  selectCompactionCandidate(
+    sessionId: string,
+    options: { keepRecentMessages: number; chunkMessages: number },
+  ): MessageRow[] {
+    const active = this.getActiveContext(sessionId);
+    const summaryIds = new Set(
+      this.getCompactedRanges(sessionId).map((record) => record.summary_message_id),
+    );
+    const eligible = active.slice(0, Math.max(0, active.length - options.keepRecentMessages));
+    let candidate: MessageRow[] = [];
+    for (const message of eligible) {
+      if (summaryIds.has(message.id)) {
+        if (candidate.length >= 2) break;
+        candidate = [];
+        continue;
+      }
+      const previous = candidate.at(-1);
+      if (previous && message.sequence_num !== previous.sequence_num + 1) {
+        if (candidate.length >= 2) break;
+        candidate = [];
+      }
+      candidate.push(message);
+      if (candidate.length === options.chunkMessages) break;
+    }
+    return candidate.length >= 2 ? candidate : [];
+  }
+
+  toMessage(row: MessageRow): Message {
+    const metadata = row.metadata
+      ? parseJsonBoundary(JsonRecordSchema, row.metadata, `message ${row.id} metadata`)
+      : {};
+    const candidate: Record<string, unknown> = {
+      role: row.role,
+      content: row.content,
+      createdAt: new Date(row.created_at).toISOString(),
+      ...metadata,
+    };
+    if (row.role === "assistant") {
+      if (row.reasoning !== null) candidate.reasoning = row.reasoning;
+      if (row.tool_calls !== null) {
+        candidate.toolCalls = parseJsonBoundary(
+          ToolCallsSchema,
+          row.tool_calls,
+          `message ${row.id} tool calls`,
+        );
+      }
+    }
+    if (row.role === "tool" && row.tool_call_id !== null) {
+      candidate.toolCallId = row.tool_call_id;
+    }
+    return parseBoundary(MessageSchema, candidate, `message ${row.id}`);
   }
 }

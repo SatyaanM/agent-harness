@@ -16,6 +16,19 @@ export const PendingMessageSchema = z
   .strict();
 export type PendingMessage = z.infer<typeof PendingMessageSchema>;
 
+export const CompactionRangeSchema = z
+  .object({
+    summaryMessageId: z.string().min(1).max(128),
+    startSequence: z.number().int().nonnegative(),
+    endSequence: z.number().int().nonnegative(),
+    originalTokenEstimate: z.number().int().nonnegative(),
+    summaryTokenEstimate: z.number().int().nonnegative(),
+    compactedAt: z.string().datetime(),
+    modelUsed: z.string().min(1).max(256),
+  })
+  .strict();
+export type CompactionRange = z.infer<typeof CompactionRangeSchema>;
+
 export const SessionDataSchema = z
   .object({
     sessionId: SessionIdSchema,
@@ -25,6 +38,7 @@ export const SessionDataSchema = z
     agentName: z.string().min(1).max(128).optional(),
     title: z.string().max(512).optional(),
     mailbox: z.array(PendingMessageSchema).max(10_000).optional(),
+    compactions: z.array(CompactionRangeSchema).max(10_000).optional(),
     result: z
       .object({
         status: z.enum([

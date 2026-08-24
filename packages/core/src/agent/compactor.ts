@@ -1,4 +1,4 @@
-import type { LLMClient } from "../llm/client.js";
+import type { LLMClient, LLMUsage } from "../llm/client.js";
 import type { Message } from "./types.js";
 
 export function estimateTokens(text: string): number {
@@ -16,7 +16,12 @@ export class Compactor {
     messages: Message[],
     model: string,
     signal?: AbortSignal,
-  ): Promise<{ summary: string; summaryTokenEstimate: number; originalTokenEstimate: number }> {
+  ): Promise<{
+    summary: string;
+    summaryTokenEstimate: number;
+    originalTokenEstimate: number;
+    usage: LLMUsage;
+  }> {
     const originalTokenEstimate = estimateMessagesTokens(messages);
 
     let textBlock = "Original messages to compact:\n\n";
@@ -51,6 +56,7 @@ CRITICAL INSTRUCTIONS:
       summary,
       summaryTokenEstimate: estimateTokens(summary),
       originalTokenEstimate,
+      usage: response.usage ?? {},
     };
   }
 }

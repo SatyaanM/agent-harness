@@ -6,7 +6,7 @@ read_when:
   - When designing UI for displaying compacted message history
 ---
 # Conversation Compaction Specification
-Status: Draft
+Status: Implemented
 
 ## Problem and evidence
 
@@ -86,5 +86,6 @@ Verified current behavior:
 9. **Migration**: The `003_compaction_records.sql` migration runs successfully on startup and creates the required schema.
 
 ## Open questions and decisions
-- **Summary detail level**: What prompt should the `Compactor` use to ensure critical state details (e.g., file paths, subagent IDs) are not lost during summarization?
-- **Variable chunking ($N$ and $K$)**: What are the ideal defaults for how many messages to compact ($N$) and how many recent messages to preserve ($K$)? Should these be globally configured or agent-specific?
+- **Summary detail level**: The prompt requires a distinct structured semantic-memory block followed by a chronological summary, explicitly preserving paths, subagent IDs, configuration choices, preferences, facts, entities, and unresolved goals.
+- **Variable chunking ($N$ and $K$)**: Defaults are 50 messages per oldest contiguous chunk and 8 recent active messages retained verbatim. Agents may override both in frontmatter with bounded integer settings.
+- **Context-window fallback**: `capabilities.maxTokens` is used when configured; otherwise the runtime uses a 128,000-token fallback and an 80% trigger ratio.

@@ -44,6 +44,9 @@ export const AgentConfigSchema = z
     capabilities: CapabilityMatrixSchema.partial().optional(),
     modelIdMapping: z.string().max(256).optional(),
     compaction: z.boolean().optional(),
+    compactionThreshold: z.number().positive().max(1).optional(),
+    compactionKeepRecentMessages: z.number().int().min(2).max(1_000).optional(),
+    compactionChunkMessages: z.number().int().min(2).max(1_000).optional(),
   })
   .strict();
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;

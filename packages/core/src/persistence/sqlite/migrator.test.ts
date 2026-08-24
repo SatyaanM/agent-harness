@@ -1,13 +1,29 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createDatabaseConnection } from "./db.js";
 import {
   ChecksumMismatchError,
+  COMPACTION_RECORDS_DOWN,
+  COMPACTION_RECORDS_UP,
   computeSqlChecksum,
   type MigrationFile,
   SqliteMigrator,
 } from "./migrator.js";
 
 describe("SqliteMigrator", () => {
+  it("keeps the versioned compaction up/down files synchronized with the executable migration", () => {
+    const upFile = readFileSync(
+      new URL("./migrations/003_compaction_records.sql", import.meta.url),
+      "utf8",
+    );
+    const downFile = readFileSync(
+      new URL("./migrations/003_compaction_records.down.sql", import.meta.url),
+      "utf8",
+    );
+    expect(COMPACTION_RECORDS_UP.replace(/^--[^\n]*\n/u, "").trim()).toBe(upFile.trim());
+    expect(COMPACTION_RECORDS_DOWN.replace(/^--[^\n]*\n/u, "").trim()).toBe(downFile.trim());
+  });
+
   it("applies baseline initial schema migration up cleanly", () => {
     const db = createDatabaseConnection(":memory:");
     const migrator = new SqliteMigrator(db);
@@ -45,6 +61,29 @@ describe("SqliteMigrator", () => {
     expect(tableNames).toContain("mailbox_events");
     expect(tableNames).toContain("open_sessions");
     expect(tableNames).toContain("audit_events");
+    expect(tableNames).toContain("compaction_records");
+
+    const compactionSchema = db
+      .prepare<[string], { sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("compaction_records")?.sql;
+    expect(compactionSchema).toContain("uq_compaction_session_range");
+    expect(compactionSchema).toContain("end_sequence > start_sequence");
+    const compactionIndexes = db
+      .prepare<[], { name: string; unique: number }>("PRAGMA index_list(compaction_records)")
+      .all();
+    expect(compactionIndexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "idx_compaction_records_session_seq" }),
+      ]),
+    );
+    const triggers = db
+      .prepare<[], { name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
+      )
+      .all();
+    expect(triggers.map((trigger) => trigger.name)).toContain("trg_compaction_records_validate");
 
     // Re-running up is a no-op
     const reUp = migrator.up();
@@ -60,6 +99,13 @@ describe("SqliteMigrator", () => {
     // 1. Up
     migrator.up();
     expect(migrator.getAppliedMigrations()).toHaveLength(3);
+    expect(
+      db
+        .prepare<[], { name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_compaction_records_validate'",
+        )
+        .get()?.name,
+    ).toBe("trg_compaction_records_validate");
 
     // 2. Down
     const downRes = migrator.down(0);

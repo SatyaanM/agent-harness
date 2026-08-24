@@ -87,6 +87,18 @@ export interface MessageRow {
   metadata: string | null; // Validated JSON: { meta?: unknown }
 }
 
+export interface CompactionRecordRow {
+  id: number;
+  session_id: string;
+  summary_message_id: string;
+  start_sequence: number;
+  end_sequence: number;
+  original_token_estimate: number;
+  summary_token_estimate: number;
+  compacted_at: number;
+  model_used: string;
+}
+
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "abandoned";
 
 export interface TaskRow {

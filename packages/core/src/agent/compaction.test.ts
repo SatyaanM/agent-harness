@@ -111,4 +111,79 @@ describe("Compactor Engine and SQLite Repo", () => {
     const all = messageRepo.listBySession("sess-1");
     expect(all.length).toBe(6);
   });
+
+  it("rejects duplicate, overlapping, invalid, and cross-session compaction records", () => {
+    db.exec(`
+      INSERT INTO sessions (id, agent_name, prompt, created_at, updated_at)
+      VALUES ('sess-2', 'test-agent', 'test', 0, 0);
+    `);
+    for (let i = 0; i < 6; i++) {
+      messageRepo.create({
+        id: `source-${i}`,
+        sessionId: "sess-1",
+        role: "user",
+        content: `source ${i}`,
+        sequenceNum: i,
+      });
+    }
+    messageRepo.create({
+      id: "summary-valid",
+      sessionId: "sess-1",
+      role: "system",
+      content: "summary",
+      sequenceNum: 6,
+    });
+    messageRepo.create({
+      id: "summary-cross-session",
+      sessionId: "sess-2",
+      role: "system",
+      content: "summary",
+      sequenceNum: 0,
+    });
+
+    const valid = {
+      sessionId: "sess-1",
+      summaryMessageId: "summary-valid",
+      startSequence: 0,
+      endSequence: 2,
+      originalTokenEstimate: 12,
+      summaryTokenEstimate: 3,
+      compactedAt: 100,
+      modelUsed: "mock",
+    };
+    messageRepo.recordCompaction(valid);
+    expect(() => messageRepo.recordCompaction(valid)).toThrow();
+    expect(() =>
+      messageRepo.recordCompaction({
+        ...valid,
+        summaryMessageId: "source-5",
+        startSequence: 2,
+        endSequence: 4,
+      }),
+    ).toThrow();
+    expect(() =>
+      messageRepo.recordCompaction({ ...valid, startSequence: 3, endSequence: 3 }),
+    ).toThrow();
+    expect(() =>
+      messageRepo.recordCompaction({ ...valid, summaryMessageId: "summary-cross-session" }),
+    ).toThrow();
+  });
+
+  it("reconstructs active context beyond ten thousand transcript rows", () => {
+    db.immediateTransaction(() => {
+      for (let i = 0; i < 10_050; i++) {
+        messageRepo.create({
+          id: `long-${i}`,
+          sessionId: "sess-1",
+          role: "user",
+          content: String(i),
+          sequenceNum: i,
+        });
+      }
+    })();
+
+    const active = messageRepo.getActiveContext("sess-1");
+    expect(active).toHaveLength(10_050);
+    expect(active.at(-1)?.content).toBe("10049");
+  });
 });

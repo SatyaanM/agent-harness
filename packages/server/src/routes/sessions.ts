@@ -3,6 +3,7 @@ import type { SessionData } from "@agent-harness/core";
 import {
   getConfig,
   MailboxRepository,
+  MessageRepository,
   OpenSessionsRepository,
   SessionRepository,
   SessionStore,
@@ -38,6 +39,17 @@ const SessionCreateSchema = z
   })
   .strict();
 const SessionRenameSchema = z.object({ title: z.string().max(512) }).strict();
+const SessionMessagesQuerySchema = z
+  .object({
+    startSequence: z.coerce.number().int().nonnegative(),
+    endSequence: z.coerce.number().int().nonnegative(),
+  })
+  .strict()
+  .refine(
+    ({ startSequence, endSequence }) =>
+      endSequence >= startSequence && endSequence - startSequence < 10_000,
+    "message range must be ordered and contain at most 10000 messages",
+  );
 
 function getSessionStore() {
   const config = getConfig();
@@ -236,6 +248,26 @@ sessionsRouter.post(
 );
 
 sessionsRouter.get(
+  "/:id/messages",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(SessionParamsSchema, req.params, res);
+    if (!params) return;
+    const query = validateRequest(SessionMessagesQuerySchema, req.query, res);
+    if (!query) return;
+    const db = sessionManager.getDb();
+    if (!db || !new SessionRepository(db).get(params.id)) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const messageRepo = new MessageRepository(db);
+    const messages = messageRepo
+      .listRange(params.id, query.startSequence, query.endSequence)
+      .map((row) => ({ ...messageRepo.toMessage(row), sequenceNum: row.sequence_num }));
+    res.json({ messages });
+  }),
+);
+
+sessionsRouter.get(
   "/:id",
   asyncHandler(async (req, res) => {
     const params = validateRequest(SessionParamsSchema, req.params, res);
@@ -246,7 +278,19 @@ sessionsRouter.get(
       res.status(404).json({ error: "Session not found" });
       return;
     }
-    res.json(session);
+    const db = sessionManager.getDb();
+    const compactions = db
+      ? new MessageRepository(db).getCompactedRanges(sessionId).map((record) => ({
+          summaryMessageId: record.summary_message_id,
+          startSequence: record.start_sequence,
+          endSequence: record.end_sequence,
+          originalTokenEstimate: record.original_token_estimate,
+          summaryTokenEstimate: record.summary_token_estimate,
+          compactedAt: new Date(record.compacted_at).toISOString(),
+          modelUsed: record.model_used,
+        }))
+      : [];
+    res.json({ ...session, compactions });
   }),
 );
 

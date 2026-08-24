@@ -3,6 +3,8 @@ import fs from "fs-extra";
 import { MAX_SESSION_MAILBOX_BYTES, MAX_SESSION_TRANSCRIPT_BYTES } from "../contracts/limits.js";
 import { createLogger } from "../contracts/logging.js";
 import {
+  type CompactionRange,
+  CompactionRangeSchema,
   createSessionData,
   type PendingMessage,
   PendingMessageSchema,
@@ -11,7 +13,15 @@ import {
   SessionIdSchema,
 } from "../contracts/session.js";
 
-export { createSessionData };
+export {
+  type CompactionRange,
+  CompactionRangeSchema,
+  createSessionData,
+  type PendingMessage,
+  PendingMessageSchema,
+  type SessionData,
+  SessionDataSchema,
+};
 
 import { readUtf8FileBounded, stringifyJsonBounded } from "../filesystem/bounded-io.js";
 import { BoundaryValidationError, parseBoundary, parseJsonBoundary } from "../validation.js";
@@ -33,15 +43,13 @@ export interface SessionListResult {
   diagnostics: SessionRecordDiagnostic[];
 }
 
-export type { PendingMessage, SessionData } from "../contracts/session.js";
-export { PendingMessageSchema, SessionDataSchema } from "../contracts/session.js";
-
 /** A detached copy of a session so callers can safely mutate their own state. */
 function cleanSession(session: SessionData): SessionData {
   return {
     ...session,
     messages: session.messages || [],
     mailbox: session.mailbox ? [...session.mailbox] : undefined,
+    compactions: session.compactions ? [...session.compactions] : undefined,
   };
 }
 
