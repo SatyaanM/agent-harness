@@ -20,7 +20,9 @@ The server owns one in-memory provider runtime state for the active configuratio
 
 Configured model IDs are opaque and are sent unchanged, including IDs containing `/`. Only the synthetic legacy `opencode-go` provider applies its documented compatibility prefix translation. Protocol-specific discovery normalizes OpenAI and Anthropic model lists into the public settings response without returning credentials or upstream response bodies.
 
-Capability resolution covers every provider target eligible for the same fallback chain. Boolean capabilities are intersected and numeric output/context limits use the conservative minimum, including zero for an unknown limit, so the single matrix supplied to earlier runtime stages and `Agent` remains valid if execution falls back. Live capability probes use the same provider runtime: each individual network request reserves RPM/TPM immediately before I/O, an open circuit prevents the request, successful responses close the circuit, and numeric 429/5xx responses open it. Abort and non-transient responses do not open the circuit.
+Capability resolution covers every provider target eligible for the same fallback chain. Boolean capabilities are intersected. Numeric output/context limits use the minimum positive known value; zero means every eligible target is unknown, in which case the agent uses its bounded 4096-token default. This keeps the single matrix supplied to earlier runtime stages and `Agent` valid if execution falls back.
+
+Live capability probes use the same provider runtime. An already-open circuit prevents starting a probe, and every actual request or retry rechecks the circuit and reserves RPM/TPM immediately before I/O. Network failures and numeric 429/5xx responses receive bounded admitted retries. A recovered successful request is stable and may be cached; exhausted transient, rejected, and admission-denied matrices are never cached. Stable feature-unsupported 4xx responses may produce a durable false capability. Successful responses close the circuit. Only an exhausted numeric 429/5xx retry sequence opens it; network exhaustion and non-transient 4xx responses do not mutate circuit state.
 
 Durable capability entries include a non-secret provider-configuration identity derived from protocol, normalized base URL, and API-key environment-variable name. A settings generation that changes an endpoint, protocol, or credential source cannot reuse capabilities learned from the previous provider configuration. Older identity-less entries remain parseable derived data but do not match configured-provider lookups.
 
@@ -39,6 +41,9 @@ Server shutdown uses the same awaited terminal-cleanup barrier before clearing c
 - Resolving only the preferred provider's capabilities was rejected because a fallback could receive a payload or tool call that it cannot support.
 - Bulk-reserving a probe was rejected because optional and retried network calls would undercount configured request/token budgets.
 - Reusing capability cache entries by provider ID alone was rejected because provider IDs remain stable across endpoint and protocol edits.
+- Treating zero as smaller than a known positive provider limit was rejected because zero represents unknown capability metadata, not a provider output limit of zero.
+- Opening the circuit on the first retryable probe response was rejected because it either prevents the owned bounded retry or forces that retry to bypass shared circuit policy. The circuit opens only after numeric transient retries exhaust.
+- Caching an exhausted transient, rejected, or admission-denied partial matrix was rejected; a fully recovered success may be cached because every requested feature reached a stable outcome.
 
 ## Consequences
 

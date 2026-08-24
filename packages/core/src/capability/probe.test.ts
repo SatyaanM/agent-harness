@@ -6,6 +6,32 @@ afterEach(() => {
 });
 
 describe("probeCapabilities", () => {
+  it("retries network and numeric transient outcomes with admission before every request", async () => {
+    const beforeRequest = vi.fn(() => true);
+    let attempt = 0;
+    const fetchMock = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("network unavailable");
+      if (attempt === 2) return new Response(null, { status: 429 });
+      return new Response(null, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      probeCapabilities(
+        {
+          baseUrl: "https://provider.example/v1",
+          apiKey: "secret",
+          model: "model",
+          maxRetries: 2,
+        },
+        { beforeRequest },
+      ),
+    ).resolves.toMatchObject({ chat: true, tools: true, vision: true, streaming: true });
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(beforeRequest).toHaveBeenCalledTimes(6);
+  });
+
   it("runs admission immediately before every provider network request", async () => {
     const beforeRequest = vi.fn(() => true);
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));

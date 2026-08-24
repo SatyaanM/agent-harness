@@ -38,9 +38,9 @@ When `Agent.run()` starts without a supplied matrix, it MUST resolve through `Ca
 The result MUST be cached for the duration of the run to avoid repeated lookups during multi-step executions.
 `Agent.resolveCapabilities()` exposes the same resolution seam to runtime owners, and `Agent.run(..., resolvedCapabilities)` MUST not repeat it. If a configured live probe fails, the matrix MUST conservatively disable unverified features.
 
-For a configured fallback chain, lookup MUST resolve every eligible target and intersect the results. Boolean fields use logical AND. Numeric output and context limits use the minimum, with zero remaining conservative when any target has an unknown limit. Durable entries are keyed by provider/model/SDK plus a non-secret provider configuration identity containing protocol, normalized base URL, and credential environment-variable name; identity-less entries do not satisfy configured lookups.
+For a configured fallback chain, lookup MUST resolve every eligible target and intersect the results. Boolean fields use logical AND. Numeric output and context limits use the minimum positive known value; zero is returned only when every eligible target is unknown. The agent applies the known positive limit against any lower explicit configuration, and uses its bounded 4096-token default only for an all-unknown result. Durable entries are keyed by provider/model/SDK plus a non-secret provider configuration identity containing protocol, normalized base URL, and credential environment-variable name; identity-less entries do not satisfy configured lookups.
 
-Configured live probes MUST use the same server-owned `ProviderRuntimeState` as execution. Every actual probe request, including optional probes and retries, performs circuit and RPM/TPM admission immediately before network I/O. Successful HTTP responses close the provider circuit; numeric 429/5xx responses open it; aborts and other 4xx responses do not. Admission-denied partial results are conservative but are not persisted after the window/circuit changes.
+Configured live probes MUST use the same server-owned `ProviderRuntimeState` as execution. An open circuit blocks a new probe, and every actual probe request or retry rechecks circuit state and performs RPM/TPM admission immediately before network I/O. Network failures and numeric 429/5xx receive bounded retries. A recovered successful request may be cached; exhausted transient, rejected, and admission-denied matrices are never cached. Stable feature-unsupported 4xx responses may be cached as false. Successful HTTP responses close the provider circuit. Only an exhausted numeric 429/5xx sequence opens it; network exhaustion and other 4xx responses do not mutate it.
 
 ### 2. Payload Modification based on CapabilityMatrix
 Before invoking `llmClient.chat()` (or its streaming equivalent), the agent MUST inspect the resolved `CapabilityMatrix` and modify the request payload as follows:
@@ -80,8 +80,8 @@ The agent MUST monitor the LLM's responses for capability mismatches. If the mod
 9. **Execution-map parity:** A tool omitted from provider definitions cannot execute even if the provider hallucinates its name and it exists in the global registry.
 10. **Provider-aware probing:** OpenAI and Anthropic probes use their declared endpoint, authentication, and request envelopes without logging or returning credentials; failure is conservative.
 11. **Reusable matrix:** A pre-resolved matrix skips the standalone lookup so earlier runtime stages and `Agent` share one decision.
-12. **Fallback-safe intersection:** Heterogeneous eligible targets produce boolean AND and conservative minimum/zero numeric limits before request shaping.
-13. **Shared probe policy:** Every provider probe request consumes the shared configured admission budget and updates the shared circuit only for success or numeric transient HTTP outcomes.
+12. **Fallback-safe intersection:** Heterogeneous eligible targets produce boolean AND and the minimum positive known numeric limit, using zero and the 4096 output default only when every target is unknown.
+13. **Shared probe policy:** Every provider probe request and transient retry rechecks the circuit and consumes shared admission; recovered success and stable feature denial may enter the cache, exhausted/denied results may not, and only success or exhausted numeric 429/5xx changes the circuit.
 14. **Configuration-bound cache:** Changing a configured provider endpoint or protocol cannot reuse a durable capability entry from the prior configuration identity.
 
 ## Decisions
@@ -89,6 +89,6 @@ The agent MUST monitor the LLM's responses for capability mismatches. If the mod
 - **Diagnostic handling**: A disabled tool call is removed from the assistant message, emitted as a warning and `capability-mismatch` event, and followed by a system denial asking the model for a text-only response. It is never executed.
 - **Vision stripping detail**: Stripped image markdown is replaced with `[Image omitted due to model capability]` so surrounding text retains context.
 - **Provider correlation**: provider/model targets come from `ProviderRegistry.resolveTargets()`; `/` is valid model identity, not an implicit provider delimiter.
-- **Fallback correlation**: the reusable run matrix is the conservative intersection across every eligible target, not only the preferred provider.
+- **Fallback correlation**: the reusable run matrix is the conservative intersection across every eligible target, not only the preferred provider; unknown zero numeric metadata does not erase a known positive bound.
 - **Probe ownership**: capability probes and execution share one server-owned provider generation for circuit and rate admission.
 - **Cache identity**: configured-provider cache keys include non-secret protocol, endpoint, and credential-source identity; derived identity-less entries remain readable but do not match configured lookups.

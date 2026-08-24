@@ -3,6 +3,7 @@ import { type CapabilityMatrix, CapabilityMatrixSchema } from "../agent/types.js
 import { parseBoundary } from "../validation.js";
 
 const PROBE_MAX_RETRIES = 2;
+const PROBE_RETRY_BASE_DELAY_MS = 100;
 const ProbeOptionsSchema = z
   .object({
     baseUrl: z
@@ -33,6 +34,8 @@ export type ProbeOptions = z.input<typeof ProbeOptionsSchema>;
 export interface ProbeHooks {
   beforeRequest?: (estimatedTokens: number) => boolean;
   onResponse?: (status: number, succeeded: boolean) => void;
+  onOutcome?: (outcome: "success" | "unsupported" | "admission-denied" | "rejected") => void;
+  onTransientExhausted?: (status: number | undefined) => void;
 }
 
 export async function probeCapabilities(
@@ -45,26 +48,10 @@ export async function probeCapabilities(
     "capability probe options",
   );
 
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return parseBoundary(
-        CapabilityMatrixSchema,
-        await probeOnce(baseUrl, apiKey, model, protocol, timeoutMs, hooks),
-        "capability probe result",
-      );
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < maxRetries) {
-        const delay = 1000 * 2 ** attempt;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw new Error(
-    `Probe failed after ${maxRetries + 1} attempts: ${lastError?.message ?? "unknown error"}`,
+  return parseBoundary(
+    CapabilityMatrixSchema,
+    await probeOnce(baseUrl, apiKey, model, protocol, timeoutMs, maxRetries, hooks),
+    "capability probe result",
   );
 }
 
@@ -74,6 +61,7 @@ async function probeOnce(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  maxRetries: number,
   hooks: ProbeHooks,
 ): Promise<CapabilityMatrix> {
   const caps: CapabilityMatrix = {
@@ -87,18 +75,20 @@ async function probeOnce(
     maxTokens: 0,
   };
 
-  caps.chat = await testChat(baseUrl, apiKey, model, protocol, timeoutMs, hooks);
+  caps.chat = await testChat(baseUrl, apiKey, model, protocol, timeoutMs, maxRetries, hooks);
   if (!caps.chat) return caps;
 
-  const [tools, vision, streaming] = await Promise.all([
-    testTools(baseUrl, apiKey, model, protocol, timeoutMs, hooks),
-    testVision(baseUrl, apiKey, model, protocol, timeoutMs, hooks),
-    testStreaming(baseUrl, apiKey, model, protocol, timeoutMs, hooks),
-  ]);
-
-  caps.tools = tools;
-  caps.vision = vision;
-  caps.streaming = streaming;
+  caps.tools = await testTools(baseUrl, apiKey, model, protocol, timeoutMs, maxRetries, hooks);
+  caps.vision = await testVision(baseUrl, apiKey, model, protocol, timeoutMs, maxRetries, hooks);
+  caps.streaming = await testStreaming(
+    baseUrl,
+    apiKey,
+    model,
+    protocol,
+    timeoutMs,
+    maxRetries,
+    hooks,
+  );
 
   return caps;
 }
@@ -109,6 +99,7 @@ async function testChat(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  maxRetries: number,
   hooks: ProbeHooks,
 ): Promise<boolean> {
   return sendProbeRequest(
@@ -117,6 +108,7 @@ async function testChat(
     protocol,
     timeoutMs,
     { model, messages: [{ role: "user", content: "Hi" }], max_tokens: 5 },
+    maxRetries,
     hooks,
   );
 }
@@ -127,6 +119,7 @@ async function testTools(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  maxRetries: number,
   hooks: ProbeHooks,
 ): Promise<boolean> {
   try {
@@ -155,6 +148,7 @@ async function testTools(
       protocol,
       timeoutMs,
       { model, messages: [{ role: "user", content: "Call test" }], tools, max_tokens: 50 },
+      maxRetries,
       hooks,
     );
   } catch {
@@ -168,6 +162,7 @@ async function testVision(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  maxRetries: number,
   hooks: ProbeHooks,
 ): Promise<boolean> {
   try {
@@ -202,6 +197,7 @@ async function testVision(
         ],
         max_tokens: 50,
       },
+      maxRetries,
       hooks,
     );
   } catch {
@@ -215,6 +211,7 @@ async function testStreaming(
   model: string,
   protocol: "openai" | "anthropic",
   timeoutMs: number,
+  maxRetries: number,
   hooks: ProbeHooks,
 ): Promise<boolean> {
   return sendProbeRequest(
@@ -228,6 +225,7 @@ async function testStreaming(
       max_tokens: 5,
       stream: true,
     },
+    maxRetries,
     hooks,
   );
 }
@@ -238,24 +236,65 @@ async function sendProbeRequest(
   protocol: "openai" | "anthropic",
   timeoutMs: number,
   body: Record<string, unknown>,
+  maxRetries: number,
   hooks: ProbeHooks,
 ): Promise<boolean> {
-  try {
-    const serializedBody = JSON.stringify(body);
-    const maximumOutputTokens =
-      typeof body.max_tokens === "number" && Number.isFinite(body.max_tokens) ? body.max_tokens : 0;
-    const estimatedTokens = Math.max(1, Math.ceil(serializedBody.length / 4)) + maximumOutputTokens;
-    if (hooks.beforeRequest && !hooks.beforeRequest(estimatedTokens)) return false;
-    const response = await fetch(probeUrl(baseUrl, protocol), {
-      method: "POST",
-      headers: probeHeaders(protocol, apiKey),
-      body: serializedBody,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return releaseResponse(response, hooks);
-  } catch {
-    return false;
+  const serializedBody = JSON.stringify(body);
+  const maximumOutputTokens =
+    typeof body.max_tokens === "number" && Number.isFinite(body.max_tokens) ? body.max_tokens : 0;
+  const estimatedTokens = Math.max(1, Math.ceil(serializedBody.length / 4)) + maximumOutputTokens;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (hooks.beforeRequest && !hooks.beforeRequest(estimatedTokens)) {
+      hooks.onOutcome?.("admission-denied");
+      return false;
+    }
+    try {
+      const response = await fetch(probeUrl(baseUrl, protocol), {
+        method: "POST",
+        headers: probeHeaders(protocol, apiKey),
+        body: serializedBody,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const succeeded = response.ok;
+      hooks.onResponse?.(response.status, succeeded);
+      await releaseResponse(response);
+      if (succeeded) {
+        hooks.onOutcome?.("success");
+        return true;
+      }
+      if (isTransientProbeStatus(response.status)) {
+        if (attempt < maxRetries) {
+          await retryDelay(attempt);
+          continue;
+        }
+        hooks.onTransientExhausted?.(response.status);
+        return false;
+      }
+      const outcome = isStableUnsupportedStatus(response.status) ? "unsupported" : "rejected";
+      hooks.onOutcome?.(outcome);
+      return false;
+    } catch {
+      if (attempt < maxRetries) {
+        await retryDelay(attempt);
+        continue;
+      }
+      hooks.onTransientExhausted?.(undefined);
+      return false;
+    }
   }
+  return false;
+}
+
+function isTransientProbeStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+function isStableUnsupportedStatus(status: number): boolean {
+  return status === 400 || status === 404 || status === 405 || status === 415 || status === 422;
+}
+
+async function retryDelay(attempt: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, PROBE_RETRY_BASE_DELAY_MS * 2 ** attempt));
 }
 
 function probeUrl(baseUrl: string, protocol: "openai" | "anthropic"): string {
@@ -273,11 +312,8 @@ function probeHeaders(protocol: "openai" | "anthropic", apiKey: string): Record<
   return { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
 }
 
-async function releaseResponse(response: Response, hooks: ProbeHooks): Promise<boolean> {
-  const succeeded = response.ok;
-  hooks.onResponse?.(response.status, succeeded);
+async function releaseResponse(response: Response): Promise<void> {
   try {
     await response.body?.cancel();
   } catch {}
-  return succeeded;
 }

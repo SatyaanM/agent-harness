@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { resetModelsDevCache } from "../capability/models-dev-client.js";
 import { CapabilityRegistry } from "../capability/registry.js";
+import type { Config } from "../config.js";
 import type { LLMClient } from "../llm/client.js";
+import { ProviderRegistry } from "../provider-registry.js";
 import { ToolRegistry } from "../tool/registry.js";
 import { Agent } from "./agent.js";
 import {
@@ -833,6 +835,95 @@ describe("Agent Capability Enforcement", () => {
       }),
     );
     expect(chat).toHaveBeenCalledWith(expect.not.objectContaining({ tools: expect.anything() }));
+  });
+
+  it("uses the minimum positive fallback output limit when another target is unknown", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "bounded" },
+    }));
+    const root = process.cwd();
+    const providerConfig: Config = {
+      ROOT: root,
+      INBOX_ROOT: root,
+      SESSIONS_DIR: root,
+      AGENTS_DIR: root,
+      PROVIDER_ENDPOINT: "https://legacy.example/v1",
+      API_KEY_ENV: "LEGACY_KEY",
+      DEFAULT_MODEL: "test-model",
+      MAX_CONCURRENT_AGENTS: 1,
+      PROVIDERS: [
+        {
+          id: "known",
+          displayName: "Known",
+          protocol: "openai",
+          baseUrl: "https://known.example/v1",
+          apiKeyEnv: "KNOWN_KEY",
+          enabled: true,
+          priority: 0,
+        },
+        {
+          id: "unknown",
+          displayName: "Unknown",
+          protocol: "anthropic",
+          baseUrl: "https://unknown.example/v1",
+          apiKeyEnv: "UNKNOWN_KEY",
+          enabled: true,
+          priority: 1,
+        },
+      ],
+    };
+    const capabilities = new CapabilityRegistry({
+      workspaceRoot: root,
+      providerRegistry: new ProviderRegistry(providerConfig),
+    });
+    vi.spyOn(capabilities, "lookup")
+      .mockResolvedValueOnce({
+        chat: true,
+        tools: false,
+        vision: false,
+        streaming: false,
+        structuredOutputs: false,
+        promptCaching: false,
+        reasoning: false,
+        maxTokens: 1_024,
+      })
+      .mockResolvedValueOnce({
+        chat: true,
+        tools: false,
+        vision: false,
+        streaming: false,
+        structuredOutputs: false,
+        promptCaching: false,
+        reasoning: false,
+        maxTokens: 0,
+      });
+
+    await new Agent({ ...config, tools: [] }, new ToolRegistry(), { chat }, capabilities).run("go");
+
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 1_024 }));
+  });
+
+  it("uses the 4096 default output limit only when every fallback limit is unknown", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "defaulted" },
+    }));
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilities, "lookupModel").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: false,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+
+    await new Agent({ ...config, tools: [] }, new ToolRegistry(), { chat }, capabilities).run("go");
+
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 4_096 }));
   });
 
   it("adds schema adherence guidance only when native structured outputs are unavailable", async () => {

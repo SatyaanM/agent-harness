@@ -114,7 +114,7 @@ export class CapabilityRegistry {
       if (this.providerRuntime?.isCircuitOpen(providerTarget.provider.id)) {
         return conservativeCapabilities();
       }
-      let admissionDenied = false;
+      let unstableProbe = false;
       try {
         const probedCaps = await probeCapabilities(
           {
@@ -125,30 +125,35 @@ export class CapabilityRegistry {
           },
           {
             beforeRequest: (estimatedTokens) => {
-              if (this.providerRuntime?.isCircuitOpen(providerTarget.provider.id)) {
-                admissionDenied = true;
-                return false;
-              }
+              if (this.providerRuntime?.isCircuitOpen(providerTarget.provider.id)) return false;
               const admission = this.providerRuntime?.reserve(
                 providerTarget.provider,
                 estimatedTokens,
               );
-              if (admission && !admission.allowed) admissionDenied = true;
               return admission?.allowed ?? true;
             },
-            onResponse: (status, succeeded) => {
+            onResponse: (_status, succeeded) => {
               if (!this.providerRuntime) return;
               if (succeeded) {
                 this.providerRuntime.closeCircuit(providerTarget.provider.id);
-              } else if (status === 429 || (status >= 500 && status < 600)) {
-                this.providerRuntime.openCircuit(providerTarget.provider.id);
+              }
+            },
+            onOutcome: (outcome) => {
+              if (outcome === "admission-denied" || outcome === "rejected") {
+                unstableProbe = true;
+              }
+            },
+            onTransientExhausted: (status) => {
+              unstableProbe = true;
+              if (status === 429 || (status !== undefined && status >= 500 && status < 600)) {
+                this.providerRuntime?.openCircuit(providerTarget.provider.id);
               }
             },
           },
         );
-        // A denied optional probe produces a conservative partial matrix, but it
-        // must not become durable truth after the minute window or circuit closes.
-        if (admissionDenied) return probedCaps;
+        // Exhausted-transient, rejected, or admission-denied results can change
+        // without a provider configuration edit, so their partial matrix is never durable.
+        if (unstableProbe) return probedCaps;
         const entry: RegistryEntry = {
           provider,
           model,
@@ -166,11 +171,23 @@ export class CapabilityRegistry {
     }
 
     if (this.baseUrl && this.apiKey) {
-      const probedCaps = await probeCapabilities({
-        baseUrl: this.baseUrl,
-        apiKey: this.apiKey,
-        model,
-      });
+      let unstableProbe = false;
+      const probedCaps = await probeCapabilities(
+        {
+          baseUrl: this.baseUrl,
+          apiKey: this.apiKey,
+          model,
+        },
+        {
+          onOutcome: (outcome) => {
+            if (outcome === "rejected") unstableProbe = true;
+          },
+          onTransientExhausted: () => {
+            unstableProbe = true;
+          },
+        },
+      );
+      if (unstableProbe) return probedCaps;
       const entry: RegistryEntry = {
         provider,
         model,
@@ -224,6 +241,9 @@ function providerConfigurationIdentity(target: ProviderTarget): string {
 function intersectCapabilityMatrices(matrices: CapabilityMatrix[]): CapabilityMatrix {
   const [first, ...rest] = matrices;
   if (!first) return conservativeCapabilities();
+  const knownMaxTokens = matrices
+    .map((matrix) => matrix.maxTokens)
+    .filter((maxTokens) => maxTokens > 0);
   return rest.reduce<CapabilityMatrix>(
     (intersection, matrix) => ({
       chat: intersection.chat && matrix.chat,
@@ -233,7 +253,7 @@ function intersectCapabilityMatrices(matrices: CapabilityMatrix[]): CapabilityMa
       structuredOutputs: intersection.structuredOutputs && matrix.structuredOutputs,
       promptCaching: intersection.promptCaching && matrix.promptCaching,
       reasoning: intersection.reasoning && matrix.reasoning,
-      maxTokens: Math.min(intersection.maxTokens, matrix.maxTokens),
+      maxTokens: knownMaxTokens.length > 0 ? Math.min(...knownMaxTokens) : 0,
     }),
     first,
   );

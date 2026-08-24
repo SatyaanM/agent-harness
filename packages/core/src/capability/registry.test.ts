@@ -115,7 +115,7 @@ describe("CapabilityRegistry manual overrides", () => {
       structuredOutputs: false,
       promptCaching: false,
       reasoning: false,
-      maxTokens: 0,
+      maxTokens: 1024,
     });
     expect(lookup).toHaveBeenNthCalledWith(1, "full", "shared-model", "vercel-ai", undefined);
     expect(lookup).toHaveBeenNthCalledWith(2, "limited", "shared-model", "vercel-ai", undefined);
@@ -234,7 +234,8 @@ describe("CapabilityRegistry manual overrides", () => {
         return new Response(null, { status: 200 });
       }),
     );
-    const runtime = new ProviderRuntimeState(config);
+    let now = 1_000;
+    const runtime = new ProviderRuntimeState(config, { now: () => now });
     const registry = new CapabilityRegistry({ workspaceRoot: root, providerRuntime: runtime });
 
     const capabilities = await registry.lookupModel("shared-model", "admitted", "vercel-ai");
@@ -244,6 +245,10 @@ describe("CapabilityRegistry manual overrides", () => {
     const provider = runtime.registry.getProviders()[0];
     if (!provider) throw new Error("provider fixture missing");
     expect(runtime.reserve(provider, 1)).toMatchObject({ allowed: false, reason: "requests" });
+
+    now += 60_000;
+    await registry.lookupModel("shared-model", "admitted", "vercel-ai");
+    expect(providerRequests).toHaveLength(4);
 
     runtime.openCircuit("admitted");
     const secondRoot = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
@@ -255,8 +260,166 @@ describe("CapabilityRegistry manual overrides", () => {
     await expect(
       circuitRegistry.lookupModel("shared-model", "admitted", "other-sdk"),
     ).resolves.toMatchObject({ chat: false, tools: false });
-    expect(providerRequests).toHaveLength(2);
+    expect(providerRequests).toHaveLength(4);
     delete process.env.PROBE_ADMISSION_KEY;
+  });
+
+  it("caches eventual probe success after admitted transient retries recover", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
+    tempDirs.push(root);
+    process.env.TRANSIENT_PROBE_KEY = "probe-secret";
+    const config: Config = {
+      ROOT: root,
+      INBOX_ROOT: root,
+      SESSIONS_DIR: root,
+      AGENTS_DIR: root,
+      PROVIDER_ENDPOINT: "https://legacy.example/v1",
+      API_KEY_ENV: "LEGACY_KEY",
+      DEFAULT_MODEL: "retry-model",
+      MAX_CONCURRENT_AGENTS: 1,
+      PROVIDERS: [
+        {
+          id: "retrying",
+          displayName: "Retrying",
+          protocol: "openai",
+          baseUrl: "https://retrying.example/v1",
+          apiKeyEnv: "TRANSIENT_PROBE_KEY",
+          enabled: true,
+          priority: 0,
+        },
+      ],
+    };
+    let providerRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        if (String(input) === "https://models.dev/api.json") {
+          return new Response(null, { status: 404 });
+        }
+        providerRequests += 1;
+        return new Response(null, { status: providerRequests === 1 ? 503 : 200 });
+      }),
+    );
+    const runtime = new ProviderRuntimeState(config);
+    const registry = new CapabilityRegistry({ workspaceRoot: root, providerRuntime: runtime });
+
+    await expect(
+      registry.lookupModel("retry-model", "retrying", "vercel-ai"),
+    ).resolves.toMatchObject({ chat: true, tools: true });
+    expect(providerRequests).toBe(5);
+    expect(runtime.isCircuitOpen("retrying")).toBe(false);
+
+    await expect(
+      registry.lookupModel("retry-model", "retrying", "vercel-ai"),
+    ).resolves.toMatchObject({ chat: true, tools: true });
+    expect(providerRequests).toBe(5);
+    delete process.env.TRANSIENT_PROBE_KEY;
+  });
+
+  it("opens the circuit and avoids caching after numeric transient retries are exhausted", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
+    tempDirs.push(root);
+    process.env.EXHAUSTED_PROBE_KEY = "probe-secret";
+    const config: Config = {
+      ROOT: root,
+      INBOX_ROOT: root,
+      SESSIONS_DIR: root,
+      AGENTS_DIR: root,
+      PROVIDER_ENDPOINT: "https://legacy.example/v1",
+      API_KEY_ENV: "LEGACY_KEY",
+      DEFAULT_MODEL: "exhausted-model",
+      MAX_CONCURRENT_AGENTS: 1,
+      PROVIDERS: [
+        {
+          id: "exhausted",
+          displayName: "Exhausted",
+          protocol: "openai",
+          baseUrl: "https://exhausted.example/v1",
+          apiKeyEnv: "EXHAUSTED_PROBE_KEY",
+          enabled: true,
+          priority: 0,
+        },
+      ],
+    };
+    let providerRequests = 0;
+    let recovered = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        if (String(input) === "https://models.dev/api.json") {
+          return new Response(null, { status: 404 });
+        }
+        providerRequests += 1;
+        return new Response(null, { status: recovered ? 200 : 503 });
+      }),
+    );
+    const runtime = new ProviderRuntimeState(config);
+    const registry = new CapabilityRegistry({ workspaceRoot: root, providerRuntime: runtime });
+
+    await expect(
+      registry.lookupModel("exhausted-model", "exhausted", "vercel-ai"),
+    ).resolves.toMatchObject({ chat: false });
+    expect(providerRequests).toBe(3);
+    expect(runtime.isCircuitOpen("exhausted")).toBe(true);
+
+    runtime.closeCircuit("exhausted");
+    recovered = true;
+    await expect(
+      registry.lookupModel("exhausted-model", "exhausted", "vercel-ai"),
+    ).resolves.toMatchObject({ chat: true });
+    expect(providerRequests).toBe(7);
+    delete process.env.EXHAUSTED_PROBE_KEY;
+  });
+
+  it("caches stable non-transient feature denials", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
+    tempDirs.push(root);
+    process.env.STABLE_PROBE_KEY = "probe-secret";
+    const config: Config = {
+      ROOT: root,
+      INBOX_ROOT: root,
+      SESSIONS_DIR: root,
+      AGENTS_DIR: root,
+      PROVIDER_ENDPOINT: "https://legacy.example/v1",
+      API_KEY_ENV: "LEGACY_KEY",
+      DEFAULT_MODEL: "stable-model",
+      MAX_CONCURRENT_AGENTS: 1,
+      PROVIDERS: [
+        {
+          id: "stable",
+          displayName: "Stable",
+          protocol: "openai",
+          baseUrl: "https://stable.example/v1",
+          apiKeyEnv: "STABLE_PROBE_KEY",
+          enabled: true,
+          priority: 0,
+        },
+      ],
+    };
+    let providerRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input) === "https://models.dev/api.json") {
+          return new Response(null, { status: 404 });
+        }
+        providerRequests += 1;
+        const body = typeof init?.body === "string" ? init.body : "";
+        return new Response(null, { status: body.includes('"tools"') ? 400 : 200 });
+      }),
+    );
+    const registry = new CapabilityRegistry({
+      workspaceRoot: root,
+      providerRuntime: new ProviderRuntimeState(config),
+    });
+
+    await expect(
+      registry.lookupModel("stable-model", "stable", "vercel-ai"),
+    ).resolves.toMatchObject({ chat: true, tools: false });
+    expect(providerRequests).toBe(4);
+    await registry.lookupModel("stable-model", "stable", "vercel-ai");
+    expect(providerRequests).toBe(4);
+    delete process.env.STABLE_PROBE_KEY;
   });
 
   it("updates shared circuit state from admitted probe HTTP outcomes only", async () => {
@@ -299,6 +462,25 @@ describe("CapabilityRegistry manual overrides", () => {
     });
     await transientRegistry.lookupModel("shared-model", "circuit-provider", "transient-sdk");
     expect(transientRuntime.isCircuitOpen("circuit-provider")).toBe(true);
+
+    const networkRoot = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
+    tempDirs.push(networkRoot);
+    const networkRuntime = new ProviderRuntimeState(config);
+    resetModelsDevCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        if (String(input) === "https://models.dev/api.json") {
+          return new Response(null, { status: 404 });
+        }
+        throw new Error("network unavailable");
+      }),
+    );
+    await new CapabilityRegistry({
+      workspaceRoot: networkRoot,
+      providerRuntime: networkRuntime,
+    }).lookupModel("shared-model", "circuit-provider", "network-sdk");
+    expect(networkRuntime.isCircuitOpen("circuit-provider")).toBe(false);
 
     const authRoot = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
     tempDirs.push(authRoot);

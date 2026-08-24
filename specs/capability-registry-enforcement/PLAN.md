@@ -44,5 +44,5 @@ Status: Implemented
 ### Phase 5: Fallback-safe capability ownership
 - **Objective**: Keep one capability decision safe across every runtime fallback and provider generation.
 - **Files/Symbols**: `CapabilityRegistry.lookupModel`, `probeCapabilities`, `CapabilityCache`, `ProviderRuntimeState`.
-- **Behavior**: Intersect every eligible target, admit each probe request through shared runtime policy, update shared circuits from HTTP outcomes, and bind durable entries to non-secret provider configuration identity.
-- **Verification**: Heterogeneous-provider intersection, numeric minimum/zero, request-admission/circuit, and endpoint/protocol cache invalidation tests.
+- **Behavior**: Intersect every eligible target using minimum-positive numeric bounds, admit each probe request/retry through shared runtime policy, cache only stable outcomes, update shared circuits from classified HTTP outcomes, and bind durable entries to non-secret provider configuration identity.
+- **Verification**: Heterogeneous-provider intersection, known-plus-unknown output cap, admitted retry recovery caching, exhausted-transient cache absence, stable 4xx caching, circuit classification, and endpoint/protocol cache invalidation tests.
