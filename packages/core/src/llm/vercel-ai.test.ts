@@ -218,6 +218,34 @@ describe("Vercel AI adapter", () => {
     await expect(consume()).rejects.toThrow("without a terminal finish");
   });
 
+  it.each([
+    ["text delta", { type: "text-delta", text: "late" }],
+    ["tool delta", { type: "tool-input-delta", id: "late-call", delta: "{}" }],
+    ["duplicate finish", { type: "finish", finishReason: "stop" }],
+  ])("rejects an SDK %s after its terminal finish without yielding it", async (_name, late) => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "finish", finishReason: "stop" };
+        yield late;
+      })(),
+    });
+    const client = createVercelAILLMClient(config);
+    const emitted: unknown[] = [];
+
+    const consume = async () => {
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+      })) {
+        emitted.push(chunk);
+      }
+    };
+
+    await expect(consume()).rejects.toThrow("after terminal finish");
+    expect(emitted).toEqual([expect.objectContaining({ type: "finish", finishReason: "stop" })]);
+  });
+
   it("passes cancellation through the AI SDK abortSignal option", async () => {
     const controller = new AbortController();
     const client = createVercelAILLMClient(config);

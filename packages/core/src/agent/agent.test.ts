@@ -914,6 +914,71 @@ describe("Agent streaming", () => {
 
     await expect(agent.run("go")).rejects.toThrow("without a terminal finish");
   });
+
+  it("cancels an iterator whose next call ignores the run signal and closes it", async () => {
+    const controller = new AbortController();
+    const next = vi.fn(() => new Promise<IteratorResult<never>>(() => undefined));
+    const close = vi.fn(async () => ({ done: true as const, value: undefined }));
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        chatStream() {
+          return {
+            [Symbol.asyncIterator]() {
+              return { next, return: close };
+            },
+          };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    const run = agent.run("go", [], controller.signal);
+    await vi.waitFor(() => expect(next).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(run).rejects.toBeInstanceOf(AgentCancelledError);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["text delta", { type: "text-delta" as const, text: "late" }],
+    [
+      "tool delta",
+      {
+        type: "tool-call-delta" as const,
+        toolCall: { id: "late-call", name: "count", argumentsDelta: "{}" },
+      },
+    ],
+    ["duplicate finish", { type: "finish" as const, finishReason: "stop" as const }],
+  ])(
+    "rejects a %s after the terminal finish without emitting or persisting it",
+    async (_name, late) => {
+      const onEvent = vi.fn();
+      const agent = new Agent(
+        { ...config, tools: [], maxSteps: 1 },
+        new ToolRegistry(),
+        {
+          async chat() {
+            throw new Error("blocking pathway must not run");
+          },
+          async *chatStream() {
+            yield { type: "finish" as const, finishReason: "stop" as const };
+            yield late;
+          },
+        },
+        streamingCapabilities(),
+        onEvent,
+      );
+
+      await expect(agent.run("go")).rejects.toThrow("after terminal finish");
+      expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: late.type }));
+    },
+  );
 });
 
 describe("Agent Capability Enforcement", () => {

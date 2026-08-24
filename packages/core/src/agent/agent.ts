@@ -230,9 +230,20 @@ export class Agent {
                 let finishedAt: number | undefined;
                 let streamFailed = false;
                 let streamFailure: unknown;
+                const streamIterator = this.llmClient
+                  .chatStream(chatParams)
+                  [Symbol.asyncIterator]();
 
                 try {
-                  for await (const chunk of this.llmClient.chatStream(chatParams)) {
+                  while (true) {
+                    const next = await nextStreamChunk(streamIterator, signal);
+                    if (next.done) break;
+                    const chunk = next.value;
+                    if (finishReason !== undefined) {
+                      throw new Error(
+                        `Provider stream emitted ${chunk.type} after terminal finish event`,
+                      );
+                    }
                     if (chunk.type === "text-delta") {
                       totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.text);
                       if (text.length + chunk.text.length > MAX_STREAM_TEXT_CHARS) {
@@ -303,6 +314,8 @@ export class Agent {
                   streamFailed = true;
                   streamFailure = error;
                   finishedAt = Date.now();
+                } finally {
+                  await streamIterator.return?.();
                 }
 
                 finishedAt ??= Date.now();
@@ -644,6 +657,28 @@ function ensureBoundedStreamField(value: string, maxBytes: number, label: string
   if (value.length > maxBytes || encodedBytes > maxBytes) {
     throw new Error(`Provider streamed ${label} limit exceeded (${maxBytes} bytes)`);
   }
+}
+
+function nextStreamChunk<T>(
+  iterator: AsyncIterator<T>,
+  signal: AbortSignal,
+): Promise<IteratorResult<T>> {
+  if (signal.aborted) return Promise.reject(new AgentCancelledError());
+  return new Promise<IteratorResult<T>>((resolve, reject) => {
+    let settled = false;
+    const finish = (operation: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      operation();
+    };
+    const abort = () => finish(() => reject(new AgentCancelledError()));
+    signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(iterator.next()).then(
+      (result) => finish(() => resolve(result)),
+      (error: unknown) => finish(() => reject(error)),
+    );
+  });
 }
 
 function waitForAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {

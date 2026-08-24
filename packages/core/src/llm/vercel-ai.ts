@@ -156,6 +156,9 @@ export function createVercelAILLMClient(
           let receivedFinish = false;
 
           for await (const chunk of result.fullStream) {
+            if (receivedFinish) {
+              throw new Error(`Provider stream emitted ${chunk.type} after terminal finish event`);
+            }
             if (chunk.type === "text-delta" && chunk.text) {
               streamHasStarted = true;
               yield { type: "text-delta", text: chunk.text };
@@ -186,6 +189,7 @@ export function createVercelAILLMClient(
               };
             } else if (chunk.type === "finish") {
               receivedFinish = true;
+              streamHasStarted = true;
               yield {
                 type: "finish",
                 finishReason: mapFinishReason(chunk.finishReason),

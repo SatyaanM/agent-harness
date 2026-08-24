@@ -127,6 +127,42 @@ describe("SessionRuntime delivery invariants", () => {
     expect(events).not.toContainEqual(expect.objectContaining({ text: "private thought" }));
   });
 
+  it("does not persist output emitted after a terminal stream event", async () => {
+    const sessionsDir = await makeDirectory();
+    const capabilities = new CapabilityRegistry({ workspaceRoot: sessionsDir });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: true,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+    const runtime = new SessionRuntime({
+      sessionId: "post-finish",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield { type: "finish" as const, finishReason: "stop" as const };
+          yield { type: "text-delta" as const, text: "must not persist" };
+        },
+      },
+      capabilityRegistry: capabilities,
+    });
+
+    await expect(runtime.deliver("go")).rejects.toThrow("after terminal finish");
+
+    const saved = await new SessionStore(sessionsDir).load("post-finish");
+    expect(saved?.messages).toEqual([expect.objectContaining({ role: "user", content: "go" })]);
+  });
+
   it("persists TTFT and token throughput in durable run metadata", async () => {
     vi.useFakeTimers();
     const db = createDatabaseConnection(":memory:");
