@@ -296,6 +296,96 @@ describe("SessionRuntime delivery invariants", () => {
     ]);
   });
 
+  it("treats a retry with no matching durable user as a fresh delivery", async () => {
+    const sessionsDir = await makeDirectory();
+    const runtime = new SessionRuntime({
+      sessionId: "retry-without-durable-user",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat: vi.fn(async () => stop("delivered")) },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await expect(runtime.retry("unknown delivery")).resolves.toEqual(
+      expect.objectContaining({ status: "success" }),
+    );
+
+    const saved = await new SessionStore(sessionsDir).load("retry-without-durable-user");
+    expect(saved?.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "unknown delivery"],
+      ["assistant", "delivered"],
+    ]);
+  });
+
+  it("does not replay matching content from before a newer durable user turn", async () => {
+    const sessionsDir = await makeDirectory();
+    const store = new SessionStore(sessionsDir);
+    await store.save(
+      createSessionData({
+        sessionId: "stale-matching-retry",
+        prompt: "newer prompt",
+        messages: [
+          { role: "user", content: "repeated prompt" },
+          { role: "assistant", content: "older answer" },
+          { role: "user", content: "newer prompt" },
+          { role: "assistant", content: "newer answer" },
+        ],
+      }),
+    );
+    const runtime = new SessionRuntime({
+      sessionId: "stale-matching-retry",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat: vi.fn(async () => stop("fresh answer")) },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await runtime.retry("repeated prompt");
+
+    const saved = await store.load("stale-matching-retry");
+    expect(saved?.messages.slice(-2).map((message) => [message.role, message.content])).toEqual([
+      ["user", "repeated prompt"],
+      ["assistant", "fresh answer"],
+    ]);
+  });
+
+  it("reconciles a queued retry after the original delivery becomes durable", async () => {
+    const sessionsDir = await makeDirectory();
+    const originalResponse = deferred<LLMResponse>();
+    const chat = vi
+      .fn<(params: LLMChatParams) => Promise<LLMResponse>>()
+      .mockImplementationOnce(() => originalResponse.promise)
+      .mockResolvedValueOnce(stop("retry complete"));
+    const runtime = new SessionRuntime({
+      sessionId: "queued-retry",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    const original = runtime.deliver("same prompt");
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
+    const retry = runtime.retry("same prompt");
+    originalResponse.resolve(stop("original complete"));
+
+    await expect(original).resolves.toEqual(expect.objectContaining({ status: "success" }));
+    await expect(retry).resolves.toEqual(expect.objectContaining({ status: "success" }));
+
+    const saved = await new SessionStore(sessionsDir).load("queued-retry");
+    expect(saved?.messages.filter((message) => message.role === "user")).toEqual([
+      expect.objectContaining({ content: "same prompt" }),
+    ]);
+    expect(saved?.messages.map((message) => message.content)).toEqual([
+      "same prompt",
+      "original complete",
+      "retry complete",
+    ]);
+  });
+
   it("drains worker completions together and removes delegate from a wake run", async () => {
     const sessionsDir = await makeDirectory();
     const store = new SessionStore(sessionsDir);

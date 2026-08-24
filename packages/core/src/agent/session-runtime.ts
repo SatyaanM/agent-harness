@@ -281,17 +281,17 @@ export class SessionRuntime {
         const persistedHistory = [...session.messages];
         let replayedUserIndex = -1;
         if (replayExistingUser) {
+          // Reconcile only against the latest durable user turn. Reaching past a
+          // newer user would mistake repeated text from an older turn for this
+          // request's unknown-delivery retry.
           for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
             const candidate = persistedHistory[index];
-            if (candidate?.role === "user" && candidate.content === message) {
-              replayedUserIndex = index;
-              break;
-            }
-          }
-          if (replayedUserIndex === -1) {
-            throw new Error("Cannot retry a message that is not present in the session transcript");
+            if (candidate?.role !== "user") continue;
+            if (candidate.content === message) replayedUserIndex = index;
+            break;
           }
         }
+        const isReplayingUser = replayedUserIndex !== -1;
 
         // History handed to the agent = the loaded transcript + the delivered
         // mailbox completions. The new user prompt is NOT included: agent.run
@@ -395,7 +395,7 @@ export class SessionRuntime {
               }
 
               // 4. Insert user message into SQLite messages table if present and not replayed
-              if (message && !replayExistingUser) {
+              if (message && !isReplayingUser) {
                 const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
                 messageRepo.create({
                   sessionId: this.options.sessionId,
@@ -460,7 +460,7 @@ export class SessionRuntime {
         session.messages = [
           ...persistedHistory,
           ...deliveredSystem,
-          ...(message && !replayExistingUser
+          ...(message && !isReplayingUser
             ? [{ role: "user" as const, content: message, createdAt: now }]
             : []),
         ];

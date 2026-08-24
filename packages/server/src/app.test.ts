@@ -1,7 +1,14 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseJsonBoundary, resetConfig, SessionRuntime } from "@agent-harness/core";
+import {
+  CapabilityRegistry,
+  parseJsonBoundary,
+  resetConfig,
+  SessionRuntime,
+  SessionStore,
+  ToolRegistry,
+} from "@agent-harness/core";
 import express, { type Express } from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -346,6 +353,54 @@ describe("upstream trust boundaries", () => {
       expect.any(String),
     );
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("persists an explicit retry as a fresh delivery when no durable user exists", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-chat-retry-"));
+    tempDirs.push(root);
+    const sessionsDir = path.join(root, "sessions");
+    const capabilities = new CapabilityRegistry({ workspaceRoot: root });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: false,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+    const runtime = new SessionRuntime({
+      sessionId: "retry-without-user",
+      sessionsDir,
+      resolveConfig: () => ({
+        name: "orchestrator",
+        model: "fake-model",
+        tools: [],
+        maxSteps: 2,
+        instructions: "Test retry delivery.",
+      }),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        chat: vi.fn(async () => ({
+          finishReason: "stop" as const,
+          message: { role: "assistant" as const, content: "delivered" },
+        })),
+      },
+      capabilityRegistry: capabilities,
+    });
+    vi.spyOn(sessionManager, "getOrCreate").mockReturnValue(runtime);
+
+    const res = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "retry-without-user", message: "unknown delivery", retry: true });
+
+    expect(res.text).toContain('"type":"done"');
+    const saved = await new SessionStore(sessionsDir).load("retry-without-user");
+    expect(saved?.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "unknown delivery"],
+      ["assistant", "delivered"],
+    ]);
   });
 
   it("does not expose voice-provider failures", async () => {
