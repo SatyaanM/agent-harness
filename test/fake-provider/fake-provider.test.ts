@@ -1,3 +1,4 @@
+import { type Config, createVercelAILLMClient, MAX_STREAM_DELTA_BYTES } from "@agent-harness/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createFakeProviderServer, type FakeServerInstance } from "./index.js";
@@ -48,6 +49,19 @@ const AnthropicResponseSchema = z.object({
 
 describe("Fake LLM Provider Service", () => {
   let fakeServer: FakeServerInstance;
+
+  function adapterConfig(): Config {
+    return {
+      ROOT: process.cwd(),
+      INBOX_ROOT: process.cwd(),
+      SESSIONS_DIR: process.cwd(),
+      AGENTS_DIR: process.cwd(),
+      PROVIDER_ENDPOINT: `${fakeServer.url}/v1`,
+      API_KEY_ENV: "FAKE_PROVIDER_API_KEY",
+      DEFAULT_MODEL: "gpt-4o",
+      MAX_CONCURRENT_AGENTS: 1,
+    };
+  }
 
   beforeEach(async () => {
     resetScenarioCallCounts();
@@ -150,6 +164,52 @@ describe("Fake LLM Provider Service", () => {
     const raw = await res.text();
     expect(raw).toContain("data: ");
     expect(raw).toContain("[DONE]");
+  });
+
+  it("streams the provider wire contract through the production AI SDK adapter", async () => {
+    const client = createVercelAILLMClient(adapterConfig());
+    const chunks = [];
+    if (!client.chatStream) throw new Error("streaming adapter is unavailable");
+
+    for await (const chunk of client.chatStream({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: "E2E_SCENARIO:streaming-reply" }],
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === "text-delta")
+        .map((chunk) => chunk.text)
+        .join(""),
+    ).toBe("This is a deterministic streaming response from the fake LLM test provider.");
+    const textDeltas = chunks.filter((chunk) => chunk.type === "text-delta");
+    expect(textDeltas.length).toBeGreaterThan(0);
+    expect(
+      textDeltas.every(
+        (chunk) => new TextEncoder().encode(chunk.text).byteLength <= MAX_STREAM_DELTA_BYTES,
+      ),
+    ).toBe(true);
+    expect(chunks.at(-1)).toEqual(
+      expect.objectContaining({ type: "finish", finishReason: "stop" }),
+    );
+  });
+
+  it("rejects an abrupt provider disconnect after streaming begins", async () => {
+    const client = createVercelAILLMClient(adapterConfig());
+    if (!client.chatStream) throw new Error("streaming adapter is unavailable");
+
+    const consume = async () => {
+      for await (const _chunk of client.chatStream({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: "E2E_SCENARIO:mid-stream-disconnect" }],
+      })) {
+        // Consume until the transport disconnect is observed.
+      }
+    };
+
+    await expect(consume()).rejects.toThrow();
   });
 
   it("handles Anthropic /v1/messages protocol", async () => {

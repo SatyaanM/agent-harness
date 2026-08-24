@@ -538,6 +538,519 @@ describe("Agent tool boundary", () => {
   });
 });
 
+describe("Agent streaming", () => {
+  function streamingCapabilities(): CapabilityRegistry {
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: true,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+    return capabilities;
+  }
+
+  it("passes the configured provider override to the streaming call", async () => {
+    const observedParams: unknown[] = [];
+    const agent = new Agent(
+      { ...config, provider: "preferred-provider", tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream(params) {
+          observedParams.push(params);
+          yield { type: "finish" as const, finishReason: "stop" as const };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    await agent.run("go");
+
+    expect(observedParams).toEqual([
+      expect.objectContaining({ preferredProviderId: "preferred-provider" }),
+    ]);
+  });
+
+  it("assembles the same transcript as the blocking pathway", async () => {
+    const streamed = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield { type: "text-delta" as const, text: "byte-" };
+          yield { type: "text-delta" as const, text: "exact" };
+          yield {
+            type: "finish" as const,
+            finishReason: "stop" as const,
+            usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+          };
+        },
+      },
+      streamingCapabilities(),
+    );
+    const blocking = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          return {
+            finishReason: "stop" as const,
+            message: { role: "assistant" as const, content: "byte-exact" },
+            usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+          };
+        },
+      },
+      (() => {
+        const capabilities = streamingCapabilities();
+        vi.mocked(capabilities.lookup).mockResolvedValueOnce({
+          chat: true,
+          tools: true,
+          vision: true,
+          streaming: false,
+          structuredOutputs: true,
+          promptCaching: false,
+          reasoning: false,
+          maxTokens: 0,
+        });
+        return capabilities;
+      })(),
+    );
+
+    const [streamedResult, blockingResult] = await Promise.all([
+      streamed.run("go"),
+      blocking.run("go"),
+    ]);
+
+    expect(streamedResult.messages).toEqual(blockingResult.messages);
+  });
+
+  it("assembles streamed reasoning into the durable assistant transcript", async () => {
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield { type: "reasoning-delta" as const, reasoning: "private " };
+          yield { type: "reasoning-delta" as const, reasoning: "thought" };
+          yield { type: "text-delta" as const, text: "answer" };
+          yield { type: "finish" as const, finishReason: "stop" as const };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    const result = await agent.run("go");
+    expect(result.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: "answer",
+      reasoning: "private thought",
+    });
+  });
+
+  it("rejects cumulative streamed text before emitting excess output", async () => {
+    const onEvent = vi.fn();
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          for (let index = 0; index < 20; index++) {
+            yield { type: "text-delta" as const, text: "a".repeat(50_000) };
+          }
+          yield { type: "text-delta" as const, text: "b" };
+          yield { type: "finish" as const, finishReason: "stop" as const };
+        },
+      },
+      streamingCapabilities(),
+      onEvent,
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("streamed text limit");
+    expect(onEvent).toHaveBeenCalledTimes(21); // 20 text deltas plus stream metrics
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "text-delta", text: expect.stringMatching(/^b/) }),
+    );
+  });
+
+  it("rejects oversized streamed tool arguments before executing the tool", async () => {
+    const execute = vi.fn(async () => "must not execute");
+    const onEvent = vi.fn();
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ value: z.string() }),
+      execute,
+    });
+    const agent = new Agent(
+      config,
+      tools,
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield {
+            type: "tool-call-delta" as const,
+            toolCall: { id: "call-1", name: "count", argumentsDelta: '{"value":"' },
+          };
+          for (let index = 0; index < 20; index++) {
+            yield {
+              type: "tool-call-delta" as const,
+              toolCall: { id: "call-1", name: "count", argumentsDelta: "x".repeat(50_000) },
+            };
+          }
+          yield { type: "finish" as const, finishReason: "tool-calls" as const };
+        },
+      },
+      streamingCapabilities(),
+      onEvent,
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("tool argument limit");
+    expect(execute).not.toHaveBeenCalled();
+    expect(onEvent.mock.calls.filter(([event]) => event.type === "tool-call-delta")).toHaveLength(
+      20,
+    ); // start fragment plus 19 accepted chunks; the excess chunk is never emitted
+  });
+
+  it("rejects excessive distinct streamed tool calls before emitting the excess call", async () => {
+    const onEvent = vi.fn();
+    const agent = new Agent(
+      { ...config, maxToolCalls: 2 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          for (let index = 1; index <= 3; index++) {
+            yield {
+              type: "tool-call-delta" as const,
+              toolCall: { id: `call-${index}`, name: "count", argumentsDelta: "{}" },
+            };
+          }
+          yield { type: "finish" as const, finishReason: "tool-calls" as const };
+        },
+      },
+      streamingCapabilities(),
+      onEvent,
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("tool-call count limit");
+    expect(onEvent.mock.calls.filter(([event]) => event.type === "tool-call-delta")).toHaveLength(
+      2,
+    );
+  });
+
+  it("counts UTF-8 bytes before emitting a multibyte stream delta", async () => {
+    const onEvent = vi.fn();
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield { type: "text-delta" as const, text: "😀".repeat(20_000) };
+          yield { type: "finish" as const, finishReason: "stop" as const };
+        },
+      },
+      streamingCapabilities(),
+      onEvent,
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("delta byte limit");
+    expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "text-delta" }));
+  });
+
+  it.each([
+    ["tool call id", { id: "x".repeat(257), name: "count" }],
+    ["tool name", { id: "call-1", name: "😀".repeat(33) }],
+  ])("rejects an oversized streamed %s before retaining or emitting it", async (label, fields) => {
+    const onEvent = vi.fn();
+    const agent = new Agent(
+      config,
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield {
+            type: "tool-call-delta" as const,
+            toolCall: { ...fields, argumentsDelta: "{}" },
+          };
+          yield { type: "finish" as const, finishReason: "tool-calls" as const };
+        },
+      },
+      streamingCapabilities(),
+      onEvent,
+    );
+
+    await expect(agent.run("go")).rejects.toThrow(`${label} limit`);
+    expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "tool-call-delta" }));
+  });
+
+  it("rejects excess cumulative delta bytes before emitting or executing them", async () => {
+    const execute = vi.fn(async () => "must not execute");
+    const onEvent = vi.fn();
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ value: z.string() }),
+      execute,
+    });
+    const agent = new Agent(
+      { ...config, maxToolCalls: 64 },
+      tools,
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          for (let toolIndex = 0; toolIndex < 10; toolIndex++) {
+            for (let chunkIndex = 0; chunkIndex < 19; chunkIndex++) {
+              yield {
+                type: "tool-call-delta" as const,
+                toolCall: {
+                  id: `c${toolIndex}`,
+                  name: "count",
+                  argumentsDelta: "x".repeat(50_000),
+                },
+              };
+            }
+          }
+          for (let chunkIndex = 0; chunkIndex < 9; chunkIndex++) {
+            yield {
+              type: "tool-call-delta" as const,
+              toolCall: { id: "excess", name: "count", argumentsDelta: "x".repeat(50_000) },
+            };
+          }
+          yield {
+            type: "tool-call-delta" as const,
+            toolCall: { id: "excess", name: "count", argumentsDelta: "y".repeat(50_000) },
+          };
+          yield { type: "finish" as const, finishReason: "tool-calls" as const };
+        },
+      },
+      streamingCapabilities(),
+      onEvent,
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("total delta byte limit");
+    expect(execute).not.toHaveBeenCalled();
+    expect(
+      onEvent.mock.calls.some(
+        ([event]) =>
+          event.type === "tool-call-delta" && event.toolCall.argumentsDelta.startsWith("y"),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects malformed streamed tool JSON before executing the tool", async () => {
+    const execute = vi.fn(async () => "should not execute");
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute,
+    });
+    const agent = new Agent(
+      config,
+      tools,
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield {
+            type: "tool-call-delta" as const,
+            toolCall: { id: "call-1", name: "count", argumentsDelta: "{bad" },
+          };
+          yield { type: "finish" as const, finishReason: "tool-calls" as const };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("Failed to parse tool call arguments");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("requires a terminal finish event from every streaming client", async () => {
+    const agent = new Agent(
+      { ...config, tools: [] },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield { type: "text-delta" as const, text: "partial" };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("without a terminal finish");
+  });
+
+  it("cancels an iterator whose next call ignores the run signal and closes it", async () => {
+    const controller = new AbortController();
+    const next = vi.fn(() => new Promise<IteratorResult<never>>(() => undefined));
+    const close = vi.fn(async () => ({ done: true as const, value: undefined }));
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        chatStream() {
+          return {
+            [Symbol.asyncIterator]() {
+              return { next, return: close };
+            },
+          };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    const run = agent.run("go", [], controller.signal);
+    await vi.waitFor(() => expect(next).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(run).rejects.toBeInstanceOf(AgentCancelledError);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("settles cancellation when a real async generator queues return behind unresolved next", async () => {
+    const controller = new AbortController();
+    const entered = vi.fn();
+    async function* stuckProvider() {
+      entered();
+      await new Promise<void>(() => undefined);
+      yield { type: "finish" as const, finishReason: "stop" as const };
+    }
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        chatStream: stuckProvider,
+      },
+      streamingCapabilities(),
+    );
+
+    const run = agent.run("go", [], controller.signal);
+    await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(run).rejects.toBeInstanceOf(AgentCancelledError);
+  });
+
+  it("preserves the primary stream error and handles a late cleanup rejection", async () => {
+    const primary = new Error("primary provider failure");
+    let rejectCleanup: ((reason: unknown) => void) | undefined;
+    const cleanup = new Promise<IteratorResult<never>>((_resolve, reject) => {
+      rejectCleanup = reject;
+    });
+    const close = vi.fn(() => cleanup);
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const agent = new Agent(
+        { ...config, tools: [], maxSteps: 1 },
+        new ToolRegistry(),
+        {
+          async chat() {
+            throw new Error("blocking pathway must not run");
+          },
+          chatStream() {
+            return {
+              [Symbol.asyncIterator]() {
+                return {
+                  next: async () => {
+                    throw primary;
+                  },
+                  return: close,
+                };
+              },
+            };
+          },
+        },
+        streamingCapabilities(),
+      );
+
+      await expect(agent.run("go")).rejects.toBe(primary);
+      expect(close).toHaveBeenCalledOnce();
+      rejectCleanup?.(new Error("late cleanup failure"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it.each([
+    ["text delta", { type: "text-delta" as const, text: "late" }],
+    [
+      "tool delta",
+      {
+        type: "tool-call-delta" as const,
+        toolCall: { id: "late-call", name: "count", argumentsDelta: "{}" },
+      },
+    ],
+    ["duplicate finish", { type: "finish" as const, finishReason: "stop" as const }],
+  ])(
+    "rejects a %s after the terminal finish without emitting or persisting it",
+    async (_name, late) => {
+      const onEvent = vi.fn();
+      const agent = new Agent(
+        { ...config, tools: [], maxSteps: 1 },
+        new ToolRegistry(),
+        {
+          async chat() {
+            throw new Error("blocking pathway must not run");
+          },
+          async *chatStream() {
+            yield { type: "finish" as const, finishReason: "stop" as const };
+            yield late;
+          },
+        },
+        streamingCapabilities(),
+        onEvent,
+      );
+
+      await expect(agent.run("go")).rejects.toThrow("after terminal finish");
+      expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: late.type }));
+    },
+  );
+});
+
 describe("Agent Capability Enforcement", () => {
   it("accepts one pre-resolved matrix and skips a duplicate lookup", async () => {
     const chat = vi.fn<LLMClient["chat"]>(async () => ({

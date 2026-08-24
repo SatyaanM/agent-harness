@@ -129,7 +129,7 @@ export default function RuntimeSync() {
         currentSessions.map(async (s) => {
           const latest = await fetchSession(s.sessionId).catch(() => null);
           if (latest) {
-            useSessionStore.getState().syncFromServer(latest);
+            useSessionStore.getState().confirmFromServer(latest);
           }
         }),
       );

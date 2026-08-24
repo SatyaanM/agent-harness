@@ -1,5 +1,6 @@
 import {
   AgentConfigSchema,
+  ChatStreamEventSchema,
   PluginManifestSchema as CorePluginManifestSchema,
   MAX_INBOX_FILE_RESPONSE_BYTES,
   MAX_SESSION_METADATA_RESPONSE_BYTES,
@@ -51,11 +52,6 @@ const OpenSessionResultSchema = z.object({
 const ErrorEnvelopeSchema = z.object({
   error: z.union([z.string(), z.object({ message: z.string() }).passthrough()]),
 });
-const ChatStreamEventSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text-delta"), text: z.string() }).strict(),
-  z.object({ type: z.literal("done") }).strict(),
-  z.object({ type: z.literal("error"), error: z.string() }).strict(),
-]);
 export type ChatStreamEvent = z.infer<typeof ChatStreamEventSchema>;
 
 async function parseJsonResponse<TSchema extends z.ZodTypeAny>(
@@ -272,7 +268,7 @@ export async function sendMessage(
   sessionId: string,
   content: string,
   agentName?: string,
-  options?: { retry?: true },
+  options?: { retry?: true; deliveryId?: string },
 ): Promise<ReadableStream<Uint8Array> | null> {
   const res = await fetch(`${BASE_URL}/api/chat`, {
     method: "POST",

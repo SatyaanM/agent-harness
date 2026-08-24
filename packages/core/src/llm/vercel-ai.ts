@@ -1,12 +1,12 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, tool, zodSchema } from "ai";
+import { generateText, streamText, tool, zodSchema } from "ai";
 import type { Message } from "../agent/types.js";
 import type { Config } from "../config.js";
 import { createLogger } from "../contracts/logging.js";
 import type { ProviderTarget } from "../provider-registry.js";
 import { ProviderRuntimeState } from "../provider-runtime.js";
-import type { LLMChatParams, LLMClient, LLMResponse } from "./client.js";
+import type { LLMChatParams, LLMClient, LLMResponse, LLMStreamDelta } from "./client.js";
 
 const logger = createLogger("core.llm.provider-router");
 
@@ -84,6 +84,150 @@ export function createVercelAILLMClient(
         );
       }
 
+      throw new Error(`All eligible providers failed. Last error: ${lastError?.message}`, {
+        cause: lastError,
+      });
+    },
+
+    async *chatStream(params: LLMChatParams): AsyncIterable<LLMStreamDelta> {
+      const eligibleTargets = providerRuntime.registry.resolveTargets(
+        params.model,
+        params.preferredProviderId,
+      );
+      if (eligibleTargets.length === 0) {
+        throw new Error(`No eligible provider found for model ${params.model}`);
+      }
+
+      const system = buildSystem(params);
+      const messages = convertMessages(params.messages);
+      const tools = buildTools(params);
+
+      let lastError: Error | null = null;
+      let attempt = 0;
+      const estimatedTokens = estimateAdmissionTokens(params);
+
+      for (const target of eligibleTargets) {
+        const { provider } = target;
+        if (providerRuntime.isCircuitOpen(provider.id)) continue;
+
+        const admissionError = reserveTarget(providerRuntime, target, estimatedTokens);
+        if (admissionError) {
+          lastError = admissionError;
+          attempt++;
+          continue;
+        }
+
+        const apiKey = process.env[provider.apiKeyEnv] ?? "";
+        const model =
+          target.protocol === "anthropic"
+            ? createAnthropic({ baseURL: provider.baseUrl, apiKey })(target.modelId)
+            : createOpenAI({ baseURL: provider.baseUrl, apiKey }).chat(target.modelId);
+        const cacheOptions = { anthropic: { cacheControl: { type: "ephemeral" as const } } };
+        const useAnthropicCache = target.protocol === "anthropic" && params.promptCaching === true;
+
+        let streamHasStarted = false;
+        try {
+          if (attempt > 0) {
+            const backoff = Math.min(2 ** (attempt - 1) * 1000, 5000);
+            await delay(backoff, params.signal);
+          }
+
+          const result = streamText({
+            model,
+            messages,
+            ...(system && useAnthropicCache
+              ? {
+                  instructions: {
+                    role: "system" as const,
+                    content: system,
+                    providerOptions: cacheOptions,
+                  },
+                }
+              : system
+                ? { system }
+                : {}),
+            ...(useAnthropicCache ? { providerOptions: cacheOptions } : {}),
+            ...(tools ? { tools } : {}),
+            ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
+            ...(params.signal ? { abortSignal: params.signal } : {}),
+          });
+
+          const activeToolCalls = new Map<string, string>();
+          let receivedFinish = false;
+
+          for await (const chunk of result.fullStream) {
+            if (receivedFinish) {
+              throw new Error(`Provider stream emitted ${chunk.type} after terminal finish event`);
+            }
+            if (chunk.type === "text-delta" && chunk.text) {
+              streamHasStarted = true;
+              yield { type: "text-delta", text: chunk.text };
+            } else if (chunk.type === "reasoning-delta" && chunk.text) {
+              streamHasStarted = true;
+              yield { type: "reasoning-delta", reasoning: chunk.text };
+            } else if (chunk.type === "tool-input-start") {
+              streamHasStarted = true;
+              activeToolCalls.set(chunk.id, chunk.toolName);
+              yield {
+                type: "tool-call-delta",
+                toolCall: {
+                  id: chunk.id,
+                  name: chunk.toolName,
+                  argumentsDelta: "",
+                },
+              };
+            } else if (chunk.type === "tool-input-delta") {
+              streamHasStarted = true;
+              const name = activeToolCalls.get(chunk.id) || "unknown";
+              yield {
+                type: "tool-call-delta",
+                toolCall: {
+                  id: chunk.id,
+                  name,
+                  argumentsDelta: chunk.delta,
+                },
+              };
+            } else if (chunk.type === "finish") {
+              receivedFinish = true;
+              streamHasStarted = true;
+              yield {
+                type: "finish",
+                finishReason: mapFinishReason(chunk.finishReason),
+                usage: chunk.totalUsage
+                  ? {
+                      inputTokens: chunk.totalUsage.inputTokens ?? 0,
+                      outputTokens: chunk.totalUsage.outputTokens ?? 0,
+                      totalTokens: chunk.totalUsage.totalTokens ?? 0,
+                    }
+                  : undefined,
+              };
+            } else if (chunk.type === "error") {
+              throw chunk.error instanceof Error
+                ? chunk.error
+                : new Error(`Provider stream failed: ${String(chunk.error)}`);
+            } else if (chunk.type === "abort") {
+              throw new DOMException("Provider stream aborted", "AbortError");
+            }
+          }
+
+          if (!receivedFinish) {
+            throw new Error("Provider stream ended without a terminal finish event");
+          }
+
+          providerRuntime.closeCircuit(provider.id);
+          return;
+        } catch (error: unknown) {
+          if (streamHasStarted) throw error;
+          lastError = recordTransientFailure(providerRuntime, target, params, error);
+          attempt++;
+        }
+      }
+
+      if (attempt === 0) {
+        throw new Error(
+          "All eligible providers are temporarily unavailable (circuit breakers open)",
+        );
+      }
       throw new Error(`All eligible providers failed. Last error: ${lastError?.message}`, {
         cause: lastError,
       });

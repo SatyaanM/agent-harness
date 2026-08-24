@@ -1,4 +1,4 @@
-export type { AgentEventCallback } from "./agent/agent.js";
+export type { AgentEventCallback, StreamPerformanceMetrics } from "./agent/agent.js";
 export { Agent } from "./agent/agent.js";
 export type { DelegationDeps } from "./agent/delegation.js";
 export { createDelegateTool, createReadSessionTool } from "./agent/delegation.js";
@@ -60,6 +60,17 @@ export {
 } from "./contracts/limits.js";
 export type { Logger, LogLevel, LogRecord, LogSink } from "./contracts/logging.js";
 export { consoleSink, createLogger } from "./contracts/logging.js";
+export type { ChatStreamEvent } from "./contracts/streaming.js";
+export {
+  ChatStreamEventSchema,
+  MAX_STREAM_DELTA_BYTES,
+  MAX_STREAM_REASONING_CHARS,
+  MAX_STREAM_TEXT_CHARS,
+  MAX_STREAM_TOOL_ARGUMENT_CHARS,
+  MAX_STREAM_TOOL_CALL_ID_BYTES,
+  MAX_STREAM_TOOL_NAME_BYTES,
+  MAX_STREAM_TOTAL_DELTA_BYTES,
+} from "./contracts/streaming.js";
 export type {
   AttributeValue,
   ISpan,

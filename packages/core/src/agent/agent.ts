@@ -1,12 +1,23 @@
 import type { CapabilityRegistry } from "../capability/registry.js";
 import { describeError } from "../contracts/errors.js";
 import { createLogger, type Logger } from "../contracts/logging.js";
+import {
+  MAX_STREAM_DELTA_BYTES,
+  MAX_STREAM_REASONING_CHARS,
+  MAX_STREAM_TEXT_CHARS,
+  MAX_STREAM_TOOL_ARGUMENT_CHARS,
+  MAX_STREAM_TOOL_CALL_ID_BYTES,
+  MAX_STREAM_TOOL_NAME_BYTES,
+  MAX_STREAM_TOTAL_DELTA_BYTES,
+} from "../contracts/streaming.js";
 import { getTracer, SpanKind, SpanStatusCode } from "../contracts/tracing.js";
 import {
   type LLMClient,
+  type LLMFinishReason,
   type LLMResponse,
   LLMResponseSchema,
   type LLMToolDefinition,
+  type LLMUsage,
 } from "../llm/client.js";
 
 import type { ToolRegistry } from "../tool/types.js";
@@ -27,14 +38,25 @@ const DEFAULT_MAX_TOOL_RESULT_CHARS = 100_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
 const DEFAULT_MAX_TOTAL_TOKENS = 100_000;
 const DEFAULT_RUN_TIMEOUT_MS = 300_000;
+const STREAM_ITERATOR_CLEANUP_TIMEOUT_MS = 100;
 
 export type AgentEventCallback = (
   event:
     | { type: "tool:called"; toolName: string; args?: Record<string, unknown> }
     | { type: "tool:completed"; toolName: string; result?: string }
     | { type: "step"; messages: Message[] }
-    | { type: "capability-mismatch"; detail: string },
+    | { type: "capability-mismatch"; detail: string }
+    | { type: "text-delta"; text: string }
+    | { type: "tool-call-delta"; toolCall: { id: string; name: string; argumentsDelta: string } }
+    | { type: "stream-metrics"; metrics: StreamPerformanceMetrics },
 ) => void;
+
+export interface StreamPerformanceMetrics {
+  ttftMs: number | null;
+  tokensPerSecond: number | null;
+  outputTokens: number;
+  durationMs: number;
+}
 
 export class Agent {
   private messages: Message[] = [];
@@ -185,17 +207,174 @@ export class Agent {
 
           let response: LLMResponse;
           try {
+            const chatParams = {
+              messages: finalMessages,
+              system: finalSystem,
+              model: this.config.model,
+              ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
+              ...(llmTools ? { tools: llmTools } : {}),
+              maxOutputTokens,
+              promptCaching: matrix.promptCaching,
+              signal,
+            };
+
             const rawResponse = await tracer.withSpan(llmSpan, async () => {
-              return await this.llmClient.chat({
-                messages: finalMessages,
-                system: finalSystem,
-                model: this.config.model,
-                ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
-                ...(llmTools ? { tools: llmTools } : {}),
-                maxOutputTokens,
-                promptCaching: matrix.promptCaching,
-                signal,
-              });
+              if (matrix.streaming && this.llmClient.chatStream) {
+                let text = "";
+                let reasoning = "";
+                const toolCallsMap = new Map<string, { name: string; argsText: string }>();
+                let totalDeltaBytes = 0;
+                let finishReason: LLMFinishReason | undefined;
+                let usage: LLMUsage | undefined;
+                const streamStartedAt = Date.now();
+                let firstTokenAt: number | undefined;
+                let finishedAt: number | undefined;
+                let streamFailed = false;
+                let streamFailure: unknown;
+                const streamIterator = this.llmClient
+                  .chatStream(chatParams)
+                  [Symbol.asyncIterator]();
+
+                try {
+                  while (true) {
+                    const next = await nextStreamChunk(streamIterator, signal);
+                    if (next.done) break;
+                    const chunk = next.value;
+                    if (finishReason !== undefined) {
+                      throw new Error(
+                        `Provider stream emitted ${chunk.type} after terminal finish event`,
+                      );
+                    }
+                    if (chunk.type === "text-delta") {
+                      totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.text);
+                      if (text.length + chunk.text.length > MAX_STREAM_TEXT_CHARS) {
+                        throw new Error(
+                          `Provider streamed text limit exceeded (${MAX_STREAM_TEXT_CHARS} characters)`,
+                        );
+                      }
+                      firstTokenAt ??= Date.now();
+                      text += chunk.text;
+                      this.onEvent?.(chunk);
+                    } else if (chunk.type === "reasoning-delta") {
+                      totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.reasoning);
+                      if (reasoning.length + chunk.reasoning.length > MAX_STREAM_REASONING_CHARS) {
+                        throw new Error(
+                          `Provider streamed reasoning limit exceeded (${MAX_STREAM_REASONING_CHARS} characters)`,
+                        );
+                      }
+                      reasoning += chunk.reasoning;
+                    } else if (chunk.type === "tool-call-delta") {
+                      if (chunk.toolCall) {
+                        ensureBoundedStreamField(
+                          chunk.toolCall.id,
+                          MAX_STREAM_TOOL_CALL_ID_BYTES,
+                          "tool call id",
+                        );
+                        ensureBoundedStreamField(
+                          chunk.toolCall.name,
+                          MAX_STREAM_TOOL_NAME_BYTES,
+                          "tool name",
+                        );
+                        totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.toolCall.id);
+                        totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.toolCall.name);
+                        totalDeltaBytes = addStreamDeltaBytes(
+                          totalDeltaBytes,
+                          chunk.toolCall.argumentsDelta,
+                        );
+                        const existing = toolCallsMap.get(chunk.toolCall.id) || {
+                          name: chunk.toolCall.name,
+                          argsText: "",
+                        };
+                        if (
+                          !toolCallsMap.has(chunk.toolCall.id) &&
+                          toolCallsMap.size >= maxToolCalls
+                        ) {
+                          throw new Error(
+                            `Provider streamed tool-call count limit exceeded (${maxToolCalls})`,
+                          );
+                        }
+                        if (
+                          existing.argsText.length + chunk.toolCall.argumentsDelta.length >
+                          MAX_STREAM_TOOL_ARGUMENT_CHARS
+                        ) {
+                          throw new Error(
+                            `Provider streamed tool argument limit exceeded (${MAX_STREAM_TOOL_ARGUMENT_CHARS} characters)`,
+                          );
+                        }
+                        existing.argsText += chunk.toolCall.argumentsDelta;
+                        toolCallsMap.set(chunk.toolCall.id, existing);
+                        this.onEvent?.(chunk);
+                      }
+                    } else if (chunk.type === "finish") {
+                      finishReason = chunk.finishReason;
+                      usage = chunk.usage;
+                      finishedAt = Date.now();
+                    }
+                  }
+                } catch (error) {
+                  streamFailed = true;
+                  streamFailure = error;
+                  finishedAt = Date.now();
+                } finally {
+                  await closeStreamIterator(streamIterator);
+                }
+
+                finishedAt ??= Date.now();
+                const outputTokens = usage?.outputTokens ?? Math.ceil(text.length / 4);
+                const durationMs = Math.max(0, finishedAt - streamStartedAt);
+                const generationMs =
+                  firstTokenAt === undefined ? 0 : Math.max(0, finishedAt - firstTokenAt);
+                const metrics: StreamPerformanceMetrics = {
+                  ttftMs: firstTokenAt === undefined ? null : firstTokenAt - streamStartedAt,
+                  tokensPerSecond:
+                    firstTokenAt === undefined || outputTokens === 0
+                      ? null
+                      : outputTokens / Math.max(generationMs / 1_000, 0.001),
+                  outputTokens,
+                  durationMs,
+                };
+                llmSpan.setAttributes({
+                  ...(metrics.ttftMs === null
+                    ? {}
+                    : { "gen_ai.performance.time_to_first_token_ms": metrics.ttftMs }),
+                  ...(metrics.tokensPerSecond === null
+                    ? {}
+                    : {
+                        "gen_ai.performance.output_tokens_per_second": metrics.tokensPerSecond,
+                      }),
+                });
+                this.onEvent?.({ type: "stream-metrics", metrics });
+
+                if (streamFailed) throw streamFailure;
+                if (!finishReason) {
+                  throw new Error("Provider stream ended without a terminal finish event");
+                }
+
+                const toolCalls = Array.from(toolCallsMap.entries()).map(([id, tc]) => {
+                  try {
+                    return { toolCallId: id, toolName: tc.name, args: JSON.parse(tc.argsText) };
+                  } catch (err) {
+                    throw new Error(
+                      `Failed to parse tool call arguments for ${tc.name} (${id}): ${err instanceof Error ? err.message : String(err)}`,
+                      { cause: err },
+                    );
+                  }
+                });
+
+                return {
+                  message: {
+                    role: "assistant",
+                    content: text,
+                    ...(reasoning ? { reasoning } : {}),
+                    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+                  },
+                  finishReason,
+                  ...(toolCalls.length > 0 ? { toolCalls } : {}),
+                  ...(usage ? { usage } : {}),
+                };
+              } else {
+                return await this.llmClient.chat(chatParams);
+              }
             });
 
             const parsed = parseBoundary(LLMResponseSchema, rawResponse, "provider response");
@@ -458,6 +637,74 @@ export class Agent {
       messages: [...this.messages],
     };
   }
+}
+
+function addStreamDeltaBytes(totalBytes: number, delta: string): number {
+  const deltaBytes = new TextEncoder().encode(delta).byteLength;
+  if (deltaBytes > MAX_STREAM_DELTA_BYTES) {
+    throw new Error(`Provider stream delta byte limit exceeded (${MAX_STREAM_DELTA_BYTES} bytes)`);
+  }
+  const nextTotal = totalBytes + deltaBytes;
+  if (nextTotal > MAX_STREAM_TOTAL_DELTA_BYTES) {
+    throw new Error(
+      `Provider stream total delta byte limit exceeded (${MAX_STREAM_TOTAL_DELTA_BYTES} bytes)`,
+    );
+  }
+  return nextTotal;
+}
+
+function ensureBoundedStreamField(value: string, maxBytes: number, label: string): void {
+  const encodedBytes = new TextEncoder().encode(value).byteLength;
+  if (value.length > maxBytes || encodedBytes > maxBytes) {
+    throw new Error(`Provider streamed ${label} limit exceeded (${maxBytes} bytes)`);
+  }
+}
+
+function nextStreamChunk<T>(
+  iterator: AsyncIterator<T>,
+  signal: AbortSignal,
+): Promise<IteratorResult<T>> {
+  if (signal.aborted) return Promise.reject(new AgentCancelledError());
+  return new Promise<IteratorResult<T>>((resolve, reject) => {
+    let settled = false;
+    const finish = (operation: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      operation();
+    };
+    const abort = () => finish(() => reject(new AgentCancelledError()));
+    signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(iterator.next()).then(
+      (result) => finish(() => resolve(result)),
+      (error: unknown) => finish(() => reject(error)),
+    );
+  });
+}
+
+async function closeStreamIterator<T>(iterator: AsyncIterator<T>): Promise<void> {
+  if (!iterator.return) return;
+
+  let cleanup: Promise<IteratorResult<T>>;
+  try {
+    cleanup = Promise.resolve(iterator.return());
+  } catch {
+    return;
+  }
+
+  // Attach both handlers immediately. If cleanup remains queued behind an
+  // uncooperative `next()`, a later rejection is still observed and cannot
+  // become an unhandled rejection after the bounded wait has elapsed.
+  const handledCleanup = cleanup.then(
+    () => undefined,
+    () => undefined,
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const cleanupDeadline = new Promise<void>((resolve) => {
+    timeout = setTimeout(resolve, STREAM_ITERATOR_CLEANUP_TIMEOUT_MS);
+  });
+  await Promise.race([handledCleanup, cleanupDeadline]);
+  if (timeout !== undefined) clearTimeout(timeout);
 }
 
 function waitForAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {

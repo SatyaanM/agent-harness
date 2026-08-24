@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  ChatStreamEventSchema,
   createLogger,
   describeError,
   getTracer,
@@ -24,6 +25,7 @@ const ChatRequestSchema = z
     message: z.string().min(1).max(1_000_000),
     agentName: IdentifierSchema.optional(),
     retry: z.literal(true).optional(),
+    deliveryId: z.string().uuid().optional(),
   })
   .strict();
 
@@ -32,7 +34,7 @@ chatRouter.post(
   asyncHandler(async (req, res) => {
     const request = validateRequest(ChatRequestSchema, req.body, res);
     if (!request) return;
-    const { sessionId, message, agentName, retry } = request;
+    const { sessionId, message, agentName, retry, deliveryId } = request;
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -49,9 +51,7 @@ chatRouter.post(
     // be GC'd only by the next prepareSessionDeletion — a tiny leak with no
     // correctness impact, but easy to avoid.
     if (!sessionManager.isSessionAvailable(sessionId)) {
-      res.write(
-        `data: ${JSON.stringify({ type: "error", error: "Session is no longer available" })}\n\n`,
-      );
+      writeChatEvent(res, { type: "error", error: "Session is no longer available" });
       res.end();
       return;
     }
@@ -79,17 +79,34 @@ chatRouter.post(
     try {
       await tracer.withSpan(serverSpan, async () => {
         const runtime = sessionManager.getOrCreate(sessionId);
-        const result = retry
-          ? await runtime.retry(message, agentName, controller.signal, requestId)
-          : await runtime.deliver(message, agentName, controller.signal, requestId);
-        const chunks = chunkSummary(result.summary);
-        for (const chunk of chunks) {
-          res.write(`data: ${JSON.stringify({ type: "text-delta", text: chunk })}\n\n`);
+        let streamed = false;
+        const handleEvent = (event: import("@agent-harness/core").SessionRuntimeEvent) => {
+          if ("requestId" in event && event.requestId === requestId) {
+            if (event.type === "agent:text-delta") {
+              streamed = true;
+              writeChatEvent(res, { type: "text-delta", text: event.text });
+            } else if (event.type === "agent:tool-call-delta") {
+              writeChatEvent(res, { type: "tool-call-delta", toolCall: event.toolCall });
+            }
+          }
+        };
+        runtime.on(handleEvent);
+        try {
+          const result = retry
+            ? await runtime.retry(message, agentName, controller.signal, requestId, deliveryId)
+            : await runtime.deliver(message, agentName, controller.signal, requestId, deliveryId);
+          if (!streamed && result.summary) {
+            for (const chunk of chunkSummary(result.summary)) {
+              writeChatEvent(res, { type: "text-delta", text: chunk });
+            }
+          }
+          writeChatEvent(res, { type: "done" });
+          serverSpan.setStatus({
+            code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+          });
+        } finally {
+          runtime.off(handleEvent);
         }
-        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-        serverSpan.setStatus({
-          code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
-        });
       });
     } catch (error) {
       serverSpan.recordException(error);
@@ -99,7 +116,7 @@ chatRouter.post(
         ...describeError(error),
       });
       if (!res.destroyed) {
-        res.write(`data: ${JSON.stringify({ type: "error", error: "Agent request failed" })}\n\n`);
+        writeChatEvent(res, { type: "error", error: "Agent request failed" });
       }
     } finally {
       serverSpan.end();
@@ -118,4 +135,12 @@ function chunkSummary(summary: string): string[] {
     chunks.push(summary.slice(offset, offset + 40));
   }
   return chunks;
+}
+
+function writeChatEvent(
+  response: import("express").Response,
+  event: import("@agent-harness/core").ChatStreamEvent,
+): void {
+  const validated = ChatStreamEventSchema.parse(event);
+  response.write(`data: ${JSON.stringify(validated)}\n\n`);
 }

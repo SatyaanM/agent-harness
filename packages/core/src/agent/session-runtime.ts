@@ -16,7 +16,7 @@ import type { ISqliteDatabase } from "../persistence/sqlite/types.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
 import { isRecord, parseJsonBoundary } from "../validation.js";
-import { Agent } from "./agent.js";
+import { Agent, type StreamPerformanceMetrics } from "./agent.js";
 import {
   AgentBudgetExceededError,
   AgentCancelledError,
@@ -58,6 +58,22 @@ export type SessionRuntimeEvent =
       runId: string;
       requestId?: string;
     }
+  | {
+      sessionId: string;
+      type: "agent:text-delta";
+      agentName: string;
+      text: string;
+      runId: string;
+      requestId?: string;
+    }
+  | {
+      sessionId: string;
+      type: "agent:tool-call-delta";
+      agentName: string;
+      toolCall: { id: string; name: string; argumentsDelta: string };
+      runId: string;
+      requestId?: string;
+    }
   | { sessionId: string; type: "session:updated"; session: SessionData };
 
 export type SessionRuntimeEventWithoutSession =
@@ -89,6 +105,20 @@ export type SessionRuntimeEventWithoutSession =
       runId: string;
       requestId?: string;
     }
+  | {
+      type: "agent:text-delta";
+      agentName: string;
+      text: string;
+      runId: string;
+      requestId?: string;
+    }
+  | {
+      type: "agent:tool-call-delta";
+      agentName: string;
+      toolCall: { id: string; name: string; argumentsDelta: string };
+      runId: string;
+      requestId?: string;
+    }
   | { type: "session:updated"; session: SessionData };
 
 export interface RunCorrelation {
@@ -111,6 +141,7 @@ export interface SessionRuntimeOptions {
 
 export class SessionRuntime {
   private queue: Promise<unknown> = Promise.resolve();
+  private listeners = new Set<(event: SessionRuntimeEvent) => void>();
   private readonly sessionStore?: SessionStore;
   private readonly db?: ISqliteDatabase;
   private readonly sessionRepo?: SessionRepository;
@@ -133,6 +164,14 @@ export class SessionRuntime {
     this.logger = createLogger("core.session-runtime").child({ sessionId: options.sessionId });
   }
 
+  on(listener: (event: SessionRuntimeEvent) => void): void {
+    this.listeners.add(listener);
+  }
+
+  off(listener: (event: SessionRuntimeEvent) => void): void {
+    this.listeners.delete(listener);
+  }
+
   /**
    * Serialized delivery: only one run happens at a time per session.
    *
@@ -148,8 +187,11 @@ export class SessionRuntime {
     agentName?: string,
     signal?: AbortSignal,
     requestId?: string,
+    deliveryId?: string,
   ): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName, signal, false, requestId));
+    const run = this.queue.then(() =>
+      this.runOnce(message, agentName, signal, false, requestId, deliveryId),
+    );
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -160,14 +202,25 @@ export class SessionRuntime {
     agentName?: string,
     signal?: AbortSignal,
     requestId?: string,
+    deliveryId?: string,
   ): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName, signal, true, requestId));
+    const run = this.queue.then(() =>
+      this.runOnce(message, agentName, signal, true, requestId, deliveryId),
+    );
     this.queue = run.catch(() => undefined);
     return run;
   }
 
   private emit(event: SessionRuntimeEventWithoutSession): void {
-    this.options.onEvent?.({ sessionId: this.options.sessionId, ...event });
+    const fullEvent: SessionRuntimeEvent = { sessionId: this.options.sessionId, ...event };
+    this.options.onEvent?.(fullEvent);
+    for (const listener of this.listeners) {
+      try {
+        listener(fullEvent);
+      } catch (err) {
+        this.logger.error("Error in SessionRuntime listener", { ...describeError(err) });
+      }
+    }
   }
 
   private isAvailable(): boolean {
@@ -182,6 +235,7 @@ export class SessionRuntime {
     signal?: AbortSignal,
     replayExistingUser = false,
     requestId?: string,
+    deliveryId?: string,
   ): Promise<AgentResult> {
     if (!this.isAvailable()) {
       return {
@@ -233,18 +287,31 @@ export class SessionRuntime {
 
         const persistedHistory = [...session.messages];
         let replayedUserIndex = -1;
-        if (replayExistingUser) {
+        if (deliveryId) {
           for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
             const candidate = persistedHistory[index];
-            if (candidate?.role === "user" && candidate.content === message) {
+            if (candidate?.role === "user" && candidate.deliveryId === deliveryId) {
+              if (candidate.content !== message) {
+                throw new Error("Delivery identity does not match the durable user message");
+              }
+              if (!replayExistingUser) {
+                throw new Error("Delivery identity is already durable; retry is required");
+              }
               replayedUserIndex = index;
               break;
             }
           }
-          if (replayedUserIndex === -1) {
-            throw new Error("Cannot retry a message that is not present in the session transcript");
+        } else if (replayExistingUser) {
+          // Compatibility for legacy clients that predate delivery identity.
+          // Only the latest durable user can be replayed by content.
+          for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
+            const candidate = persistedHistory[index];
+            if (candidate?.role !== "user") continue;
+            if (candidate.content === message) replayedUserIndex = index;
+            break;
           }
         }
+        const isReplayingUser = replayedUserIndex !== -1;
 
         // History handed to the agent = the loaded transcript + the delivered
         // mailbox completions. The new user prompt is NOT included: agent.run
@@ -348,15 +415,30 @@ export class SessionRuntime {
               }
 
               // 4. Insert user message into SQLite messages table if present and not replayed
-              if (message && !replayExistingUser) {
-                const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
-                messageRepo.create({
-                  sessionId: this.options.sessionId,
-                  role: "user",
-                  content: message,
-                  sequenceNum: nextSeq,
-                  createdAt: Date.now(),
-                });
+              if (message && !isReplayingUser) {
+                const existingDelivery = deliveryId ? messageRepo.get(deliveryId) : undefined;
+                if (existingDelivery) {
+                  if (
+                    existingDelivery.session_id !== this.options.sessionId ||
+                    existingDelivery.role !== "user" ||
+                    existingDelivery.content !== message
+                  ) {
+                    throw new Error("Delivery identity conflicts with an existing durable message");
+                  }
+                  if (!replayExistingUser) {
+                    throw new Error("Delivery identity is already durable; retry is required");
+                  }
+                } else {
+                  const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
+                  messageRepo.create({
+                    ...(deliveryId ? { id: deliveryId } : {}),
+                    sessionId: this.options.sessionId,
+                    role: "user",
+                    content: message,
+                    sequenceNum: nextSeq,
+                    createdAt: Date.now(),
+                  });
+                }
               }
 
               // 5. Create run record in SQLite
@@ -413,8 +495,15 @@ export class SessionRuntime {
         session.messages = [
           ...persistedHistory,
           ...deliveredSystem,
-          ...(message && !replayExistingUser
-            ? [{ role: "user" as const, content: message, createdAt: now }]
+          ...(message && !isReplayingUser
+            ? [
+                {
+                  ...(deliveryId ? { deliveryId } : {}),
+                  role: "user" as const,
+                  content: message,
+                  createdAt: now,
+                },
+              ]
             : []),
         ];
         session.mailbox = pending;
@@ -461,6 +550,7 @@ export class SessionRuntime {
           : agentConfig.tools.filter((t) => t !== "delegate");
         const runConfig = { ...agentConfig, tools: runTools };
         let latestRunMessages: Message[] | undefined;
+        const streamMetrics: StreamPerformanceMetrics[] = [];
         const agent = new Agent(
           runConfig,
           this.options.toolRegistry,
@@ -480,6 +570,26 @@ export class SessionRuntime {
               });
               return;
             }
+            if (e.type === "text-delta") {
+              this.emit({
+                type: "agent:text-delta",
+                agentName: agentConfig.name,
+                text: e.text,
+                runId,
+                ...(requestId ? { requestId } : {}),
+              });
+              return;
+            }
+            if (e.type === "tool-call-delta") {
+              this.emit({
+                type: "agent:tool-call-delta",
+                agentName: agentConfig.name,
+                toolCall: e.toolCall,
+                runId,
+                ...(requestId ? { requestId } : {}),
+              });
+              return;
+            }
             if (e.type === "tool:called" || e.type === "tool:completed") {
               const isCalled = e.type === "tool:called";
               this.emit({
@@ -489,10 +599,15 @@ export class SessionRuntime {
                   type: isCalled ? "called" : "completed",
                   toolName: e.toolName,
                   args: isCalled ? e.args : undefined,
-                  result: isCalled ? undefined : e.result,
+                  result: !isCalled ? e.result : undefined,
                 },
-                ...correlation,
+                runId,
+                ...(requestId ? { requestId } : {}),
               });
+              return;
+            }
+            if (e.type === "stream-metrics") {
+              streamMetrics.push(e.metrics);
             }
           },
           logger,
@@ -532,6 +647,7 @@ export class SessionRuntime {
             correlation,
             agentConfig.name,
             errorCode,
+            streamMetrics,
           );
 
           this.emit({
@@ -566,6 +682,8 @@ export class SessionRuntime {
           result.summary,
           correlation,
           agentConfig.name,
+          undefined,
+          streamMetrics,
         );
 
         if (this.isAvailable()) {
@@ -598,6 +716,7 @@ export class SessionRuntime {
     correlation: RunCorrelation,
     agentName: string,
     errorCode?: string,
+    streamMetrics: StreamPerformanceMetrics[] = [],
   ): Promise<void> {
     session.messages.push(...messagesToPersist);
     session.result = { status: sessionResultStatus, summary };
@@ -626,6 +745,8 @@ export class SessionRuntime {
         }
         runRepo.update(runId, {
           status: runStatus,
+          tokenUsage:
+            streamMetrics.length > 0 ? { streaming: { steps: streamMetrics } } : undefined,
           errorCode: errorCode ?? null,
           errorMessage: runStatus === "failed" ? summary : null,
           completedAt: Date.now(),

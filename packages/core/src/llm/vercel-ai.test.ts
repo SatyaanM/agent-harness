@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     toolCalls: [],
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   })),
+  streamText: vi.fn(),
   model: { modelId: "test-model" },
   openAIChat: vi.fn(() => ({ modelId: "openai-model" })),
   createOpenAI: vi.fn(() => ({ chat: mocks.openAIChat })),
@@ -30,6 +31,7 @@ vi.mock("ai", async (importOriginal) => {
   return {
     ...actual,
     generateText: mocks.generateText,
+    streamText: mocks.streamText,
     tool: (definition: unknown) => definition,
   };
 });
@@ -62,6 +64,7 @@ beforeEach(() => {
     toolCalls: [],
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   });
+  mocks.streamText.mockReset();
 });
 
 describe("Vercel AI adapter", () => {
@@ -167,6 +170,82 @@ describe("Vercel AI adapter", () => {
     ).rejects.toThrow("rate limit");
     expect(mocks.generateText).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    [{ type: "error", error: new Error("stream exploded") }, "stream exploded"],
+    [{ type: "abort" }, "aborted"],
+  ])("rejects an SDK %s part instead of completing successfully", async (part, expected) => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "text-delta", text: "partial" };
+        yield part;
+      })(),
+    });
+    const client = createVercelAILLMClient(config);
+
+    const consume = async () => {
+      const chunks = [];
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+      })) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    };
+
+    await expect(consume()).rejects.toThrow(expected);
+  });
+
+  it("rejects a stream that reaches EOF without a terminal finish part", async () => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "text-delta", text: "partial" };
+      })(),
+    });
+    const client = createVercelAILLMClient(config);
+
+    const consume = async () => {
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const _chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+      })) {
+        // Consume the entire stream.
+      }
+    };
+
+    await expect(consume()).rejects.toThrow("without a terminal finish");
+  });
+
+  it.each([
+    ["text delta", { type: "text-delta", text: "late" }],
+    ["tool delta", { type: "tool-input-delta", id: "late-call", delta: "{}" }],
+    ["duplicate finish", { type: "finish", finishReason: "stop" }],
+  ])("rejects an SDK %s after its terminal finish without yielding it", async (_name, late) => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "finish", finishReason: "stop" };
+        yield late;
+      })(),
+    });
+    const client = createVercelAILLMClient(config);
+    const emitted: unknown[] = [];
+
+    const consume = async () => {
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+      })) {
+        emitted.push(chunk);
+      }
+    };
+
+    await expect(consume()).rejects.toThrow("after terminal finish");
+    expect(emitted).toEqual([expect.objectContaining({ type: "finish", finishReason: "stop" })]);
+  });
+
   it("passes cancellation through the AI SDK abortSignal option", async () => {
     const controller = new AbortController();
     const client = createVercelAILLMClient(config);
@@ -363,6 +442,29 @@ describe("Vercel AI adapter", () => {
     expect(mocks.createOpenAI).not.toHaveBeenCalled();
   });
 
+  it("routes streaming through an eligible preferred provider", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "finish", finishReason: "stop" };
+      })(),
+    });
+
+    if (!client.chatStream) throw new Error("missing stream support");
+    for await (const _chunk of client.chatStream({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+      preferredProviderId: "secondary",
+    })) {
+      // Consume the selected provider stream.
+    }
+
+    expect(mocks.createAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: "https://secondary.example" }),
+    );
+    expect(mocks.createOpenAI).not.toHaveBeenCalled();
+  });
+
   it("does not retry a non-transient provider failure", async () => {
     const client = createVercelAILLMClient(multiProviderConfig());
     const unauthorized = Object.assign(new Error("Unauthorized"), {
@@ -375,6 +477,128 @@ describe("Vercel AI adapter", () => {
       client.chat({ messages: [{ role: "user", content: "hello" }], model: "test-model" }),
     ).rejects.toBe(unauthorized);
     expect(mocks.generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a non-transient streaming provider failure", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    const unauthorized = Object.assign(new Error("Unauthorized"), {
+      name: "APICallError",
+      statusCode: 401,
+    });
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: rejectingAsyncIterable(unauthorized),
+    });
+
+    const consume = async () => {
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const _chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+      })) {
+        // Consume until the provider rejects.
+      }
+    };
+
+    await expect(consume()).rejects.toBe(unauthorized);
+    expect(mocks.streamText).toHaveBeenCalledTimes(1);
+    expect(mocks.createAnthropic).not.toHaveBeenCalled();
+  });
+
+  it("falls back after a transient streaming provider failure before output begins", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const client = createVercelAILLMClient(multiProviderConfig());
+      const unavailable = Object.assign(new Error("Unavailable"), { statusCode: 503 });
+      mocks.streamText
+        .mockReturnValueOnce({ fullStream: rejectingAsyncIterable(unavailable) })
+        .mockReturnValueOnce({
+          fullStream: (async function* () {
+            yield { type: "text-delta", text: "recovered" };
+            yield { type: "finish", finishReason: "stop" };
+          })(),
+        });
+
+      const consume = async () => {
+        const chunks = [];
+        if (!client.chatStream) throw new Error("missing stream support");
+        for await (const chunk of client.chatStream({
+          messages: [{ role: "user", content: "hello" }],
+          model: "test-model",
+        })) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      };
+      const completion = consume();
+      await vi.runAllTimersAsync();
+
+      await expect(completion).resolves.toContainEqual({ type: "text-delta", text: "recovered" });
+      expect(mocks.streamText).toHaveBeenCalledTimes(2);
+      expect(mocks.createAnthropic).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back after an internal start part followed by a transient failure", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const client = createVercelAILLMClient(multiProviderConfig());
+      const unavailable = Object.assign(new Error("Unavailable"), { statusCode: 503 });
+      mocks.streamText
+        .mockReturnValueOnce({
+          fullStream: (async function* () {
+            yield { type: "start" };
+            throw unavailable;
+          })(),
+        })
+        .mockReturnValueOnce({
+          fullStream: (async function* () {
+            yield { type: "text-delta", text: "recovered" };
+            yield { type: "finish", finishReason: "stop" };
+          })(),
+        });
+
+      const completion = (async () => {
+        const chunks = [];
+        if (!client.chatStream) throw new Error("missing stream support");
+        for await (const chunk of client.chatStream({
+          messages: [{ role: "user", content: "hello" }],
+          model: "test-model",
+        }))
+          chunks.push(chunk);
+        return chunks;
+      })();
+      await vi.runAllTimersAsync();
+
+      await expect(completion).resolves.toContainEqual({ type: "text-delta", text: "recovered" });
+      expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries reasoning deltas without exposing them as text", async () => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "reasoning-delta", text: "private thought" };
+        yield { type: "text-delta", text: "answer" };
+        yield { type: "finish", finishReason: "stop" };
+      })(),
+    });
+    const client = createVercelAILLMClient(config);
+    const chunks = [];
+    if (!client.chatStream) throw new Error("missing stream support");
+    for await (const chunk of client.chatStream({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+    }))
+      chunks.push(chunk);
+
+    expect(chunks).toContainEqual({ type: "reasoning-delta", reasoning: "private thought" });
+    expect(chunks).not.toContainEqual({ type: "text-delta", text: "private thought" });
   });
 
   it("falls back after a 5xx provider failure", async () => {
@@ -421,6 +645,30 @@ describe("Vercel AI adapter", () => {
     ).rejects.toBe(aborted);
     expect(mocks.generateText).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves streaming aborts without selecting another provider", async () => {
+    const client = createVercelAILLMClient(multiProviderConfig());
+    const controller = new AbortController();
+    const aborted = new DOMException("Cancelled", "AbortError");
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: rejectingAsyncIterable(aborted, () => controller.abort(aborted)),
+    });
+
+    const consume = async () => {
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const _chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+        signal: controller.signal,
+      })) {
+        // Consume until cancellation.
+      }
+    };
+
+    await expect(consume()).rejects.toBe(aborted);
+    expect(mocks.streamText).toHaveBeenCalledTimes(1);
+    expect(mocks.createAnthropic).not.toHaveBeenCalled();
+  });
 });
 
 function multiProviderConfig(): Config {
@@ -446,5 +694,18 @@ function multiProviderConfig(): Config {
         priority: 1,
       },
     ],
+  };
+}
+
+function rejectingAsyncIterable(error: unknown, beforeReject?: () => void): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next(): Promise<IteratorResult<unknown>> {
+          beforeReject?.();
+          throw error;
+        },
+      };
+    },
   };
 }

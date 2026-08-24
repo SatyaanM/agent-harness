@@ -35,6 +35,7 @@ export const LLMFinishReasonSchema = z.enum([
   "error",
   "other",
 ]);
+export type LLMFinishReason = z.infer<typeof LLMFinishReasonSchema>;
 
 export const LLMResponseSchema = z
   .object({
@@ -63,6 +64,13 @@ export const LLMResponseSchema = z
   });
 export type LLMResponse = z.infer<typeof LLMResponseSchema>;
 
+export type LLMStreamDelta =
+  | { type: "text-delta"; text: string }
+  | { type: "reasoning-delta"; reasoning: string }
+  | { type: "tool-call-delta"; toolCall: { id: string; name: string; argumentsDelta: string } }
+  | { type: "finish"; finishReason: LLMFinishReason; usage?: LLMUsage };
+
 export interface LLMClient {
   chat(params: LLMChatParams): Promise<LLMResponse>;
+  chatStream?(params: LLMChatParams): AsyncIterable<LLMStreamDelta>;
 }

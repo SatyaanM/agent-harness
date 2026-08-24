@@ -6,7 +6,7 @@ read_when:
 
 # Live Token Streaming Implementation Plan
 
-Status: Draft
+Status: Implemented
 
 ## Inputs
 - Governing Specification: `specs/live-token-streaming/SPEC.md`
