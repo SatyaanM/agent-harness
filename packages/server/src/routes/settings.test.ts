@@ -20,6 +20,7 @@ async function fixture() {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (originalRoot === undefined) delete process.env.ROOT;
   else process.env.ROOT = originalRoot;
   resetConfig();
@@ -27,6 +28,34 @@ afterEach(async () => {
 });
 
 describe("settings ownership and repair", () => {
+  it("rate-limits repeated settings writes before filesystem or runtime reconfiguration", async () => {
+    const { app, settingsFile } = await fixture();
+    const reconfigure = vi.spyOn(sessionManager, "reconfigureAfterSettingsUpdate");
+
+    for (let requestNumber = 1; requestNumber <= 20; requestNumber += 1) {
+      const response = await request(app)
+        .put("/api/settings")
+        .send({ DEFAULT_MODEL: `allowed/model-${requestNumber}` });
+      expect(response.status).toBe(200);
+    }
+
+    const rejected = await request(app)
+      .put("/api/settings")
+      .send({ DEFAULT_MODEL: "rejected/model" });
+
+    expect(rejected.status).toBe(429);
+    expect(rejected.body).toEqual({
+      error: {
+        code: "rate_limited",
+        message: "Too many settings updates; retry later",
+      },
+    });
+    expect(reconfigure).toHaveBeenCalledTimes(20);
+    await expect(readFile(settingsFile, "utf8")).resolves.toContain(
+      '"DEFAULT_MODEL": "allowed/model-20"',
+    );
+  });
+
   it("reconfigures server-owned loaded runtimes after the settings snapshot is saved", async () => {
     const { app } = await fixture();
     const reconfigure = vi.spyOn(sessionManager, "reconfigureAfterSettingsUpdate");

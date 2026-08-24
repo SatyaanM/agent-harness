@@ -16,6 +16,7 @@ import {
   stringifyJsonBounded,
 } from "@agent-harness/core";
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
@@ -65,7 +66,10 @@ function getSettingsFile(): string {
   return path.join(getConfigRoot(), ".harness", "settings.json");
 }
 
-export const settingsRouter: Router = Router();
+const SETTINGS_UPDATE_LIMIT = 20;
+const SETTINGS_UPDATE_WINDOW_MS = 60_000;
+
+const settingsRouter: Router = Router();
 
 settingsRouter.get("/", (_req, res) => {
   res.json(getConfig());
@@ -151,50 +155,71 @@ settingsRouter.post(
   }),
 );
 
-settingsRouter.put(
-  "/",
-  asyncHandler(async (req, res) => {
-    const body = validateRequest(SettingsUpdateSchema, req.body, res);
-    if (!body) return;
-    let config: Config;
-    try {
-      config = getConfig();
-    } catch (error) {
-      if (!(error instanceof BoundaryValidationError) || !fs.existsSync(getSettingsFile())) {
-        throw error;
-      }
-      quarantineInvalidSettings();
-      resetConfig();
-      config = getConfig();
+const settingsUpdateHandler = asyncHandler(async (req, res) => {
+  const body = validateRequest(SettingsUpdateSchema, req.body, res);
+  if (!body) return;
+  let config: Config;
+  try {
+    config = getConfig();
+  } catch (error) {
+    if (!(error instanceof BoundaryValidationError) || !fs.existsSync(getSettingsFile())) {
+      throw error;
     }
+    quarantineInvalidSettings();
+    resetConfig();
+    config = getConfig();
+  }
 
-    const updated: Record<string, unknown> = { ...config };
-    for (const key of SETTING_KEYS) {
-      if (body[key] !== undefined) {
-        updated[key] = body[key];
-      }
+  const updated: Record<string, unknown> = { ...config };
+  for (const key of SETTING_KEYS) {
+    if (body[key] !== undefined) {
+      updated[key] = body[key];
     }
+  }
 
-    try {
-      const parsed = parseBoundary(ConfigSchema, updated, "settings update");
-      savePersistedSettings(parsed);
-      resetConfig();
-      await sessionManager.reconfigureAfterSettingsUpdate();
-      sessionManager.audit({
-        actorType: "user",
-        actorId: "user",
-        action: "settings.update",
-        resourceType: "system",
-        resourceId: "settings",
-        payload: body,
-      });
-      res.json(parsed);
-    } catch (error) {
-      logger.error("Failed to save settings", { ...describeError(error) });
-      res.status(500).json({ error: "Failed to save settings" });
-    }
-  }),
-);
+  try {
+    const parsed = parseBoundary(ConfigSchema, updated, "settings update");
+    savePersistedSettings(parsed);
+    resetConfig();
+    await sessionManager.reconfigureAfterSettingsUpdate();
+    sessionManager.audit({
+      actorType: "user",
+      actorId: "user",
+      action: "settings.update",
+      resourceType: "system",
+      resourceId: "settings",
+      payload: body,
+    });
+    res.json(parsed);
+  } catch (error) {
+    logger.error("Failed to save settings", { ...describeError(error) });
+    res.status(500).json({ error: "Failed to save settings" });
+  }
+});
+
+export function createSettingsRouter(): Router {
+  const router = Router();
+  router.use(settingsRouter);
+  router.put(
+    "/",
+    rateLimit({
+      windowMs: SETTINGS_UPDATE_WINDOW_MS,
+      limit: SETTINGS_UPDATE_LIMIT,
+      standardHeaders: "draft-8",
+      legacyHeaders: false,
+      handler: (_req, res) => {
+        res.status(429).json({
+          error: {
+            code: "rate_limited",
+            message: "Too many settings updates; retry later",
+          },
+        });
+      },
+    }),
+    settingsUpdateHandler,
+  );
+  return router;
+}
 
 function savePersistedSettings(settings: Config): void {
   const file = getSettingsFile();

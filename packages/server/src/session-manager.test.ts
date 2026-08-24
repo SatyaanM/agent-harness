@@ -9,6 +9,27 @@ import { describe, expect, it } from "vitest";
 import { SessionManager } from "./session-manager.js";
 
 describe("SessionManager lifecycle ownership", () => {
+  it("coalesces concurrent settings reconfiguration callers onto the lifecycle barrier", async () => {
+    const manager = new SessionManager();
+    const active = new AbortController();
+    manager.trackSession("active-session", active);
+
+    const first = manager.reconfigureAfterSettingsUpdate();
+    const second = manager.reconfigureAfterSettingsUpdate();
+    let secondSettled = false;
+    void second.then(() => {
+      secondSettled = true;
+    });
+
+    expect(active.signal.aborted).toBe(true);
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    manager.clearSession("active-session", active);
+    await Promise.all([first, second]);
+    await expect(manager.reconfigureAfterSettingsUpdate()).resolves.toBeUndefined();
+  });
+
   it("keeps a cancelled worker tracked so settings reconfiguration waits for terminal cleanup", async () => {
     const manager = new SessionManager();
     const worker = new AbortController();

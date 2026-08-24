@@ -232,13 +232,16 @@ export class SessionManager {
   }
 
   async reconfigureAfterSettingsUpdate(): Promise<void> {
-    if (this.providerReconfiguration) return this.providerReconfiguration;
+    if (this.providerReconfiguration) {
+      await this.providerReconfiguration;
+      return;
+    }
     const operation = this.performSettingsReconfiguration();
     this.providerReconfiguration = operation;
     try {
       await operation;
     } finally {
-      if (this.providerReconfiguration === operation) this.providerReconfiguration = undefined;
+      this.providerReconfiguration = undefined;
     }
   }
 

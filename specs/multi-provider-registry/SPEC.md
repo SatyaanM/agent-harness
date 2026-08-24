@@ -76,6 +76,7 @@ Update agent configuration (frontmatter/schema) to support optional `model` and 
 - Add CRUD endpoints for `ProviderEntry` management.
 - Use protocol-specific authentication and response parsing for OpenAI and Anthropic model discovery.
 - After an accepted settings write, abort active work and unload cached runtimes before the new configuration generation is used.
+- Bound settings persistence to 20 accepted updates per client per minute; reject excess requests before filesystem mutation or runtime reconfiguration.
 
 ### 5. Fallback Mechanism
 Modify the LLM client execution flow to handle fallbacks. If the primary provider returns a 429 or 5xx error:
