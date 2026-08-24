@@ -55,6 +55,7 @@ interface SessionStore {
   sessions: Session[];
   activeSessionId: string | null;
   streamingMessageIds: Record<string, string[]>;
+  awaitingAuthoritativeMessageIds: Record<string, string[]>;
   addSession: (session: Session) => void;
   setActiveSession: (sessionId: string | null) => void;
   setAgentName: (sessionId: string, agentName: string) => void;
@@ -90,6 +91,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
   sessions: [],
   activeSessionId: null,
   streamingMessageIds: {},
+  awaitingAuthoritativeMessageIds: {},
 
   addSession: (session) =>
     set((state) => ({
@@ -127,11 +129,18 @@ export const useSessionStore = create<SessionStore>((set) => ({
     set((state) => {
       const current = state.streamingMessageIds[sessionId] ?? [];
       if (current.includes(messageId)) return state;
+      const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
+      const awaiting = (awaitingAuthoritativeMessageIds[sessionId] ?? []).filter(
+        (id) => id !== messageId,
+      );
+      if (awaiting.length === 0) delete awaitingAuthoritativeMessageIds[sessionId];
+      else awaitingAuthoritativeMessageIds[sessionId] = awaiting;
       return {
         streamingMessageIds: {
           ...state.streamingMessageIds,
           [sessionId]: [...current, messageId],
         },
+        awaitingAuthoritativeMessageIds,
       };
     }),
 
@@ -146,32 +155,20 @@ export const useSessionStore = create<SessionStore>((set) => ({
       } else {
         streamingMessageIds[sessionId] = remaining;
       }
-      const sessions = state.sessions.map((session) => {
-        if (session.sessionId !== sessionId) return session;
-        const messageIndex = session.messages.findIndex((message) => message.id === messageId);
-        if (messageIndex < 0) return session;
-        const preceding = session.messages[messageIndex - 1];
-        const userIsStillOptimistic =
-          preceding?.role === "user" && !preceding.id.startsWith("srv-");
-        if (userIsStillOptimistic) return session;
-
-        // A server sync already committed this turn while the SSE stream was
-        // active. It preserved the correlated placeholder until now; remove
-        // that placeholder without disturbing durable multi-step messages.
-        return {
-          ...session,
-          messages: session.messages.filter((message) => message.id !== messageId),
-        };
-      });
+      const awaiting = state.awaitingAuthoritativeMessageIds[sessionId] ?? [];
       return {
-        sessions,
         streamingMessageIds,
+        awaitingAuthoritativeMessageIds: {
+          ...state.awaitingAuthoritativeMessageIds,
+          [sessionId]: awaiting.includes(messageId) ? awaiting : [...awaiting, messageId],
+        },
       };
     }),
 
   hydrate: (serverSessions) =>
     set({
       streamingMessageIds: {},
+      awaitingAuthoritativeMessageIds: {},
       sessions: serverSessions.map((data) => {
         const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
         return {
@@ -196,7 +193,9 @@ export const useSessionStore = create<SessionStore>((set) => ({
       }
       const streamingMessageIds = { ...state.streamingMessageIds };
       delete streamingMessageIds[sessionId];
-      return { sessions, activeSessionId, streamingMessageIds };
+      const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
+      delete awaitingAuthoritativeMessageIds[sessionId];
+      return { sessions, activeSessionId, streamingMessageIds, awaitingAuthoritativeMessageIds };
     }),
 
   renameSession: (sessionId, title) =>
@@ -228,9 +227,17 @@ export const useSessionStore = create<SessionStore>((set) => ({
         existing.messages,
         messages,
         new Set(state.streamingMessageIds[data.sessionId] ?? []),
+        new Set(state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []),
       );
+      const remainingAwaiting = (
+        state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []
+      ).filter((id) => mergedMessages.some((message) => message.id === id));
+      const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
+      if (remainingAwaiting.length === 0) delete awaitingAuthoritativeMessageIds[data.sessionId];
+      else awaitingAuthoritativeMessageIds[data.sessionId] = remainingAwaiting;
 
       return {
+        awaitingAuthoritativeMessageIds,
         sessions: state.sessions.map((s) =>
           s.sessionId === data.sessionId
             ? {
@@ -249,6 +256,7 @@ export function reconcileOptimisticMessages(
   existingMessages: Message[],
   serverMessages: Message[],
   streamingMessageIds: ReadonlySet<string> = new Set(),
+  awaitingAuthoritativeMessageIds: ReadonlySet<string> = new Set(),
 ): Message[] {
   const optimistic = existingMessages.filter((m) => !m.id.startsWith("srv-"));
   if (optimistic.length === 0) return serverMessages;
@@ -263,9 +271,11 @@ export function reconcileOptimisticMessages(
   const uncommitted: Message[] = [];
   const committedUserCounts = new Map<string, number>();
   let currentTurnIsCommitted = false;
+  let currentTurnHasOptimisticUser = false;
 
   for (const opt of optimistic) {
     if (opt.role === "user") {
+      currentTurnHasOptimisticUser = true;
       const serverCount = serverUserCounts.get(opt.content) ?? 0;
       const alreadyCommitted = committedUserCounts.get(opt.content) ?? 0;
       if (alreadyCommitted < serverCount) {
@@ -275,6 +285,8 @@ export function reconcileOptimisticMessages(
         currentTurnIsCommitted = false;
         uncommitted.push(opt);
       }
+    } else if (awaitingAuthoritativeMessageIds.has(opt.id)) {
+      if (currentTurnHasOptimisticUser && !currentTurnIsCommitted) uncommitted.push(opt);
     } else if (!currentTurnIsCommitted || streamingMessageIds.has(opt.id)) {
       uncommitted.push(opt);
     }

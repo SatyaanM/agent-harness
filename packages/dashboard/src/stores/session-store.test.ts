@@ -17,6 +17,7 @@ beforeEach(() => {
     sessions: [],
     activeSessionId: null,
     streamingMessageIds: {},
+    awaitingAuthoritativeMessageIds: {},
   });
 });
 
@@ -165,6 +166,9 @@ describe("session server synchronization", () => {
     );
 
     useSessionStore.getState().finishMessageStream("s-1", "opt-assistant");
+    expect(useSessionStore.getState().sessions[0]?.messages.at(-1)).toEqual(
+      expect.objectContaining({ id: "opt-assistant", content: "First delta continued" }),
+    );
     useSessionStore.getState().syncFromServer(
       makeServerSession({
         messages: [
@@ -196,7 +200,7 @@ describe("session server synchronization", () => {
     ]);
   });
 
-  it("removes a streaming placeholder on completion when the terminal sync arrived first", () => {
+  it("waits for confirmation when the terminal sync arrives before SSE completion", () => {
     useSessionStore.getState().addSession(
       createTestSession({
         sessionId: "s-1",
@@ -218,6 +222,16 @@ describe("session server synchronization", () => {
 
     expect(useSessionStore.getState().sessions[0]?.messages.at(-1)?.id).toBe("opt-assistant");
     useSessionStore.getState().finishMessageStream("s-1", "opt-assistant");
+
+    expect(useSessionStore.getState().sessions[0]?.messages.at(-1)?.id).toBe("opt-assistant");
+    useSessionStore.getState().syncFromServer(
+      makeServerSession({
+        messages: [
+          { role: "user", content: "Question" },
+          { role: "assistant", content: "durable answer" },
+        ],
+      }),
+    );
 
     expect(useSessionStore.getState().sessions[0]?.messages).toEqual([
       expect.objectContaining({ id: "srv-0", role: "user", content: "Question" }),
@@ -243,6 +257,19 @@ describe("session server synchronization", () => {
     expect(useSessionStore.getState().sessions[0]?.messages).toEqual([
       expect.objectContaining({ id: "opt-user", content: "Question" }),
       expect.objectContaining({ id: "opt-assistant", content: "answer" }),
+    ]);
+
+    useSessionStore.getState().syncFromServer(
+      makeServerSession({
+        messages: [
+          { role: "user", content: "Question" },
+          { role: "assistant", content: "answer" },
+        ],
+      }),
+    );
+    expect(useSessionStore.getState().sessions[0]?.messages).toEqual([
+      expect.objectContaining({ id: "srv-0", content: "Question" }),
+      expect.objectContaining({ id: "srv-1", content: "answer" }),
     ]);
   });
 });

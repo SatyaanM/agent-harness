@@ -4,7 +4,7 @@ import { createLogger, describeError } from "@agent-harness/core/contracts";
 import { type KeyboardEvent, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { parseChatStreamEvent, sendMessage } from "@/lib/api";
+import { fetchSession, parseChatStreamEvent, sendMessage } from "@/lib/api";
 import { useChatInputStore } from "@/stores/chat-input-store";
 import { useSessionStore } from "@/stores/session-store";
 import { useTTSStore } from "@/stores/tts-store";
@@ -95,6 +95,14 @@ export default function ChatInput() {
       reader.releaseLock();
       reader = undefined;
       finishMessageStream(request.sessionId, request.assistantMessageId);
+      void fetchSession(request.sessionId)
+        .then((latest) => useSessionStore.getState().syncFromServer(latest))
+        .catch((error: unknown) => {
+          logger.error("Authoritative stream confirmation failed", {
+            sessionId: request.sessionId,
+            ...describeError(error),
+          });
+        });
       setPendingRequest(null);
 
       // Auto-play TTS if enabled

@@ -1,18 +1,19 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendMessage } from "@/lib/api";
+import { fetchSession, sendMessage } from "@/lib/api";
 import { useSessionStore } from "@/stores/session-store";
-import { createTestSession } from "@/test-helpers/session-fixtures";
+import { createTestServerSession, createTestSession } from "@/test-helpers/session-fixtures";
 import ChatInput from "./ChatInput";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/api")>();
-  return { ...original, sendMessage: vi.fn() };
+  return { ...original, fetchSession: vi.fn(), sendMessage: vi.fn() };
 });
 
 vi.mock("./TTSButton", () => ({ TTSButton: () => <button type="button">Voice</button> }));
 
 const mockedSendMessage = vi.mocked(sendMessage);
+const mockedFetchSession = vi.mocked(fetchSession);
 
 function successfulStream(text: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -32,10 +33,13 @@ describe("ChatInput", () => {
 
   beforeEach(() => {
     mockedSendMessage.mockReset();
+    mockedFetchSession.mockReset();
+    mockedFetchSession.mockResolvedValue(createTestServerSession({ sessionId: "session-a" }));
     useSessionStore.setState({
       activeSessionId: "session-a",
       sessions: [createTestSession({ sessionId: "session-a" })],
       streamingMessageIds: {},
+      awaitingAuthoritativeMessageIds: {},
     });
   });
 
@@ -123,6 +127,25 @@ describe("ChatInput", () => {
         expect.arrayContaining([expect.objectContaining({ role: "assistant", content: "Done" })]),
       ),
     );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps the streamed answer when authoritative confirmation fails", async () => {
+    mockedSendMessage.mockResolvedValueOnce(successfulStream("Visible answer"));
+    mockedFetchSession.mockRejectedValueOnce(new Error("confirmation unavailable"));
+    render(<ChatInput />);
+    fireEvent.change(screen.getByPlaceholderText("Type a message..."), {
+      target: { value: "Hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(mockedFetchSession).toHaveBeenCalledWith("session-a"));
+    expect(useSessionStore.getState().sessions[0]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", content: "Visible answer" }),
+      ]),
+    );
+    expect(useSessionStore.getState().awaitingAuthoritativeMessageIds["session-a"]).toHaveLength(1);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
