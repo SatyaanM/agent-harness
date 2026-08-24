@@ -96,7 +96,9 @@ export default function ChatInput() {
       reader = undefined;
       finishMessageStream(request.sessionId, request.assistantMessageId);
       void fetchSession(request.sessionId)
-        .then((latest) => useSessionStore.getState().confirmFromServer(latest))
+        .then((latest) =>
+          useSessionStore.getState().confirmFromServer(latest, request.assistantMessageId),
+        )
         .catch((error: unknown) => {
           logger.error("Authoritative stream confirmation failed", {
             sessionId: request.sessionId,

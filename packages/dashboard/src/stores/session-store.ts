@@ -60,6 +60,7 @@ interface SessionStore {
     string,
     Record<string, { serverMessageCount: number; userMessageId?: string }>
   >;
+  serverSnapshotMessageCounts: Record<string, number>;
   addSession: (session: Session) => void;
   setActiveSession: (sessionId: string | null) => void;
   setAgentName: (sessionId: string, agentName: string) => void;
@@ -68,7 +69,7 @@ interface SessionStore {
   beginMessageStream: (sessionId: string, messageId: string) => void;
   finishMessageStream: (sessionId: string, messageId: string) => void;
   syncFromServer: (data: ServerSession) => void;
-  confirmFromServer: (data: ServerSession) => void;
+  confirmFromServer: (data: ServerSession, messageId?: string) => void;
   hydrate: (sessions: ServerSession[]) => void;
   removeSession: (sessionId: string) => void;
   renameSession: (sessionId: string, title?: string) => void;
@@ -95,15 +96,24 @@ export interface ServerSession {
 function mergeServerSession(
   state: Pick<
     SessionStore,
-    "sessions" | "streamingMessageIds" | "awaitingAuthoritativeMessageIds" | "streamTurnBoundaries"
+    | "sessions"
+    | "streamingMessageIds"
+    | "awaitingAuthoritativeMessageIds"
+    | "streamTurnBoundaries"
+    | "serverSnapshotMessageCounts"
   >,
   data: ServerSession,
   confirmAwaiting: boolean,
+  confirmedMessageId?: string,
 ): Partial<SessionStore> {
   const messages = data.messages.map((message, index) => serverMessageToClient(message, index));
   const existing = state.sessions.find((session) => session.sessionId === data.sessionId);
   if (!existing) {
     return {
+      serverSnapshotMessageCounts: {
+        ...state.serverSnapshotMessageCounts,
+        [data.sessionId]: messages.length,
+      },
       sessions: [
         ...state.sessions,
         {
@@ -120,32 +130,55 @@ function mergeServerSession(
 
   const streamingIds = state.streamingMessageIds[data.sessionId] ?? [];
   const awaitingIds = state.awaitingAuthoritativeMessageIds[data.sessionId] ?? [];
-  const projectedMessageId = streamingIds[0] ?? (confirmAwaiting ? undefined : awaitingIds[0]);
-  const boundary = projectedMessageId
-    ? state.streamTurnBoundaries[data.sessionId]?.[projectedMessageId]
-    : undefined;
-  const mergedMessages =
-    projectedMessageId && boundary
-      ? [
-          ...messages.slice(0, boundary.serverMessageCount),
-          ...existing.messages.filter(
-            (message) => message.id === boundary.userMessageId || message.id === projectedMessageId,
-          ),
-        ]
-      : reconcileOptimisticMessages(
-          existing.messages,
-          messages,
-          new Set(streamingIds),
-          new Set(awaitingIds),
-          confirmAwaiting,
-        );
-  const remainingAwaiting = (state.awaitingAuthoritativeMessageIds[data.sessionId] ?? []).filter(
-    (id) => mergedMessages.some((message) => message.id === id),
+  const confirmedIds = new Set(
+    confirmAwaiting &&
+      streamingIds.length === 0 &&
+      (confirmedMessageId === undefined || confirmedMessageId === awaitingIds.at(-1))
+      ? awaitingIds
+      : [],
   );
+  const remainingAwaiting = awaitingIds.filter((messageId) => !confirmedIds.has(messageId));
+  const trackedIds = [...streamingIds, ...remainingAwaiting];
+  const boundaries = state.streamTurnBoundaries[data.sessionId] ?? {};
+  const orderedTrackedIds = trackedIds
+    .filter((messageId) => boundaries[messageId])
+    .sort(
+      (left, right) =>
+        existing.messages.findIndex((message) => message.id === left) -
+        existing.messages.findIndex((message) => message.id === right),
+    );
+  const earliestBoundary = orderedTrackedIds
+    .map((messageId) => boundaries[messageId])
+    .filter((boundary): boundary is NonNullable<typeof boundary> => boundary !== undefined)
+    .reduce<NonNullable<(typeof boundaries)[string]> | undefined>(
+      (earliest, boundary) =>
+        !earliest || boundary.serverMessageCount < earliest.serverMessageCount
+          ? boundary
+          : earliest,
+      undefined,
+    );
+  const optimisticTurnIds = new Set(
+    orderedTrackedIds.flatMap((messageId) => {
+      const userMessageId = boundaries[messageId]?.userMessageId;
+      return userMessageId ? [userMessageId, messageId] : [messageId];
+    }),
+  );
+  const mergedMessages = earliestBoundary
+    ? [
+        ...messages.slice(0, earliestBoundary.serverMessageCount),
+        ...existing.messages.filter((message) => optimisticTurnIds.has(message.id)),
+      ]
+    : reconcileOptimisticMessages(
+        existing.messages,
+        messages,
+        new Set(streamingIds),
+        new Set(awaitingIds),
+        confirmedIds,
+      );
   const awaitingAuthoritativeMessageIds = { ...state.awaitingAuthoritativeMessageIds };
   if (remainingAwaiting.length === 0) delete awaitingAuthoritativeMessageIds[data.sessionId];
   else awaitingAuthoritativeMessageIds[data.sessionId] = remainingAwaiting;
-  const trackedMessageIds = new Set([...streamingIds, ...remainingAwaiting]);
+  const trackedMessageIds = new Set(trackedIds);
   const streamTurnBoundaries = { ...state.streamTurnBoundaries };
   const remainingBoundaries = Object.fromEntries(
     Object.entries(streamTurnBoundaries[data.sessionId] ?? {}).filter(([messageId]) =>
@@ -157,6 +190,10 @@ function mergeServerSession(
 
   return {
     awaitingAuthoritativeMessageIds,
+    serverSnapshotMessageCounts: {
+      ...state.serverSnapshotMessageCounts,
+      [data.sessionId]: messages.length,
+    },
     streamTurnBoundaries,
     sessions: state.sessions.map((session) =>
       session.sessionId === data.sessionId
@@ -177,6 +214,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
   streamingMessageIds: {},
   awaitingAuthoritativeMessageIds: {},
   streamTurnBoundaries: {},
+  serverSnapshotMessageCounts: {},
 
   addSession: (session) =>
     set((state) => ({
@@ -221,7 +259,9 @@ export const useSessionStore = create<SessionStore>((set) => ({
       const preceding = assistantIndex > 0 ? session?.messages[assistantIndex - 1] : undefined;
       const boundary = currentBoundaries[messageId] ?? {
         serverMessageCount:
-          session?.messages.filter((message) => message.id.startsWith("srv-")).length ?? 0,
+          state.serverSnapshotMessageCounts[sessionId] ??
+          session?.messages.filter((message) => message.id.startsWith("srv-")).length ??
+          0,
         ...(preceding?.role === "user" && !preceding.id.startsWith("srv-")
           ? { userMessageId: preceding.id }
           : {}),
@@ -271,6 +311,9 @@ export const useSessionStore = create<SessionStore>((set) => ({
       streamingMessageIds: {},
       awaitingAuthoritativeMessageIds: {},
       streamTurnBoundaries: {},
+      serverSnapshotMessageCounts: Object.fromEntries(
+        serverSessions.map((session) => [session.sessionId, session.messages.length]),
+      ),
       sessions: serverSessions.map((data) => {
         const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
         return {
@@ -299,12 +342,15 @@ export const useSessionStore = create<SessionStore>((set) => ({
       delete awaitingAuthoritativeMessageIds[sessionId];
       const streamTurnBoundaries = { ...state.streamTurnBoundaries };
       delete streamTurnBoundaries[sessionId];
+      const serverSnapshotMessageCounts = { ...state.serverSnapshotMessageCounts };
+      delete serverSnapshotMessageCounts[sessionId];
       return {
         sessions,
         activeSessionId,
         streamingMessageIds,
         awaitingAuthoritativeMessageIds,
         streamTurnBoundaries,
+        serverSnapshotMessageCounts,
       };
     }),
 
@@ -314,7 +360,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
     })),
 
   syncFromServer: (data) => set((state) => mergeServerSession(state, data, false)),
-  confirmFromServer: (data) => set((state) => mergeServerSession(state, data, true)),
+  confirmFromServer: (data, messageId) =>
+    set((state) => mergeServerSession(state, data, true, messageId)),
 }));
 
 export function reconcileOptimisticMessages(
@@ -322,7 +369,7 @@ export function reconcileOptimisticMessages(
   serverMessages: Message[],
   streamingMessageIds: ReadonlySet<string> = new Set(),
   awaitingAuthoritativeMessageIds: ReadonlySet<string> = new Set(),
-  confirmAwaiting = false,
+  confirmedAuthoritativeMessageIds: ReadonlySet<string> = new Set(),
 ): Message[] {
   const optimistic = existingMessages.filter((m) => !m.id.startsWith("srv-"));
   if (optimistic.length === 0) return serverMessages;
@@ -352,7 +399,10 @@ export function reconcileOptimisticMessages(
         uncommitted.push(opt);
       }
     } else if (awaitingAuthoritativeMessageIds.has(opt.id)) {
-      if (!confirmAwaiting || (currentTurnHasOptimisticUser && !currentTurnIsCommitted)) {
+      if (
+        !confirmedAuthoritativeMessageIds.has(opt.id) ||
+        (currentTurnHasOptimisticUser && !currentTurnIsCommitted)
+      ) {
         uncommitted.push(opt);
       }
     } else if (!currentTurnIsCommitted || streamingMessageIds.has(opt.id)) {

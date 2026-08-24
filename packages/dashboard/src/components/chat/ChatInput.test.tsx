@@ -41,6 +41,7 @@ describe("ChatInput", () => {
       streamingMessageIds: {},
       awaitingAuthoritativeMessageIds: {},
       streamTurnBoundaries: {},
+      serverSnapshotMessageCounts: {},
     });
   });
 
