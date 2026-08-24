@@ -335,10 +335,9 @@ export class SessionManager {
       this.sessionControllers.delete(sessionId);
     }
     this.unload(sessionId);
-    for (const [taskId, worker] of this.workerControllers) {
+    for (const worker of this.workerControllers.values()) {
       if (worker.parentSessionId !== sessionId) continue;
       worker.controller.abort();
-      this.workerControllers.delete(taskId);
     }
     this.notifyLifecycleWaiters();
   }

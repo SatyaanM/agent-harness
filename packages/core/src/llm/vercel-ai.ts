@@ -1,6 +1,6 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, tool } from "ai";
+import { generateText, tool, zodSchema } from "ai";
 import type { Message } from "../agent/types.js";
 import type { Config } from "../config.js";
 import { createLogger } from "../contracts/logging.js";
@@ -210,7 +210,16 @@ function estimateAdmissionTokens(params: LLMChatParams): number {
   const characters =
     (params.system?.length ?? 0) +
     JSON.stringify(params.messages).length +
-    (params.tools?.reduce((total, entry) => total + JSON.stringify(entry).length, 0) ?? 0);
+    (params.tools?.reduce(
+      (total, entry) =>
+        total +
+        JSON.stringify({
+          name: entry.name,
+          description: entry.description,
+          inputSchema: zodSchema(entry.parameters).jsonSchema,
+        }).length,
+      0,
+    ) ?? 0);
   return Math.max(1, Math.ceil(characters / 4)) + (params.maxOutputTokens ?? 4096);
 }
 

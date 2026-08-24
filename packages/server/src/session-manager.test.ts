@@ -58,8 +58,30 @@ describe("SessionManager lifecycle ownership", () => {
     manager.prepareSessionDeletion("parent");
 
     expect(controller.signal.aborted).toBe(true);
-    expect(manager.metrics().activeWorkers).toBe(0);
+    expect(manager.metrics().activeWorkers).toBe(1);
     expect(manager.isSessionAvailable("parent")).toBe(false);
+    manager.onWorkerSettled("task-1");
+    expect(manager.metrics().activeWorkers).toBe(0);
+  });
+
+  it("waits for a deleted parent's aborted worker to reach terminal cleanup before reconfiguration", async () => {
+    const manager = new SessionManager();
+    const worker = new AbortController();
+    manager.trackWorker("task-deleted", "deleted-parent", worker);
+
+    manager.prepareSessionDeletion("deleted-parent");
+    expect(worker.signal.aborted).toBe(true);
+
+    let reconfigured = false;
+    const reconfiguration = manager.reconfigureAfterSettingsUpdate().then(() => {
+      reconfigured = true;
+    });
+    await Promise.resolve();
+    expect(reconfigured).toBe(false);
+
+    manager.onWorkerSettled("task-deleted");
+    await reconfiguration;
+    expect(reconfigured).toBe(true);
   });
 
   it("cleans a worker controller on every terminal path", () => {

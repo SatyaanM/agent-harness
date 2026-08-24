@@ -25,10 +25,14 @@ const mocks = vi.hoisted(() => ({
   createAnthropic: vi.fn(() => () => ({ modelId: "anthropic-model" })),
 }));
 
-vi.mock("ai", () => ({
-  generateText: mocks.generateText,
-  tool: (definition: unknown) => definition,
-}));
+vi.mock("ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ai")>();
+  return {
+    ...actual,
+    generateText: mocks.generateText,
+    tool: (definition: unknown) => definition,
+  };
+});
 vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: mocks.createOpenAI,
 }));
@@ -88,12 +92,9 @@ describe("Vercel AI adapter", () => {
           {
             name: "largeSchema",
             description: "A tool",
-            parameters: {
-              type: "object",
-              properties: {
-                input: { type: "string", description: "x".repeat(2_000) },
-              },
-            },
+            parameters: z.object({
+              input: z.string().describe("x".repeat(2_000)),
+            }),
           },
         ],
       }),
