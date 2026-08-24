@@ -47,6 +47,7 @@ The defining property: an agent is an *orchestrator if and only if it holds the 
 | D16 | Reasoning is stored with the message but never re-fed into the LLM context | ADR §11.4 |
 | D17 | Runtime emits live session updates as work progresses, not only at completion | ADR §11.5 |
 | D18 | Workers are as observable as the orchestrator: live tool events + progressively persisted transcript | ADR §11.6 |
+| D19 | One parent session may have at most 100 `running`/`queued` delegations; the durable roster contract exposes the same 100-entry capacity | bounded delegation invariant |
 
 ## 3. Agent model
 
@@ -64,7 +65,7 @@ The defining property: an agent is an *orchestrator if and only if it holds the 
 
 ## 5. Delivery model (target)
 
-1. An agent calls `delegate({ task, model? })`. `model` is optional: when omitted, the worker **inherits the delegating agent's model** (guaranteed supported since that agent is running on it). The system creates a **worker session** (`worker-<taskId>`), spawns a `Worker` in the background, and returns the `taskId` immediately (fire-and-forget).
+1. An agent calls `delegate({ task, model? })`. `model` is optional: when omitted, the worker **inherits the delegating agent's model** (guaranteed supported since that agent is running on it). In relational runtime mode, the system atomically checks and reserves capacity before creating the durable task: one parent may own at most 100 `running`/`queued` delegations. At capacity, delegation fails without creating a worker transcript, task row, or worker-session row. Otherwise the system creates a **worker session** (`worker-<taskId>`), spawns a `Worker` in the background, and returns the `taskId` immediately (fire-and-forget).
 2. When the worker completes (success or error), the **system posts a completion message to the delegating session's mailbox** — summary + status + taskId (+ sender). The agent does not poll.
 3. The mailbox is **durable** (persisted with the session).
 4. When the delegating session next processes (a new message arrives, or its loaded runtime is signaled), the runtime executes an atomic `BEGIN IMMEDIATE` SQLite transaction: peeks pending `mailbox_events`, materializes system messages into `messages` with monotonic sequence numbering, acknowledges the mailbox events, and commits atomically. Any interruption or error triggers a transaction rollback, leaving zero uncommitted messages and preserving pending mailbox events.
@@ -77,6 +78,7 @@ See ADR 0004 & §10.7–10.9. Summary:
 
 - **Relational ACID Storage:** Embedded SQLite WAL database under `.harness/harness.db`.
 - **Atomic Mailbox Drain:** Draining mailbox events and materializing system messages commit together in an immediate transaction (`BEGIN IMMEDIATE`).
+- **Atomic Worker Settlement:** A worker task's terminal transition and its mailbox enqueue commit in one immediate transaction. If enqueue fails, the task remains active and continues to consume its delegation slot rather than publishing incomplete durable truth.
 - **Startup Worker Reconciliation:** On server restart, `SessionManager.initialize()` queries orphaned `running`/`queued` tasks, transitions them to `abandoned`, and enqueues diagnostic failure cards for delivery upon parent wake.
 - **Single-Writer / Concurrency Retries:** SQLite WAL mode with 5000ms busy timeout and `withDbRetry` jittered exponential backoff.
 - **Monotonic Sequence Numbering:** Message order is strictly enforced by relational sequence integers (`sequence_num`).
@@ -88,6 +90,7 @@ See ADR 0004 & §10.7–10.9. Summary:
 - A vertical column **anchored to the left edge of the chat panel** (inside `RightPanel`). It moves with the chat when the panel is resized.
 - Each entry is a **circular bubble** showing the agent's **initial**.
 - The roster is the current session's agents: the session's primary agent always present, plus sub-agents as they are spawned.
+- The worker roster is bounded to 100 entries. Its authoritative API orders all active tasks first, then fills remaining capacity with recently updated terminal tasks, so an admitted active delegation cannot be truncated during hydration.
 - Bubbles **animate in one at a time** with a slight staggered delay.
 
 ### 7.2 Delegate drawer
@@ -149,6 +152,7 @@ maxSteps: 50
 POST /api/chat
   body: { sessionId, message, agentName? }   # agentName NEW
 GET  /api/agents                              # returns description too
+GET  /api/sessions/:id/workers                # up to 100 worker summaries; active first
 ```
 
 ### 8.4 WebSocket (Phases 2+)
@@ -193,6 +197,7 @@ tool:called          # NEW — agent invoked a tool (for live drawer)
 - Single-writer `SessionStore` with per-session write queues and atomic transcript/index/mailbox writes.
 - Separate append-only mailbox log with materialize-before-acknowledge recovery and `taskId` replay deduplication.
 - Partial parent and worker transcripts persist on provider failure or cancellation; detached worker completion always enters terminal cleanup.
+- A shared 100-worker contract bounds each parent roster. `delegate` enforces the matching active-task cap inside the SQLite immediate transaction before durable worker state is written; terminal tasks do not consume active capacity.
 
 ## 10. Non-goals (for Phase 1)
 
@@ -209,3 +214,4 @@ tool:called          # NEW — agent invoked a tool (for live drawer)
 4. On worker completion, the delegating session's `mailbox` receives the completion (durable).
 5. The next message to the orchestrator delivers all pending completions together as context; the agent does not call a "check inbox" tool.
 6. `typecheck` passes for all packages.
+7. The 100th active delegation succeeds, the 101st fails before durable worker creation, and hydration returns every admitted active worker.

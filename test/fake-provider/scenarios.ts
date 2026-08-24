@@ -145,7 +145,7 @@ export const SCENARIOS: Record<string, FakeScenario> = {
             id: "call_delegate_001",
             name: "delegate",
             arguments: {
-              prompt: "Perform background research on SQLite WAL benchmarks",
+              task: "Perform background research on SQLite WAL benchmarks",
             },
           },
         ],

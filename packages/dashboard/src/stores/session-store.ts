@@ -345,24 +345,32 @@ export const useSessionStore = create<SessionStore>((set) => ({
     }),
 
   hydrate: (serverSessions) =>
-    set({
-      streamingMessageIds: {},
-      awaitingAuthoritativeMessageIds: {},
-      streamTurnBoundaries: {},
-      serverSnapshotMessageCounts: Object.fromEntries(
-        serverSessions.map((session) => [session.sessionId, session.messages.length]),
-      ),
-      sessions: serverSessions.map((data) => {
-        const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
-        return {
-          sessionId: data.sessionId,
-          messages,
-          status: "active",
-          agentName: data.agentName ?? "orchestrator",
-          title: data.title,
-          createdAt: data.createdAt ?? new Date().toISOString(),
-        };
-      }),
+    set((state) => {
+      const restoredIds = new Set(serverSessions.map((data) => data.sessionId));
+      const retainRestoredSessions = <T>(entries: Record<string, T>): Record<string, T> =>
+        Object.fromEntries(
+          Object.entries(entries).filter(([sessionId]) => restoredIds.has(sessionId)),
+        );
+      let working = {
+        ...state,
+        sessions: state.sessions.filter((session) => restoredIds.has(session.sessionId)),
+        streamingMessageIds: retainRestoredSessions(state.streamingMessageIds),
+        awaitingAuthoritativeMessageIds: retainRestoredSessions(
+          state.awaitingAuthoritativeMessageIds,
+        ),
+        streamTurnBoundaries: retainRestoredSessions(state.streamTurnBoundaries),
+        serverSnapshotMessageCounts: retainRestoredSessions(state.serverSnapshotMessageCounts),
+      };
+      for (const serverSession of serverSessions) {
+        working = { ...working, ...mergeServerSession(working, serverSession, false) };
+      }
+      return {
+        sessions: working.sessions,
+        streamingMessageIds: working.streamingMessageIds,
+        awaitingAuthoritativeMessageIds: working.awaitingAuthoritativeMessageIds,
+        streamTurnBoundaries: working.streamTurnBoundaries,
+        serverSnapshotMessageCounts: working.serverSnapshotMessageCounts,
+      };
     }),
 
   removeSession: (sessionId) =>

@@ -1,5 +1,7 @@
+import { WorkerSummaryListSchema } from "@agent-harness/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { sessionManager } from "../../packages/server/src/session-manager.js";
 import { type EphemeralTestStack, startEphemeralTestStack } from "./test-stack.js";
 
 const HealthSchema = z.object({
@@ -78,5 +80,54 @@ describe("Ephemeral Test Stack", () => {
     expect(rows[1]?.role).toBe("assistant");
     expect(rows[1]?.sequence_num).toBe(1);
     expect(rows[1]?.content).toContain("Deterministic reply");
+  });
+
+  it("rehydrates the durable worker roster through repeated API snapshots", async () => {
+    const createRes = await fetch(`${stack.serverUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "Roster hydration" }),
+    });
+    const created = SessionCreateResponseSchema.parse(await createRes.json());
+
+    const chatRes = await fetch(`${stack.serverUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: created.sessionId,
+        message: "Delegate this task E2E_SCENARIO:delegate-worker",
+      }),
+    });
+    expect(chatRes.status).toBe(200);
+    await chatRes.text();
+
+    let firstSnapshot: ReturnType<typeof WorkerSummaryListSchema.parse> = [];
+    await expect
+      .poll(async () => {
+        const response = await fetch(
+          `${stack.serverUrl}/api/sessions/${created.sessionId}/workers`,
+        );
+        firstSnapshot = WorkerSummaryListSchema.parse(await response.json());
+        return firstSnapshot.length;
+      })
+      .toBeGreaterThan(0);
+
+    await expect
+      .poll(() => {
+        const metrics = sessionManager.metrics();
+        return (
+          metrics.activeWorkers + metrics.agentExecutions.active + metrics.agentExecutions.queued
+        );
+      })
+      .toBe(0);
+
+    const reloadResponse = await fetch(
+      `${stack.serverUrl}/api/sessions/${created.sessionId}/workers`,
+    );
+    const reloaded = WorkerSummaryListSchema.parse(await reloadResponse.json());
+    expect(reloaded.map((worker) => worker.taskId)).toEqual(
+      firstSnapshot.map((worker) => worker.taskId),
+    );
+    expect(reloaded[0]?.workerSessionId).toMatch(/^worker-/u);
   });
 });

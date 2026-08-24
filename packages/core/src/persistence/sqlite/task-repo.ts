@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_WORKERS_PER_SESSION } from "../../contracts/session.js";
 import { parseBoundary } from "../../validation.js";
 import type { ISqliteDatabase, TaskRow, TaskStatus } from "./types.js";
 
@@ -134,6 +135,20 @@ export class TaskRepository {
     return stmt.all(...statuses);
   }
 
+  countActiveByParent(parentSessionId: string): number {
+    const validatedParentSessionId = parseBoundary(
+      z.string().min(1).max(128),
+      parentSessionId,
+      "TaskRepository.countActiveByParent",
+    );
+    const stmt = this.db.prepare<[string], { count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM tasks
+       WHERE parent_session_id = ? AND status IN ('running', 'queued')`,
+    );
+    return Number(stmt.get(validatedParentSessionId)?.count ?? 0);
+  }
+
   update(
     taskId: string,
     updates: {
@@ -186,5 +201,70 @@ export class TaskRepository {
     const stmt = this.db.prepare<[string]>("DELETE FROM tasks WHERE task_id = ?");
     const res = stmt.run(taskId);
     return Number(res.changes) > 0;
+  }
+
+  listWorkerSummaries(
+    parentSessionId: string,
+    options?: { limit?: number; maxAgeMs?: number },
+  ): Array<{
+    taskId: string;
+    workerSessionId: string | null;
+    agentName: string | null;
+    description: string;
+    status: TaskStatus;
+    createdAt: number;
+    updatedAt: number;
+    completedAt: number | null;
+  }> {
+    const limit = options?.limit ?? MAX_WORKERS_PER_SESSION;
+    const maxAgeMs = options?.maxAgeMs ?? 30 * 60 * 1000;
+    const threshold = Date.now() - maxAgeMs;
+
+    const stmt = this.db.prepare<
+      [string, number, number],
+      {
+        task_id: string;
+        worker_session_id: string | null;
+        agent_name: string | null;
+        description: string;
+        status: TaskStatus;
+        created_at: number;
+        updated_at: number;
+        completed_at: number | null;
+      }
+    >(`
+      SELECT
+        t.task_id,
+        t.worker_session_id,
+        s.agent_name,
+        t.description,
+        t.status,
+        t.created_at,
+        t.updated_at,
+        t.completed_at
+      FROM tasks t
+      LEFT JOIN sessions s ON s.id = t.worker_session_id
+      WHERE t.parent_session_id = ?
+        AND (
+          t.status IN ('running', 'queued')
+          OR t.updated_at >= ?
+        )
+      ORDER BY
+        CASE WHEN t.status IN ('running', 'queued') THEN 0 ELSE 1 END ASC,
+        t.updated_at DESC
+      LIMIT ?
+    `);
+
+    const rows = stmt.all(parentSessionId, threshold, limit);
+    return rows.map((r) => ({
+      taskId: r.task_id,
+      workerSessionId: r.worker_session_id,
+      agentName: r.agent_name,
+      description: r.description,
+      status: r.status,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      completedAt: r.completed_at,
+    }));
   }
 }

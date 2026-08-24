@@ -10,6 +10,8 @@ import {
   parseJsonBoundary,
   parseJsonResponseBoundary,
   SessionDataSchema,
+  type WorkerSummary,
+  WorkerSummaryListSchema,
 } from "@agent-harness/core/contracts";
 import { z } from "zod";
 
@@ -137,6 +139,21 @@ export async function fetchSession(
   });
   if (!res.ok) throw new Error("Failed to fetch session");
   return parseJsonResponse(res, SessionDataSchema, "session response", MAX_SESSION_RESPONSE_BYTES);
+}
+
+export type { WorkerSummary };
+
+const MAX_WORKERS_RESPONSE_BYTES = 512 * 1024;
+
+export async function fetchWorkers(sessionId: string): Promise<WorkerSummary[]> {
+  const res = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}/workers`);
+  if (!res.ok) throw new Error("Failed to fetch workers");
+  return parseJsonResponse(
+    res,
+    WorkerSummaryListSchema,
+    "workers response",
+    MAX_WORKERS_RESPONSE_BYTES,
+  );
 }
 
 export async function cancelWorker(taskId: string): Promise<void> {

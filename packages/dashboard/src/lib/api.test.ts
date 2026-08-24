@@ -7,6 +7,7 @@ import {
   fetchOpenSessions,
   fetchSession,
   fetchSessions,
+  fetchWorkers,
   parseChatStreamEvent,
   sendMessage,
   updateAgent,
@@ -95,6 +96,27 @@ describe("dashboard API boundary", () => {
     );
 
     await expect(fetchOpenSessions()).rejects.toBeInstanceOf(BoundaryValidationError);
+  });
+
+  it("validates worker summary status and timestamps before hydrating the roster", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json([
+          {
+            taskId: "task-1",
+            workerSessionId: "worker-task-1",
+            agentName: "worker",
+            description: "work",
+            status: "done",
+            createdAt: "not-a-date",
+            updatedAt: "not-a-date",
+          },
+        ]),
+      ),
+    );
+
+    await expect(fetchWorkers("session-1")).rejects.toBeInstanceOf(BoundaryValidationError);
   });
 
   it("accepts a valid session response larger than the generic API budget @slow", async () => {

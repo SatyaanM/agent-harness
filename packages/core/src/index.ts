@@ -60,6 +60,13 @@ export {
 } from "./contracts/limits.js";
 export type { Logger, LogLevel, LogRecord, LogSink } from "./contracts/logging.js";
 export { consoleSink, createLogger } from "./contracts/logging.js";
+export type { WorkerStatus, WorkerSummary } from "./contracts/session.js";
+export {
+  MAX_WORKERS_PER_SESSION,
+  WorkerStatusSchema,
+  WorkerSummaryListSchema,
+  WorkerSummarySchema,
+} from "./contracts/session.js";
 export type { ChatStreamEvent } from "./contracts/streaming.js";
 export {
   ChatStreamEventSchema,

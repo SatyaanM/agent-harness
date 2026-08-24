@@ -220,6 +220,110 @@ describe("Relational Repositories & Data Access Layer", () => {
       const updatedTask = taskRepo.get("task-001");
       expect(updatedTask?.status).toBe("completed");
     });
+
+    it("lists worker summaries with session join, status filters, and age capping", () => {
+      sessionRepo.create({
+        id: "p-sess",
+        agentName: "orchestrator",
+        prompt: "orchestrator prompt",
+      });
+      sessionRepo.create({
+        id: "w-sess-1",
+        agentName: "researcher",
+        prompt: "worker prompt 1",
+      });
+      sessionRepo.create({
+        id: "w-sess-2",
+        agentName: "coder",
+        prompt: "worker prompt 2",
+      });
+
+      taskRepo.create({
+        taskId: "task-active",
+        parentSessionId: "p-sess",
+        workerSessionId: "w-sess-1",
+        description: "Active research",
+        status: "running",
+      });
+
+      taskRepo.create({
+        taskId: "task-old-done",
+        parentSessionId: "p-sess",
+        workerSessionId: "w-sess-2",
+        description: "Old work",
+        status: "completed",
+        createdAt: Date.now() - 120_000,
+        updatedAt: Date.now() - 120_000,
+      });
+
+      const summaries = taskRepo.listWorkerSummaries("p-sess", { limit: 10, maxAgeMs: 60_000 });
+      expect(summaries.length).toBeGreaterThanOrEqual(1);
+
+      const active = summaries.find((s) => s.taskId === "task-active");
+      expect(active).toBeDefined();
+      expect(active?.agentName).toBe("researcher");
+      expect(active?.status).toBe("running");
+      expect(active?.description).toBe("Active research");
+      expect(summaries.some((s) => s.taskId === "task-old-done")).toBe(false);
+    });
+
+    it("retains active workers when recent terminal tasks saturate the limit", () => {
+      sessionRepo.create({
+        id: "saturated-parent",
+        agentName: "orchestrator",
+        prompt: "parent",
+      });
+      taskRepo.create({
+        taskId: "old-active",
+        parentSessionId: "saturated-parent",
+        description: "still running",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      for (let index = 0; index < 55; index += 1) {
+        taskRepo.create({
+          taskId: `recent-terminal-${index}`,
+          parentSessionId: "saturated-parent",
+          description: "finished",
+          status: "completed",
+          createdAt: Date.now() - 1_000 + index,
+          updatedAt: Date.now() - 1_000 + index,
+        });
+      }
+
+      const summaries = taskRepo.listWorkerSummaries("saturated-parent", {
+        limit: 50,
+        maxAgeMs: 60_000,
+      });
+
+      expect(summaries).toHaveLength(50);
+      expect(summaries[0]?.taskId).toBe("old-active");
+      expect(summaries.some((summary) => summary.taskId === "old-active")).toBe(true);
+    });
+
+    it("returns all 64 active workers with the default roster limit", () => {
+      sessionRepo.create({
+        id: "default-limit-parent",
+        agentName: "orchestrator",
+        prompt: "parent",
+      });
+      for (let index = 0; index < 64; index += 1) {
+        taskRepo.create({
+          taskId: `active-${index}`,
+          parentSessionId: "default-limit-parent",
+          description: `active worker ${index}`,
+          status: "running",
+          createdAt: index + 1,
+          updatedAt: index + 1,
+        });
+      }
+
+      const summaries = taskRepo.listWorkerSummaries("default-limit-parent");
+
+      expect(summaries).toHaveLength(64);
+      expect(new Set(summaries.map((summary) => summary.taskId)).size).toBe(64);
+    });
   });
 
   describe("MailboxRepository", () => {
