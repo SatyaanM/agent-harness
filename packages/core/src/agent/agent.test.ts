@@ -376,9 +376,16 @@ describe("Agent tool boundary", () => {
   });
 
   it("balances every provider tool call when the token budget stops the run", async () => {
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute: async () => "counted",
+    });
     const agent = new Agent(
       { ...config, maxTotalTokens: 10 },
-      new ToolRegistry(),
+      tools,
       {
         async chat() {
           return {
@@ -530,6 +537,35 @@ describe("Agent tool boundary", () => {
 });
 
 describe("Agent Capability Enforcement", () => {
+  it("accepts one pre-resolved matrix and skips a duplicate lookup", async () => {
+    const chat = vi.fn<LLMClient["chat"]>(async () => ({
+      finishReason: "stop",
+      message: { role: "assistant", content: "done" },
+    }));
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    const lookup = vi.spyOn(capabilities, "lookup");
+    const matrix = {
+      chat: true,
+      tools: false,
+      vision: false,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 256,
+    } as const;
+
+    await new Agent(config, new ToolRegistry(), { chat }, capabilities).run(
+      "go",
+      [],
+      undefined,
+      matrix,
+    );
+
+    expect(lookup).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 256 }));
+  });
+
   it("strips tools when tools capability is false", async () => {
     const chat = vi.fn<LLMClient["chat"]>(async () => ({
       finishReason: "stop",
@@ -689,6 +725,77 @@ describe("Agent Capability Enforcement", () => {
           expect.objectContaining({ toolCalls: expect.anything() }),
         ]),
       }),
+    );
+  });
+
+  it("denies calls outside the eligible tool map even when the registry contains them", async () => {
+    const deniedCalls = [
+      { toolCallId: "call-delegate", toolName: "delegate", args: {} },
+      { toolCallId: "call-hitl", toolName: "approve", args: {} },
+      { toolCallId: "call-unconfigured", toolName: "hidden", args: {} },
+    ];
+    const chat = vi
+      .fn<LLMClient["chat"]>()
+      .mockResolvedValueOnce({
+        finishReason: "tool-calls",
+        message: { role: "assistant", content: "trying", toolCalls: deniedCalls },
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        message: { role: "assistant", content: "safe answer" },
+      });
+    const execute = vi.fn(async () => "must not run");
+    const tools = new ToolRegistry();
+    for (const [name, requiresHITL] of [
+      ["delegate", false],
+      ["approve", true],
+      ["hidden", false],
+    ] as const) {
+      tools.register({
+        name,
+        description: name,
+        parameters: z.object({}),
+        requiresHITL,
+        execute,
+      });
+    }
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: false,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+    const events: Parameters<NonNullable<ConstructorParameters<typeof Agent>[4]>>[0][] = [];
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 2 },
+      tools,
+      { chat },
+      capabilities,
+      (event) => events.push(event),
+    );
+
+    const result = await agent.run("go");
+
+    expect(result.status).toBe("success");
+    expect(execute).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "capability-mismatch",
+        detail: expect.stringContaining("delegate, approve, hidden"),
+      }),
+    );
+    expect(result.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("not eligible"),
+        }),
+      ]),
     );
   });
 

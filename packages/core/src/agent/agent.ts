@@ -51,7 +51,12 @@ export class Agent {
     this.config = parseBoundary(AgentConfigSchema, config, "agent configuration");
   }
 
-  async run(prompt?: string, history: Message[] = [], signal?: AbortSignal): Promise<AgentResult> {
+  async run(
+    prompt?: string,
+    history: Message[] = [],
+    signal?: AbortSignal,
+    resolvedCapabilities?: CapabilityMatrix,
+  ): Promise<AgentResult> {
     const tracer = getTracer();
     const runSpan = tracer.startSpan("agent.run", {
       attributes: {
@@ -69,7 +74,7 @@ export class Agent {
       : timeoutController.signal;
     try {
       const result = await tracer.withSpan(runSpan, async () => {
-        return await this.runWithSignal(prompt, history, runSignal);
+        return await this.runWithSignal(prompt, history, runSignal, resolvedCapabilities);
       });
       runSpan.setStatus({
         code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
@@ -104,6 +109,7 @@ export class Agent {
     prompt: string | undefined,
     history: Message[],
     signal: AbortSignal,
+    resolvedCapabilities: CapabilityMatrix | undefined,
   ): Promise<AgentResult> {
     const tracer = getTracer();
     this.messages = [...history];
@@ -111,31 +117,7 @@ export class Agent {
       this.messages.push({ role: "user", content: prompt });
     }
 
-    const modelParts = this.config.model.split("/");
-    const providerId =
-      this.config.provider ?? (modelParts.length > 1 ? modelParts[0] || "default" : "default");
-    const modelId = modelParts.length > 1 ? modelParts.slice(1).join("/") : this.config.model;
-
-    let matrix: CapabilityMatrix;
-    try {
-      matrix = await this.capabilityRegistry.lookup(providerId, modelId, "vercel-ai", this.config);
-    } catch (error) {
-      this.logger.warn("Capability lookup failed; using permissive defaults", {
-        providerId,
-        modelId,
-        ...describeError(error),
-      });
-      matrix = {
-        chat: true,
-        tools: true,
-        vision: true,
-        streaming: false,
-        structuredOutputs: false,
-        promptCaching: false,
-        reasoning: false,
-        maxTokens: 0,
-      };
-    }
+    const matrix = resolvedCapabilities ?? (await this.resolveCapabilities());
 
     const tools = this.config.tools
       .map((name) => this.toolRegistry.get(name))
@@ -144,6 +126,7 @@ export class Agent {
     const eligibleTools = matrix.tools
       ? tools.filter((tool) => !tool.requiresHITL || matrix.reasoning)
       : [];
+    const eligibleToolMap = new Map(eligibleTools.map((tool) => [tool.name, tool]));
     const llmTools: LLMToolDefinition[] | undefined = eligibleTools.length
       ? eligibleTools.map((tool) => ({
           name: tool.name,
@@ -245,11 +228,18 @@ export class Agent {
             throw new AgentCancelledError();
           }
 
-          let responseToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
-
-          // Emit diagnostic and discard hallucinated tool calls when tools are disabled
-          if (!matrix.tools && responseToolCalls.length > 0) {
-            const detail = `Model returned ${responseToolCalls.length} tool call(s) but tools capability is disabled`;
+          const providerToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+          const deniedToolCalls = providerToolCalls.filter(
+            (toolCall) => !eligibleToolMap.has(toolCall.toolName),
+          );
+          const responseToolCalls = providerToolCalls.filter((toolCall) =>
+            eligibleToolMap.has(toolCall.toolName),
+          );
+          let toolDenial: string | undefined;
+          if (deniedToolCalls.length > 0) {
+            const detail = !matrix.tools
+              ? `Model returned ${deniedToolCalls.length} tool call(s) but tools capability is disabled`
+              : `Model returned tool call(s) outside the eligible tool map: ${deniedToolCalls.map((call) => call.toolName).join(", ")}`;
             this.onEvent?.({
               type: "capability-mismatch",
               detail,
@@ -257,20 +247,22 @@ export class Agent {
             this.logger.warn("Capability mismatch", {
               capability: "tools",
               model: this.config.model,
-              toolCallCount: responseToolCalls.length,
+              toolCallCount: deniedToolCalls.length,
+              toolNames: deniedToolCalls.map((call) => call.toolName),
             });
-            responseToolCalls = [];
+            toolDenial = matrix.tools
+              ? "One or more requested tools are not eligible for this agent run. Do not call unavailable, unconfigured, delegated, or approval-required tools; continue using only the provided tools or answer with text."
+              : "Tool calls are disabled for this model. Do not call tools; answer using text only.";
           }
 
           const responseMessage = responseToolCalls.length
             ? { ...response.message, toolCalls: responseToolCalls }
             : stripToolCalls(response.message);
           this.messages.push(responseMessage);
-          if (!matrix.tools && response.finishReason === "tool-calls") {
+          if (toolDenial && responseToolCalls.length === 0) {
             this.messages.push({
               role: "system",
-              content:
-                "Tool calls are disabled for this model. Do not call tools; answer using text only.",
+              content: toolDenial,
             });
           }
           this.onEvent?.({ type: "step", messages: [...this.messages] });
@@ -332,7 +324,7 @@ export class Agent {
               }
               toolCallsUsed += 1;
 
-              const tool = this.toolRegistry.get(toolCall.toolName);
+              const tool = eligibleToolMap.get(toolCall.toolName);
 
               if (!tool) {
                 this.messages.push({
@@ -404,6 +396,9 @@ export class Agent {
                 toolSpan.end();
               }
             }
+            if (toolDenial) {
+              this.messages.push({ role: "system", content: toolDenial });
+            }
             this.onEvent?.({ type: "step", messages: [...this.messages] });
           }
 
@@ -427,6 +422,33 @@ export class Agent {
           : (finalMessage?.content ?? ""),
       messages: [...this.messages],
     };
+  }
+
+  async resolveCapabilities(): Promise<CapabilityMatrix> {
+    try {
+      return await this.capabilityRegistry.lookupModel(
+        this.config.model,
+        this.config.provider,
+        "vercel-ai",
+        this.config,
+      );
+    } catch (error) {
+      this.logger.warn("Capability lookup failed; using conservative defaults", {
+        providerId: this.config.provider ?? "default",
+        modelId: this.config.model,
+        ...describeError(error),
+      });
+      return {
+        chat: false,
+        tools: false,
+        vision: false,
+        streaming: false,
+        structuredOutputs: false,
+        promptCaching: false,
+        reasoning: false,
+        maxTokens: 0,
+      };
+    }
   }
 
   private budgetExceeded(summary: string): AgentResult {

@@ -1,5 +1,6 @@
 import type { CapabilityMatrix } from "../agent/types.js";
 import { CapabilityCache } from "../persistence/capability-cache.js";
+import type { ProviderRegistry } from "../provider-registry.js";
 import { fetchCapabilities } from "./models-dev-client.js";
 import { correlateName } from "./name-correlation.js";
 import { probeCapabilities } from "./probe.js";
@@ -9,17 +10,35 @@ export interface RegistryOptions {
   workspaceRoot: string;
   baseUrl?: string;
   apiKey?: string;
+  providerRegistry?: ProviderRegistry;
 }
 
 export class CapabilityRegistry {
   private cache: CapabilityCache;
   private baseUrl: string;
   private apiKey: string;
+  private providerRegistry: ProviderRegistry | undefined;
 
   constructor(options: RegistryOptions) {
     this.cache = new CapabilityCache(options.workspaceRoot);
     this.baseUrl = options.baseUrl ?? "";
     this.apiKey = options.apiKey ?? "";
+    this.providerRegistry = options.providerRegistry;
+  }
+
+  async lookupModel(
+    model: string,
+    preferredProviderId: string | undefined,
+    sdk: string,
+    agentConfig?: AgentConfigRef,
+  ): Promise<CapabilityMatrix> {
+    const target = this.providerRegistry?.resolveTargets(model, preferredProviderId)[0];
+    return this.lookup(
+      target?.provider.id ?? preferredProviderId ?? "default",
+      target?.modelId ?? model,
+      sdk,
+      agentConfig,
+    );
   }
 
   async lookup(
@@ -68,6 +87,34 @@ export class CapabilityRegistry {
       return modelsDevCaps;
     }
 
+    const providerTarget = this.providerRegistry
+      ?.resolveTargets(model, provider)
+      .find((target) => target.provider.id === provider);
+    if (providerTarget) {
+      const apiKey = process.env[providerTarget.provider.apiKeyEnv];
+      if (!apiKey) return conservativeCapabilities();
+      try {
+        const probedCaps = await probeCapabilities({
+          baseUrl: providerTarget.provider.baseUrl,
+          apiKey,
+          model: providerTarget.modelId,
+          protocol: providerTarget.protocol,
+        });
+        const entry: RegistryEntry = {
+          provider,
+          model,
+          sdk,
+          caps: probedCaps,
+          source: "probe",
+          probedAt: new Date().toISOString(),
+        };
+        await this.cacheEntry(entry);
+        return probedCaps;
+      } catch {
+        return conservativeCapabilities();
+      }
+    }
+
     if (this.baseUrl && this.apiKey) {
       const probedCaps = await probeCapabilities({
         baseUrl: this.baseUrl,
@@ -105,4 +152,17 @@ export class CapabilityRegistry {
   async invalidate(provider: string, model: string, sdk: string): Promise<void> {
     await this.cache.invalidate(provider, model, sdk);
   }
+}
+
+function conservativeCapabilities(): CapabilityMatrix {
+  return {
+    chat: false,
+    tools: false,
+    vision: false,
+    streaming: false,
+    structuredOutputs: false,
+    promptCaching: false,
+    reasoning: false,
+    maxTokens: 0,
+  };
 }

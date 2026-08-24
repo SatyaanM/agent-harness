@@ -8,9 +8,9 @@ Status: Implemented
 
 ## Problem and evidence
 
-The Agent Harness currently includes a sophisticated 4-tier capability lookup system in `@agent-harness/core/capability` (`CapabilityRegistry`), which correctly resolves whether an LLM supports features like chat, tools, vision, and streaming. However, this capability information is not utilized during agent execution. The `Agent` constructor receives a `_capabilityRegistry: CapabilityRegistry` argument, but it goes unused.
+The repository originally had a four-tier capability lookup library that was not connected to execution. The live implementation now must keep provider routing, discovery, advertised tools, and executable tools on the same bounded target; otherwise a model can invoke a registered but unconfigured or capability-ineligible tool.
 
-Consequently, `Agent.run()` and `Agent.runWithSignal()` in `packages/core/src/agent/agent.ts` unconditionally pass all available tool definitions and vision contents to the underlying LLM client, regardless of the model's actual capabilities. This results in bloated prompt payloads, potential API errors for unsupported features, and dead infrastructure in the capability resolution system.
+Configured model IDs are opaque and may contain `/`, prompt caching must use the installed AI SDK 7 contract, and configured-provider probes must use the provider's declared protocol and environment-owned credential without surfacing it.
 
 ## Goals and non-goals
 
@@ -19,11 +19,11 @@ Consequently, `Agent.run()` and `Agent.runWithSignal()` in `packages/core/src/ag
 - Prevent sending unsupported tool definitions and image content parts to models that lack `tools` or `vision` capabilities, respectively.
 - Provide a mechanism for users to manually override capabilities via agent frontmatter (Tier 1 lookup).
 - Emit diagnostics when there is a mismatch between declared capabilities and model behavior (e.g., unexpected tool calls).
-- Maintain backward compatibility by providing permissive defaults when lookup fails.
+- Preserve standalone `Agent` use while allowing a runtime owner to pre-resolve and reuse the same matrix for earlier context decisions.
+- Fail conservatively when a configured live provider probe cannot establish support.
 - Ensure the lookup adds minimal overhead (< 5ms) to run startup by caching results per-run.
 
 ### Non-goals
-- Modifying the existing 4-tier lookup algorithm itself.
 - Changing capabilities dynamically per-tool-call during a single run.
 - Providing a UI for browsing or editing capability matrices.
 - Implementing plugin-contributed tool capability declarations at this stage.
@@ -31,18 +31,18 @@ Consequently, `Agent.run()` and `Agent.runWithSignal()` in `packages/core/src/ag
 ## Required behavior
 
 ### 1. Capability Resolution and Caching
-When `Agent.run()` or `Agent.runWithSignal()` starts, it MUST call `this._capabilityRegistry.lookup(provider, model, sdk, agentConfig)` to resolve the `CapabilityMatrix`.
+When `Agent.run()` starts without a supplied matrix, it MUST resolve through `CapabilityRegistry.lookupModel(model, preferredProvider, sdk, agentConfig)`. The provider registry owns provider/model separation; configured model IDs are never split on `/`.
 The result MUST be cached for the duration of the run to avoid repeated lookups during multi-step executions.
-If the lookup fails entirely across all tiers, the agent MUST fallback to a permissive default (e.g., `{ chat: true, tools: true, vision: true, streaming: false, maxTokens: undefined }`), preserving current behavior.
+`Agent.resolveCapabilities()` exposes the same resolution seam to runtime owners, and `Agent.run(..., resolvedCapabilities)` MUST not repeat it. If a configured live probe fails, the matrix MUST conservatively disable unverified features.
 
 ### 2. Payload Modification based on CapabilityMatrix
 Before invoking `llmClient.chat()` (or its streaming equivalent), the agent MUST inspect the resolved `CapabilityMatrix` and modify the request payload as follows:
-- **Tools**: If `matrix.tools === false`, the agent MUST omit all tool definitions from the LLM request. Additionally, if Human-in-the-Loop (HITL) enforcement is required by the tool but the model lacks advanced reasoning bounds, the tool MUST be stripped to ensure safety.
+- **Tools**: Build one eligible map from configured tools, matrix support, and HITL/reasoning bounds. Use that exact map both for provider definitions and execution. Calls outside it—including worker `delegate`, config-excluded, unknown, and HITL-ineligible tools—MUST be sanitized, diagnosed, denied, and never executed.
 - **Vision**: If `matrix.vision === false`, the agent MUST strip all image content parts from the message history before sending them to the LLM.
 - **Max Tokens**: If `matrix.maxTokens` is defined, the agent MUST use this value to set the `max_tokens` (or `max_output_tokens`, depending on the provider) on the LLM request, UNLESS a lower explicit limit is set in the agent's specific configuration.
 - **Streaming**: If `matrix.streaming === true` and streaming is requested by the invocation, the agent MUST use the streaming path (integrating with the broader streaming implementation).
 - **Structured Outputs**: If `matrix.structuredOutputs === true`, the agent MUST use the provider's native JSON schema adherence features. Otherwise, it must inject schema instructions directly into the system prompt.
-- **Prompt Caching**: If `matrix.promptCaching === true`, the agent MUST automatically apply caching breakpoints to static parts of the system prompt and long context blocks.
+- **Prompt Caching**: For Anthropic targets with `matrix.promptCaching === true`, the adapter MUST use stable AI SDK 7 `providerOptions` and an explicit system-message `cacheControl` breakpoint. Experimental/removed metadata options are prohibited.
 
 ### 3. Agent Frontmatter Overrides
 The `AgentConfig` (and its schema in `packages/core/src/agent/types.ts`) MUST support an optional `capabilities` field:
@@ -69,9 +69,13 @@ The agent MUST monitor the LLM's responses for capability mismatches. If the mod
 5. **Worker Delegation Restriction**: Workers initialized via delegation cannot utilize the `delegate` tool, enforced at the capability scope level.
 6. **Per-Run Caching**: The capability registry lookup is performed exactly once per `Agent.run()` execution and cached for all subsequent steps in that run.
 7. **Backward Compatibility**: Existing agents with no `capabilities` field in their frontmatter operate identically to their current behavior (utilizing Tier 2-4 lookups or the permissive default if lookups fail).
-8. **Performance Target**: The capability lookup process adds less than 5ms to the startup time of an agent run.
+8. **Bounded lookup:** Cached resolution is local and one-per-run. A cache miss may perform bounded external discovery/probing and is not represented as a sub-5ms operation.
+9. **Execution-map parity:** A tool omitted from provider definitions cannot execute even if the provider hallucinates its name and it exists in the global registry.
+10. **Provider-aware probing:** OpenAI and Anthropic probes use their declared endpoint, authentication, and request envelopes without logging or returning credentials; failure is conservative.
+11. **Reusable matrix:** A pre-resolved matrix skips the standalone lookup so earlier runtime stages and `Agent` share one decision.
 
 ## Decisions
 
 - **Diagnostic handling**: A disabled tool call is removed from the assistant message, emitted as a warning and `capability-mismatch` event, and followed by a system denial asking the model for a text-only response. It is never executed.
 - **Vision stripping detail**: Stripped image markdown is replaced with `[Image omitted due to model capability]` so surrounding text retains context.
+- **Provider correlation**: provider/model targets come from `ProviderRegistry.resolveTargets()`; `/` is valid model identity, not an implicit provider delimiter.

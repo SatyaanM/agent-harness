@@ -34,3 +34,9 @@ Status: Implemented
   - [MODIFY] `packages/core/src/agent/agent.ts`
 - **Behavior**: Uses native JSON schema support if `structuredOutputs: true`. Applies caching breakpoints if `promptCaching: true`.
 - **Verification**: Assert correct provider API parameters are mapped.
+
+### Phase 4: Provider parity and reusable resolution
+- **Objective**: Keep routing, probing, advertised tools, and executable tools on one target/matrix.
+- **Files/Symbols**: `CapabilityRegistry.lookupModel`, `Agent.resolveCapabilities`, `Agent.run`, `createVercelAILLMClient`.
+- **Behavior**: Preserve slash-containing IDs; probe declared OpenAI/Anthropic protocols; accept a pre-resolved matrix; deny every call outside the eligible map; use supported prompt-cache options.
+- **Verification**: Adapter assertions, provider-aware probe tests, pre-resolved lookup-count test, and hallucinated delegate/config/HITL denial tests.

@@ -23,6 +23,7 @@ const ProbeOptionsSchema = z
       .transform((value) => value.replace(/\/+$/u, "")),
     apiKey: z.string().min(1).max(16_384),
     model: z.string().min(1).max(512),
+    protocol: z.enum(["openai", "anthropic"]).default("openai"),
     timeoutMs: z.number().int().min(100).max(120_000).default(10_000),
     maxRetries: z.number().int().min(0).max(5).default(PROBE_MAX_RETRIES),
   })
@@ -30,7 +31,7 @@ const ProbeOptionsSchema = z
 export type ProbeOptions = z.input<typeof ProbeOptionsSchema>;
 
 export async function probeCapabilities(options: ProbeOptions): Promise<CapabilityMatrix> {
-  const { baseUrl, apiKey, model, timeoutMs, maxRetries } = parseBoundary(
+  const { baseUrl, apiKey, model, protocol, timeoutMs, maxRetries } = parseBoundary(
     ProbeOptionsSchema,
     options,
     "capability probe options",
@@ -42,7 +43,7 @@ export async function probeCapabilities(options: ProbeOptions): Promise<Capabili
     try {
       return parseBoundary(
         CapabilityMatrixSchema,
-        await probeOnce(baseUrl, apiKey, model, timeoutMs),
+        await probeOnce(baseUrl, apiKey, model, protocol, timeoutMs),
         "capability probe result",
       );
     } catch (error) {
@@ -63,6 +64,7 @@ async function probeOnce(
   baseUrl: string,
   apiKey: string,
   model: string,
+  protocol: "openai" | "anthropic",
   timeoutMs: number,
 ): Promise<CapabilityMatrix> {
   const caps: CapabilityMatrix = {
@@ -76,13 +78,13 @@ async function probeOnce(
     maxTokens: 0,
   };
 
-  caps.chat = await testChat(baseUrl, apiKey, model, timeoutMs);
+  caps.chat = await testChat(baseUrl, apiKey, model, protocol, timeoutMs);
   if (!caps.chat) return caps;
 
   const [tools, vision, streaming] = await Promise.all([
-    testTools(baseUrl, apiKey, model, timeoutMs),
-    testVision(baseUrl, apiKey, model, timeoutMs),
-    testStreaming(baseUrl, apiKey, model, timeoutMs),
+    testTools(baseUrl, apiKey, model, protocol, timeoutMs),
+    testVision(baseUrl, apiKey, model, protocol, timeoutMs),
+    testStreaming(baseUrl, apiKey, model, protocol, timeoutMs),
   ]);
 
   caps.tools = tools;
@@ -96,15 +98,13 @@ async function testChat(
   baseUrl: string,
   apiKey: string,
   model: string,
+  protocol: "openai" | "anthropic",
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const res = await fetch(probeUrl(baseUrl, protocol), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: probeHeaders(protocol, apiKey),
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: "Hi" }],
@@ -122,28 +122,36 @@ async function testTools(
   baseUrl: string,
   apiKey: string,
   model: string,
+  protocol: "openai" | "anthropic",
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const tools =
+      protocol === "anthropic"
+        ? [
+            {
+              name: "test_tool",
+              description: "A test tool",
+              input_schema: { type: "object", properties: {} },
+            },
+          ]
+        : [
+            {
+              type: "function",
+              function: {
+                name: "test_tool",
+                description: "A test tool",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+          ];
+    const res = await fetch(probeUrl(baseUrl, protocol), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: probeHeaders(protocol, apiKey),
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: "Call test" }],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "test_tool",
-              description: "A test tool",
-              parameters: { type: "object", properties: {} },
-            },
-          },
-        ],
+        tools,
         max_tokens: 50,
       }),
       signal: AbortSignal.timeout(timeoutMs),
@@ -158,29 +166,35 @@ async function testVision(
   baseUrl: string,
   apiKey: string,
   model: string,
+  protocol: "openai" | "anthropic",
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const imagePart =
+      protocol === "anthropic"
+        ? {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            },
+          }
+        : {
+            type: "image_url",
+            image_url: {
+              url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            },
+          };
+    const res = await fetch(probeUrl(baseUrl, protocol), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: probeHeaders(protocol, apiKey),
       body: JSON.stringify({
         model,
         messages: [
           {
             role: "user",
-            content: [
-              { type: "text", text: "Describe this" },
-              {
-                type: "image_url",
-                image_url: {
-                  url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-                },
-              },
-            ],
+            content: [{ type: "text", text: "Describe this" }, imagePart],
           },
         ],
         max_tokens: 50,
@@ -197,15 +211,13 @@ async function testStreaming(
   baseUrl: string,
   apiKey: string,
   model: string,
+  protocol: "openai" | "anthropic",
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const res = await fetch(probeUrl(baseUrl, protocol), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: probeHeaders(protocol, apiKey),
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: "Hi" }],
@@ -218,6 +230,21 @@ async function testStreaming(
   } catch {
     return false;
   }
+}
+
+function probeUrl(baseUrl: string, protocol: "openai" | "anthropic"): string {
+  return `${baseUrl}/${protocol === "anthropic" ? "messages" : "chat/completions"}`;
+}
+
+function probeHeaders(protocol: "openai" | "anthropic", apiKey: string): Record<string, string> {
+  if (protocol === "anthropic") {
+    return {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-api-key": apiKey,
+    };
+  }
+  return { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
 }
 
 async function releaseResponse(response: Response): Promise<boolean> {

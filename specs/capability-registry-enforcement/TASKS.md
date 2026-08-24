@@ -13,3 +13,8 @@ read_when:
 - [x] Implement `structuredOutputs` mapping to native provider APIs.
 - [x] Implement `promptCaching` breakpoints injection.
 - [x] Add unit tests verifying tools and images are stripped when corresponding capability is false.
+- [x] Resolve capability provider/model identity through `ProviderRegistry` without splitting slash-containing IDs.
+- [x] Probe configured OpenAI and Anthropic targets with environment-owned credentials and conservative failure.
+- [x] Use one eligible map for both advertised and executable tools, including worker/config/HITL denials.
+- [x] Apply AI SDK 7 Anthropic prompt-cache provider options and a system-message breakpoint.
+- [x] Expose pre-resolution so earlier runtime stages and `Agent.run()` can share one matrix.

@@ -226,7 +226,7 @@ export class SessionManager {
       const llmClient = createVercelAILLMClient(config, this.providerRuntime);
       const capabilityRegistry = new CapabilityRegistry({
         workspaceRoot: config.ROOT,
-        baseUrl: config.PROVIDER_ENDPOINT,
+        providerRegistry: this.providerRuntime.registry,
       });
       runtime = new SessionRuntime({
         sessionId,

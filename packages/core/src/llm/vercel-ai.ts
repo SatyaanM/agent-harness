@@ -157,10 +157,23 @@ async function invokeProvider(
     target.protocol === "anthropic"
       ? createAnthropic({ baseURL: target.provider.baseUrl, apiKey })(target.modelId)
       : createOpenAI({ baseURL: target.provider.baseUrl, apiKey }).chat(target.modelId);
+  const cacheOptions = { anthropic: { cacheControl: { type: "ephemeral" as const } } };
+  const useAnthropicCache = target.protocol === "anthropic" && params.promptCaching === true;
   const result = await generateText({
     model,
     messages,
-    ...(system ? { system } : {}),
+    ...(system && useAnthropicCache
+      ? {
+          instructions: {
+            role: "system" as const,
+            content: system,
+            providerOptions: cacheOptions,
+          },
+        }
+      : system
+        ? { system }
+        : {}),
+    ...(useAnthropicCache ? { providerOptions: cacheOptions } : {}),
     ...(tools ? { tools } : {}),
     ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
     ...(params.signal ? { abortSignal: params.signal } : {}),
