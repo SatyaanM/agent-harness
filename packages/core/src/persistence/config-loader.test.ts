@@ -109,6 +109,13 @@ compaction: false
 compactionThreshold: 0.7
 compactionKeepRecentMessages: 10
 compactionChunkMessages: 24
+capabilities:
+  chat: true
+  tools: false
+  vision: false
+  streaming: true
+  contextWindowTokens: 128000
+  maxTokens: 4096
 ---
 Keep the transcript exact.
 `,
@@ -121,6 +128,10 @@ Keep the transcript exact.
         compactionThreshold: 0.7,
         compactionKeepRecentMessages: 10,
         compactionChunkMessages: 24,
+        capabilities: expect.objectContaining({
+          contextWindowTokens: 128_000,
+          maxTokens: 4_096,
+        }),
       }),
     );
   });

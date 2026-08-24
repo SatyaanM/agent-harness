@@ -19,7 +19,7 @@ Verified current behavior:
 ## Goals and non-goals
 
 ### Goals
-- Automatically compact (summarize) old messages when a session's token estimate exceeds a configured threshold (e.g., 80% of model's maxTokens).
+- Automatically compact (summarize) old messages when a session's token estimate exceeds a configured threshold (e.g., 80% of the model context window).
 - Preserve the exact transcript of all original messages in the database (verbatim transcript invariant).
 - Replace older messages with a summary message in the active LLM context without compounding previously compacted ranges.
 - Allow agents to opt-out of compaction via configuration.
@@ -41,7 +41,10 @@ Verified current behavior:
 ### 2. Compactor Subsystem
 - Introduce a `Compactor` class in `packages/core/src/agent/compactor.ts`.
 - The compactor identifies the oldest uncompacted $N$ messages (excluding the system prompt and the most recent $K$ turns) to summarize.
+- Candidate boundaries are tool-exchange atomic: an assistant tool-call message and every contiguous matching tool result are either retained or compacted together. A candidate never starts with an orphan tool result or ends with unresolved tool calls.
 - It uses the configured LLM client to generate a summary of the selected messages. The default model is the agent's main model, but it can be overridden.
+- The provider request receives a projection with a 256,000-character absolute ceiling. Its effective ceiling is lower for small models: it is derived from the true context window after reserving conservative instruction and summary-output budgets. Individual content, reasoning, and serialized tool-call fields have 32,000-character ceilings with explicit truncation markers; canonical transcript rows are never changed.
+- Summary generation has a 2,048-token absolute ceiling and is further capped by the provider's discovered maximum output and a conservative share of the true context window. It is accepted only when the provider reports `finishReason: stop`, returns non-empty text no longer than 32,000 characters, and returns no tool calls. Empty, length-truncated, filtered, errored, or tool-calling responses fail the run without creating a summary message or compaction record.
 - **Semantic Memory Extraction**: During summarization, the Compactor MUST extract key entities, persistent facts, user preferences, and unresolved goals into a distinct structured memory block or key-value format, ensuring critical discrete state survives multiple rolling compactions.
 - The summary becomes a system message inserted at the compaction boundary in the active context.
 
@@ -84,8 +87,13 @@ Verified current behavior:
 7. **Cost Tracking**: Tokens used for summarization are correctly recorded under a separate compaction usage metric in the run's metadata.
 8. **Performance**: The compaction summarization step blocks for at most the duration of a single LLM API call (< 5s on average).
 9. **Migration**: The `003_compaction_records.sql` migration runs successfully on startup and creates the required schema.
+10. **Budget semantics**: `capabilities.contextWindowTokens` controls the compaction threshold; `capabilities.maxTokens` remains the provider's maximum output-token capability and `maxOutputTokens` remains the primary run output request limit. Missing/zero context-window discovery uses the 128,000-token fallback.
+11. **Atomic boundaries**: Compaction never separates an assistant tool call from its corresponding contiguous tool results.
+12. **Bounded summarization**: Compaction input projection and summary output are explicitly bounded, and unusable provider responses leave durable state unchanged.
+13. **Rollback integrity**: Rolling migration 003 back to 002 removes only messages referenced as derived compaction summaries, preserves every canonical transcript message, then removes the compaction table. Reapplying 003 succeeds.
 
 ## Open questions and decisions
 - **Summary detail level**: The prompt requires a distinct structured semantic-memory block followed by a chronological summary, explicitly preserving paths, subagent IDs, configuration choices, preferences, facts, entities, and unresolved goals.
 - **Variable chunking ($N$ and $K$)**: Defaults are 50 messages per oldest contiguous chunk and 8 recent active messages retained verbatim. Agents may override both in frontmatter with bounded integer settings.
-- **Context-window fallback**: `capabilities.maxTokens` is used when configured; otherwise the runtime uses a 128,000-token fallback and an 80% trigger ratio.
+- **Separate token budgets**: `capabilities.contextWindowTokens` is the discovered/manual input context capacity. `capabilities.maxTokens` continues to mean discovered maximum output capacity, and `maxOutputTokens` is the requested primary generation cap. The runtime uses a 128,000-token context fallback and an 80% trigger ratio when no positive context capacity is known.
+- **Bounded projection tradeoff**: Oversized fields are represented by a deterministic prefix plus a truncation marker in the compactor-only projection. Absolute caps are ceilings; the runtime lowers them to fit small discovered context/output limits after reserves. This bounds provider input without mutating or rewriting canonical message bytes.

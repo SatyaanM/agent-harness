@@ -25,6 +25,7 @@ export interface AgentConfigRef {
     structuredOutputs?: boolean;
     promptCaching?: boolean;
     reasoning?: boolean;
+    contextWindowTokens?: number;
     maxTokens?: number;
   };
   modelIdMapping?: string;
@@ -35,7 +36,12 @@ const ModelsDevModelSchema = z
     id: z.string().max(512).optional(),
     tool_call: z.boolean().optional(),
     modalities: z.object({ input: z.array(z.string().max(128)).max(32).optional() }).optional(),
-    limit: z.object({ output: z.number().nonnegative().optional() }).optional(),
+    limit: z
+      .object({
+        context: z.number().nonnegative().optional(),
+        output: z.number().nonnegative().optional(),
+      })
+      .optional(),
   })
   .passthrough();
 

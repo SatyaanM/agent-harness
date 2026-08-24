@@ -18,7 +18,7 @@ describe("models.dev capability boundary", () => {
                 model: {
                   tool_call: true,
                   modalities: { input: ["text", "image"] },
-                  limit: { output: 4096 },
+                  limit: { context: 128_000, output: 4096 },
                 },
               },
             },
@@ -41,6 +41,7 @@ describe("models.dev capability boundary", () => {
       promptCaching: false,
       reasoning: false,
       maxTokens: 4096,
+      contextWindowTokens: 128_000,
     });
     expect(second).toEqual(first);
     expect(fetchMock).toHaveBeenCalledTimes(1);

@@ -72,6 +72,7 @@ async function probeOnce(
     structuredOutputs: false,
     promptCaching: false,
     reasoning: false,
+    contextWindowTokens: 0,
     maxTokens: 0,
   };
 

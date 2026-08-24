@@ -816,8 +816,9 @@ export class SessionRuntime {
     if (!messageRepo) return { history: [] };
 
     const contextWindowTokens =
-      agentConfig.capabilities?.maxTokens && agentConfig.capabilities.maxTokens > 0
-        ? agentConfig.capabilities.maxTokens
+      agentConfig.capabilities?.contextWindowTokens &&
+      agentConfig.capabilities.contextWindowTokens > 0
+        ? agentConfig.capabilities.contextWindowTokens
         : DEFAULT_CONTEXT_WINDOW_TOKENS;
     const threshold = agentConfig.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
     const activeRows = messageRepo.getActiveContext(this.options.sessionId);
@@ -839,7 +840,11 @@ export class SessionRuntime {
         const compacted = await new Compactor(this.options.llmClient).compact(
           candidate.map((row) => messageRepo.toMessage(row)),
           agentConfig.model,
-          signal,
+          {
+            contextWindowTokens,
+            maxOutputTokens: agentConfig.capabilities?.maxTokens,
+            signal,
+          },
         );
         messageRepo.createCompaction({
           sessionId: this.options.sessionId,

@@ -85,6 +85,7 @@ describe("probeCapabilities", () => {
       tools: true,
       vision: true,
       streaming: true,
+      contextWindowTokens: 0,
       maxTokens: 0,
       structuredOutputs: false,
       promptCaching: false,

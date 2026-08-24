@@ -208,6 +208,7 @@ export class CapabilityRegistry {
       structuredOutputs: false,
       promptCaching: false,
       reasoning: false,
+      contextWindowTokens: 0,
       maxTokens: 0,
     };
   }
@@ -230,6 +231,7 @@ function conservativeCapabilities(): CapabilityMatrix {
     structuredOutputs: false,
     promptCaching: false,
     reasoning: false,
+    contextWindowTokens: 0,
     maxTokens: 0,
   };
 }
@@ -244,6 +246,9 @@ function intersectCapabilityMatrices(matrices: CapabilityMatrix[]): CapabilityMa
   const knownMaxTokens = matrices
     .map((matrix) => matrix.maxTokens)
     .filter((maxTokens) => maxTokens > 0);
+  const knownContextWindowTokens = matrices
+    .map((matrix) => matrix.contextWindowTokens ?? 0)
+    .filter((contextWindowTokens) => contextWindowTokens > 0);
   return rest.reduce<CapabilityMatrix>(
     (intersection, matrix) => ({
       chat: intersection.chat && matrix.chat,
@@ -253,6 +258,8 @@ function intersectCapabilityMatrices(matrices: CapabilityMatrix[]): CapabilityMa
       structuredOutputs: intersection.structuredOutputs && matrix.structuredOutputs,
       promptCaching: intersection.promptCaching && matrix.promptCaching,
       reasoning: intersection.reasoning && matrix.reasoning,
+      contextWindowTokens:
+        knownContextWindowTokens.length > 0 ? Math.min(...knownContextWindowTokens) : 0,
       maxTokens: knownMaxTokens.length > 0 ? Math.min(...knownMaxTokens) : 0,
     }),
     first,

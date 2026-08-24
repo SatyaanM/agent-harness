@@ -128,6 +128,50 @@ describe("SqliteMigrator", () => {
     db.close();
   });
 
+  it("removes only derived summaries when rolling compaction back to version 2", () => {
+    const db = createDatabaseConnection(":memory:");
+    const migrator = new SqliteMigrator(db);
+    migrator.up();
+    expect(
+      db.prepare<[], { foreign_keys: number }>("PRAGMA foreign_keys").get()?.foreign_keys,
+    ).toBe(1);
+    db.exec(`
+      INSERT INTO sessions (id, agent_name, prompt, created_at, updated_at)
+      VALUES ('rollback-session', 'agent', 'prompt', 0, 0);
+      INSERT INTO messages (id, session_id, role, content, sequence_num, created_at, metadata)
+      VALUES
+        ('original-user', 'rollback-session', 'user', 'exact original', 0, 0, NULL),
+        ('original-system', 'rollback-session', 'system', 'canonical system', 1, 0, NULL),
+        ('derived-summary', 'rollback-session', 'system', 'derived', 2, 0,
+         '{"meta":{"kind":"compaction_summary","startSequence":0,"endSequence":1}}');
+      INSERT INTO compaction_records (
+        session_id, summary_message_id, start_sequence, end_sequence,
+        original_token_estimate, summary_token_estimate, compacted_at, model_used
+      ) VALUES ('rollback-session', 'derived-summary', 0, 1, 10, 2, 1, 'model');
+    `);
+
+    expect(migrator.down(2).versions).toEqual([3]);
+    expect(
+      db
+        .prepare<[], { id: string; content: string }>(
+          "SELECT id, content FROM messages ORDER BY sequence_num ASC",
+        )
+        .all(),
+    ).toEqual([
+      { id: "original-user", content: "exact original" },
+      { id: "original-system", content: "canonical system" },
+    ]);
+    expect(migrator.up().versions).toEqual([3]);
+    expect(
+      db
+        .prepare<[], { name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'compaction_records'",
+        )
+        .get()?.name,
+    ).toBe("compaction_records");
+    db.close();
+  });
+
   it("detects SHA-256 checksum mismatch for modified migrations", () => {
     const db = createDatabaseConnection(":memory:");
     const originalMigration: MigrationFile = {

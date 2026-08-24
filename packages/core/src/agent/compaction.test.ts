@@ -6,7 +6,13 @@ import type { LLMClient, LLMResponse } from "../llm/client.js";
 import { SqliteDatabaseDriver } from "../persistence/sqlite/db.js";
 import { MessageRepository } from "../persistence/sqlite/message-repo.js";
 import { SqliteMigrator } from "../persistence/sqlite/migrator.js";
-import { Compactor, estimateMessagesTokens, estimateTokens } from "./compactor.js";
+import {
+  Compactor,
+  estimateMessagesTokens,
+  estimateTokens,
+  MAX_COMPACTION_INPUT_CHARACTERS,
+  MAX_COMPACTION_OUTPUT_TOKENS,
+} from "./compactor.js";
 
 describe("Compactor Engine and SQLite Repo", () => {
   let db: SqliteDatabaseDriver;
@@ -62,8 +68,98 @@ describe("Compactor Engine and SQLite Repo", () => {
     const call = vi.mocked(mockClient.chat).mock.calls[0]?.[0];
     if (!call) throw new Error("No call");
     expect(call.model).toBe("gpt-4");
+    expect(call.maxOutputTokens).toBe(MAX_COMPACTION_OUTPUT_TOKENS);
     if (!call.messages[0]) throw new Error("No messages");
     expect(call.messages[0].content).toContain("[Message 1] Role: user");
+  });
+
+  it("bounds the provider-only projection without changing source messages", async () => {
+    const source = "x".repeat(MAX_COMPACTION_INPUT_CHARACTERS * 2);
+    const mockClient: LLMClient = {
+      chat: vi.fn().mockResolvedValue({
+        message: { role: "assistant", content: "bounded summary" },
+        finishReason: "stop",
+      }),
+    };
+
+    await new Compactor(mockClient).compact([{ role: "user", content: source }], "model");
+
+    const request = vi.mocked(mockClient.chat).mock.calls[0]?.[0];
+    expect(request?.messages[0]?.content.length).toBeLessThanOrEqual(
+      MAX_COMPACTION_INPUT_CHARACTERS,
+    );
+    expect(request?.messages[0]?.content).toContain("[truncated");
+    expect(source).toHaveLength(MAX_COMPACTION_INPUT_CHARACTERS * 2);
+  });
+
+  it("fits an oversized tool result within a small context and output capability", async () => {
+    const oversizedResult = "r".repeat(100_000);
+    const mockClient: LLMClient = {
+      chat: vi.fn().mockResolvedValue({
+        message: { role: "assistant", content: "bounded summary" },
+        finishReason: "stop",
+      }),
+    };
+
+    await new Compactor(mockClient).compact(
+      [
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ toolCallId: "call-1", toolName: "lookup", args: {} }],
+        },
+        { role: "tool", content: oversizedResult, toolCallId: "call-1" },
+      ],
+      "small-model",
+      { contextWindowTokens: 8_000, maxOutputTokens: 512 },
+    );
+
+    const request = vi.mocked(mockClient.chat).mock.calls[0]?.[0];
+    expect(request?.maxOutputTokens).toBe(512);
+    expect(request?.messages[0]?.content.length).toBeLessThanOrEqual(27_904);
+    expect(request?.messages[0]?.content).toContain("[truncated");
+    expect(oversizedResult).toHaveLength(100_000);
+  });
+
+  it.each([
+    [
+      "empty",
+      { message: { role: "assistant" as const, content: "   " }, finishReason: "stop" as const },
+    ],
+    [
+      "length-truncated",
+      {
+        message: { role: "assistant" as const, content: "partial" },
+        finishReason: "length" as const,
+      },
+    ],
+    [
+      "content-filtered",
+      {
+        message: { role: "assistant" as const, content: "filtered" },
+        finishReason: "content-filter" as const,
+      },
+    ],
+    [
+      "provider-error",
+      { message: { role: "assistant" as const, content: "error" }, finishReason: "error" as const },
+    ],
+    [
+      "tool-calling",
+      {
+        message: {
+          role: "assistant" as const,
+          content: "call a tool",
+          toolCalls: [{ toolCallId: "call-1", toolName: "lookup", args: {} }],
+        },
+        finishReason: "tool-calls" as const,
+      },
+    ],
+  ])("rejects an unusable %s response", async (_name, response) => {
+    const client: LLMClient = { chat: vi.fn().mockResolvedValue(response) };
+    await expect(
+      new Compactor(client).compact([{ role: "user", content: "source" }], "model"),
+    ).rejects.toThrow(/compaction response/i);
   });
 
   it("substitutes ranges dynamically in getActiveContext", () => {
@@ -185,5 +281,66 @@ describe("Compactor Engine and SQLite Repo", () => {
     const active = messageRepo.getActiveContext("sess-1");
     expect(active).toHaveLength(10_050);
     expect(active.at(-1)?.content).toBe("10049");
+  });
+
+  it("never splits an assistant tool call from its matching tool results", () => {
+    messageRepo.create({
+      id: "user-0",
+      sessionId: "sess-1",
+      role: "user",
+      content: "start",
+      sequenceNum: 0,
+    });
+    messageRepo.create({
+      id: "assistant-tools",
+      sessionId: "sess-1",
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { toolCallId: "call-1", toolName: "one", args: {} },
+        { toolCallId: "call-2", toolName: "two", args: {} },
+      ],
+      sequenceNum: 1,
+    });
+    for (const [index, toolCallId] of ["call-1", "call-2"].entries()) {
+      messageRepo.create({
+        id: `tool-${index}`,
+        sessionId: "sess-1",
+        role: "tool",
+        content: `result ${index}`,
+        toolCallId,
+        sequenceNum: index + 2,
+      });
+    }
+    messageRepo.create({
+      id: "assistant-final",
+      sessionId: "sess-1",
+      role: "assistant",
+      content: "done",
+      sequenceNum: 4,
+    });
+    messageRepo.create({
+      id: "user-recent",
+      sessionId: "sess-1",
+      role: "user",
+      content: "recent",
+      sequenceNum: 5,
+    });
+
+    expect(
+      messageRepo
+        .selectCompactionCandidate("sess-1", { keepRecentMessages: 2, chunkMessages: 2 })
+        .map((row) => row.id),
+    ).toEqual([]);
+    expect(
+      messageRepo
+        .selectCompactionCandidate("sess-1", { keepRecentMessages: 2, chunkMessages: 4 })
+        .map((row) => row.id),
+    ).toEqual(["user-0", "assistant-tools", "tool-0", "tool-1"]);
+    expect(
+      messageRepo
+        .selectCompactionCandidate("sess-1", { keepRecentMessages: 3, chunkMessages: 4 })
+        .map((row) => row.id),
+    ).toEqual([]);
   });
 });

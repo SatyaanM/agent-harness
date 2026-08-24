@@ -14,3 +14,8 @@ read_when:
 - [x] Trigger `Compactor` safely before LLM execution when threshold is exceeded.
 - [x] Add token cost tracking for compaction tasks to the run metadata.
 - [x] Write integration tests verifying idempotent tracking and context replacement.
+- [x] Specify distinct context-window, provider output-capability, and requested output-token semantics.
+- [x] Add tool-call/result atomic candidate-boundary regressions and implementation.
+- [x] Bound compaction-only input projection and summary output request/response.
+- [x] Reject unusable compaction responses without durable writes.
+- [x] Make v3 -> v2 rollback delete only referenced derived summaries and prove up/down/up integrity.

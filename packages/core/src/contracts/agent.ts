@@ -17,6 +17,7 @@ export const CapabilityMatrixSchema = z
     structuredOutputs: z.boolean().default(false),
     promptCaching: z.boolean().default(false),
     reasoning: z.boolean().default(false),
+    contextWindowTokens: z.number().int().nonnegative().max(10_000_000).optional(),
     maxTokens: z.number().int().nonnegative().max(10_000_000),
   })
   .strict();

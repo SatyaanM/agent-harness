@@ -36,6 +36,62 @@ const CompactionInputSchema = z
 const JsonRecordSchema = z.record(z.unknown());
 const ToolCallsSchema = z.array(z.record(z.unknown())).max(10_000);
 
+interface CompactionMessageGroup {
+  rows: MessageRow[];
+  selectable: boolean;
+}
+
+function groupActiveMessages(
+  active: MessageRow[],
+  summaryIds: ReadonlySet<string>,
+): CompactionMessageGroup[] {
+  const groups: CompactionMessageGroup[] = [];
+  for (let index = 0; index < active.length; index += 1) {
+    const message = active[index];
+    if (!message) continue;
+    if (summaryIds.has(message.id) || message.role === "tool") {
+      groups.push({ rows: [message], selectable: false });
+      continue;
+    }
+    const grouped = groupToolExchange(active, index, message);
+    groups.push(grouped.group);
+    index = grouped.endIndex;
+  }
+  return groups;
+}
+
+function groupToolExchange(
+  active: MessageRow[],
+  startIndex: number,
+  message: MessageRow,
+): { group: CompactionMessageGroup; endIndex: number } {
+  if (message.role !== "assistant" || !message.tool_calls) {
+    return { group: { rows: [message], selectable: true }, endIndex: startIndex };
+  }
+  const calls = parseJsonBoundary(
+    ToolCallsSchema,
+    message.tool_calls,
+    `message ${message.id} tool calls`,
+  );
+  const pendingIds = new Set(
+    calls
+      .map((call) => call.toolCallId)
+      .filter((toolCallId): toolCallId is string => typeof toolCallId === "string"),
+  );
+  const rows = [message];
+  let endIndex = startIndex;
+  while (pendingIds.size > 0) {
+    const result = active[endIndex + 1];
+    if (result?.role !== "tool" || !result.tool_call_id || !pendingIds.has(result.tool_call_id)) {
+      return { group: { rows, selectable: false }, endIndex };
+    }
+    rows.push(result);
+    pendingIds.delete(result.tool_call_id);
+    endIndex += 1;
+  }
+  return { group: { rows, selectable: true }, endIndex };
+}
+
 export class MessageRepository {
   constructor(private readonly db: ISqliteDatabase) {}
 
@@ -326,21 +382,34 @@ export class MessageRepository {
     const summaryIds = new Set(
       this.getCompactedRanges(sessionId).map((record) => record.summary_message_id),
     );
-    const eligible = active.slice(0, Math.max(0, active.length - options.keepRecentMessages));
-    let candidate: MessageRow[] = [];
-    for (const message of eligible) {
-      if (summaryIds.has(message.id)) {
+    const groups = groupActiveMessages(active, summaryIds);
+
+    let retainedMessages = 0;
+    let firstRetainedGroup = groups.length;
+    while (firstRetainedGroup > 0 && retainedMessages < options.keepRecentMessages) {
+      firstRetainedGroup -= 1;
+      retainedMessages += groups[firstRetainedGroup]?.rows.length ?? 0;
+    }
+
+    const candidate: MessageRow[] = [];
+    for (const group of groups.slice(0, firstRetainedGroup)) {
+      const previous = candidate.at(-1);
+      const first = group.rows[0];
+      if (!group.selectable || !first) {
         if (candidate.length >= 2) break;
-        candidate = [];
+        candidate.length = 0;
         continue;
       }
-      const previous = candidate.at(-1);
-      if (previous && message.sequence_num !== previous.sequence_num + 1) {
+      if (previous && first.sequence_num !== previous.sequence_num + 1) {
         if (candidate.length >= 2) break;
-        candidate = [];
+        candidate.length = 0;
       }
-      candidate.push(message);
-      if (candidate.length === options.chunkMessages) break;
+      if (candidate.length + group.rows.length > options.chunkMessages) {
+        if (candidate.length >= 2) break;
+        candidate.length = 0;
+        continue;
+      }
+      candidate.push(...group.rows);
     }
     return candidate.length >= 2 ? candidate : [];
   }

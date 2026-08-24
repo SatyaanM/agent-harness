@@ -1155,7 +1155,8 @@ describe("SessionRuntime delivery invariants", () => {
           tools: false,
           vision: false,
           streaming: false,
-          maxTokens: 100,
+          maxTokens: 100_000,
+          contextWindowTokens: 100,
         },
         compactionThreshold: 0.5,
         compactionKeepRecentMessages: 2,
@@ -1230,6 +1231,7 @@ describe("SessionRuntime delivery invariants", () => {
           vision: false,
           streaming: false,
           maxTokens: 10,
+          contextWindowTokens: 10,
         },
       }),
       toolRegistry: new ToolRegistry(),
@@ -1241,6 +1243,92 @@ describe("SessionRuntime delivery invariants", () => {
 
     expect(chat).toHaveBeenCalledTimes(1);
     expect(messageRepo.getCompactedRanges("compact-disabled")).toEqual([]);
+    db.close();
+  });
+
+  it("does not use the provider output-token capability as the context window", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+    new SessionRepository(db).create({ id: "separate-budgets", agentName: "agent", prompt: "old" });
+    const messageRepo = new MessageRepository(db);
+    for (let sequenceNum = 0; sequenceNum < 6; sequenceNum++) {
+      messageRepo.create({
+        sessionId: "separate-budgets",
+        role: sequenceNum % 2 === 0 ? "user" : "assistant",
+        content: `history ${sequenceNum} with enough text for the tiny output limit`,
+        sequenceNum,
+      });
+    }
+    const chat = vi.fn(async () => stop("primary"));
+    const runtime = new SessionRuntime({
+      sessionId: "separate-budgets",
+      db,
+      resolveConfig: () => ({
+        ...config(),
+        capabilities: {
+          chat: true,
+          tools: false,
+          vision: false,
+          streaming: false,
+          maxTokens: 1,
+          contextWindowTokens: 128_000,
+        },
+      }),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+    });
+
+    await runtime.deliver("new prompt");
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(messageRepo.getCompactedRanges("separate-budgets")).toEqual([]);
+    db.close();
+  });
+
+  it("does not persist derived compaction state for a truncated summary", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+    new SessionRepository(db).create({ id: "bad-summary", agentName: "agent", prompt: "old" });
+    const messageRepo = new MessageRepository(db);
+    for (let sequenceNum = 0; sequenceNum < 6; sequenceNum++) {
+      messageRepo.create({
+        sessionId: "bad-summary",
+        role: sequenceNum % 2 === 0 ? "user" : "assistant",
+        content: `history ${sequenceNum} with enough text to compact`,
+        sequenceNum,
+      });
+    }
+    const chat = vi.fn(async () => ({
+      message: { role: "assistant" as const, content: "incomplete summary" },
+      finishReason: "length" as const,
+    }));
+    const runtime = new SessionRuntime({
+      sessionId: "bad-summary",
+      db,
+      resolveConfig: () => ({
+        ...config(),
+        capabilities: {
+          chat: true,
+          tools: false,
+          vision: false,
+          streaming: false,
+          maxTokens: 100_000,
+          contextWindowTokens: 10,
+        },
+        compactionKeepRecentMessages: 2,
+        compactionChunkMessages: 4,
+      }),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+    });
+
+    await expect(runtime.deliver("new prompt")).rejects.toThrow(/compaction response/i);
+    expect(messageRepo.getCompactedRanges("bad-summary")).toEqual([]);
+    expect(messageRepo.listBySession("bad-summary").filter((row) => row.role === "system")).toEqual(
+      [],
+    );
     db.close();
   });
 });
