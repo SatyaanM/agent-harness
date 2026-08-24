@@ -4,11 +4,11 @@ import path from "node:path";
 import {
   BoundaryValidationError,
   getConfig,
-  parseBoundary,
   parseJsonBoundary,
   readUtf8FileBoundedSync,
   stringifyJsonBounded,
 } from "@agent-harness/core";
+import { parseBoundary } from "@agent-harness/core/contracts";
 import { z } from "zod";
 import { IdentifierSchema } from "./http/validation.js";
 

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { parseBoundary } from "@agent-harness/core";
+import { parseBoundary } from "@agent-harness/core/contracts";
 import { z } from "zod";
 
 const DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];

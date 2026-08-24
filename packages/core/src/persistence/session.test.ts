@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BoundaryValidationError } from "../validation.js";
 import { createSessionData, SessionStore } from "./session.js";
+import { releaseSessionIndex } from "./session-index.js";
 
 const tempDirs: string[] = [];
 
@@ -25,6 +26,20 @@ describe("SessionStore boundary validation", () => {
     await expect(store.load("session-1")).resolves.toEqual(
       expect.objectContaining({ sessionId: "session-1", mailbox: [] }),
     );
+  });
+
+  it("drains and releases the derived metadata index before directory teardown", async () => {
+    const { dir, store } = await makeStore();
+    await store.save(createSessionData());
+
+    await releaseSessionIndex(dir);
+
+    await expect(readFile(path.join(dir, ".index.json"), "utf8")).resolves.toContain(
+      '"sessionId": "session-1"',
+    );
+    await expect(readFile(path.join(dir, ".index.json.tmp"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("rejects an invalid persisted transcript instead of trusting its shape", async () => {

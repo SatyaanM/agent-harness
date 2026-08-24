@@ -2,7 +2,7 @@ import { WorkerSummaryListSchema } from "@agent-harness/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { sessionManager } from "../../packages/server/src/session-manager.js";
-import { type EphemeralTestStack, startEphemeralTestStack } from "./test-stack.js";
+import { type EphemeralTestStack, startEphemeralTestStack } from "./test-stack.mts";
 
 const HealthSchema = z.object({
   status: z.string(),

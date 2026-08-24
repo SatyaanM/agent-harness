@@ -1,4 +1,5 @@
 import { render, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "@/lib/api";
 import { useRosterStore } from "@/stores/agent-roster-store";
@@ -136,6 +137,31 @@ describe("RuntimeSync component lifecycle", () => {
       activeSessionId: "session-1",
       openSessionIds: ["session-1"],
     });
+  });
+
+  it("retries hydration when Strict Mode remounts while the first request is in flight", async () => {
+    const firstOpenRequest = deferred<{ activeSessionId: string; openSessionIds: string[] }>();
+    vi.mocked(api.fetchOpenSessions)
+      .mockReturnValueOnce(firstOpenRequest.promise)
+      .mockResolvedValueOnce({
+        activeSessionId: "session-1",
+        openSessionIds: ["session-1"],
+      });
+    vi.mocked(api.fetchSession).mockResolvedValue(
+      createTestServerSession({ sessionId: "session-1" }),
+    );
+
+    render(
+      <StrictMode>
+        <RuntimeSync />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(api.fetchOpenSessions).toHaveBeenCalledTimes(1));
+    firstOpenRequest.resolve({ activeSessionId: "session-1", openSessionIds: ["session-1"] });
+
+    await waitFor(() => expect(useSessionStore.getState().activeSessionId).toBe("session-1"));
+    expect(api.fetchOpenSessions).toHaveBeenCalledTimes(2);
   });
 
   it("resyncs active sessions on socket connect", async () => {

@@ -163,11 +163,11 @@ export async function startEphemeralTestStack(
     } catch {}
 
     try {
-      await fakeProvider.close();
+      await sessionManager.close();
     } catch {}
 
     try {
-      await sessionManager.close();
+      await fakeProvider.close();
     } catch {}
 
     // Restore environment

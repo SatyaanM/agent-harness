@@ -128,7 +128,7 @@ export {
   SessionDataSchema,
   SessionStore,
 } from "./persistence/session.js";
-export type { SessionMeta } from "./persistence/session-index.js";
+export { releaseSessionIndex, type SessionMeta } from "./persistence/session-index.js";
 export * from "./persistence/sqlite/index.js";
 export type {
   InboxRendererManifest,

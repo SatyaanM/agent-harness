@@ -42,10 +42,14 @@ export default function RuntimeSync() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const hydrated = useRef(false);
   const hydrating = useRef(false);
+  const pendingHydration = useRef<{ signal?: { cancelled: boolean } } | null>(null);
   const pendingSync = useRef(false);
 
   const hydrateOpenSessions = useCallback(async (signal?: { cancelled: boolean }) => {
-    if (hydrating.current) return;
+    if (hydrating.current) {
+      pendingHydration.current = { signal };
+      return;
+    }
     hydrating.current = true;
     try {
       const open = await fetchOpenSessions();
@@ -87,6 +91,9 @@ export default function RuntimeSync() {
       // and will recover naturally.
     } finally {
       hydrating.current = false;
+      const pending = pendingHydration.current;
+      pendingHydration.current = null;
+      if (pending) void hydrateOpenSessions(pending.signal);
     }
   }, []);
 

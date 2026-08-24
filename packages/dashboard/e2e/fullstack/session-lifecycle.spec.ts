@@ -1,6 +1,6 @@
 import { parseJsonBoundary } from "@agent-harness/core";
-import { expect, test } from "@playwright/test";
 import { z } from "zod";
+import { expect, test } from "./fixtures.js";
 
 const SessionCreatedSchema = z.object({
   sessionId: z.string(),
@@ -9,6 +9,11 @@ const SessionCreatedSchema = z.object({
 
 const SessionDetailSchema = z.object({
   messages: z.array(z.object({ role: z.string(), content: z.string() })),
+});
+
+const OpenSessionsSchema = z.object({
+  activeSessionId: z.string().nullable(),
+  openSessionIds: z.array(z.string()),
 });
 
 test.describe("Full-Stack Session Lifecycle & Monotonic Sequence Ordering", () => {
@@ -29,9 +34,27 @@ test.describe("Full-Stack Session Lifecycle & Monotonic Sequence Ordering", () =
     const sessionId = created.sessionId;
     expect(sessionId).toBeDefined();
 
+    const openRes = await request.put("/api/sessions/open", {
+      data: { activeSessionId: sessionId, openSessionIds: [sessionId] },
+    });
+    expect(openRes.ok()).toBeTruthy();
+
     // 2. Load the session in the Dashboard UI
-    await page.goto(`/?session=${sessionId}`);
-    await expect(page.locator("body")).toBeVisible();
+    await page.goto("/");
+    await expect
+      .poll(async () => {
+        const response = await page.evaluate(async () => {
+          const res = await fetch("http://localhost:3001/api/sessions/open");
+          return { ok: res.ok, body: await res.text() };
+        });
+        if (!response.ok) return null;
+        return parseJsonBoundary(
+          OpenSessionsSchema,
+          response.body,
+          "browser open sessions response",
+        );
+      })
+      .toEqual({ activeSessionId: sessionId, openSessionIds: [sessionId] });
 
     // 3. Post a message to trigger Agent execution with simple-reply scenario
     const chatRes = await request.post("/api/chat", {
@@ -46,7 +69,7 @@ test.describe("Full-Stack Session Lifecycle & Monotonic Sequence Ordering", () =
 
     // 4. Verify message content is rendered in the UI
     await page.reload();
-    await expect(page.locator("body")).toBeVisible();
+    await expect(page.getByText("Deterministic reply", { exact: false })).toBeVisible();
 
     // 5. Query session messages endpoint to assert monotonic sequencing
     const sessionRes = await request.get(`/api/sessions/${sessionId}`);

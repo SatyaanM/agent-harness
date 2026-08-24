@@ -485,7 +485,12 @@ export class SessionStore {
     await getMailboxLog(this.sessionsDir, parsedSessionId).clear();
     transcriptStates.delete(`${this.sessionsDir}\u0000${parsedSessionId}`);
     mailboxLogs.delete(`${this.sessionsDir}\u0000${parsedSessionId}`);
-    await getSessionIndex(this.sessionsDir).remove(parsedSessionId);
+    const index = getSessionIndex(this.sessionsDir);
+    await index.remove(parsedSessionId);
+    // Deletion is complete only after the derived index has observed it. The
+    // index write is coalesced and normally fire-and-forget, but allowing it to
+    // outlive this method can resurrect the entry or race directory teardown.
+    await index.drain();
   }
 
   /** Rebuild the metadata index from transcripts if it is missing. */

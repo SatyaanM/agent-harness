@@ -41,7 +41,7 @@
     "test:chaos": "vitest run test/chaos/",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "test:fullstack": "playwright test packages/dashboard/e2e/fullstack",
+    "test:fullstack": "playwright test fullstack --config packages/dashboard/playwright.config.ts",
     "test:load": "vitest run test/load/",
     "test:packages": "turbo run test",
     "test:security": "vitest run test/security/",
@@ -50,6 +50,7 @@
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
+    "@agent-harness/core": "workspace:*",
     "@biomejs/biome": "catalog:",
     "@commitlint/cli": "catalog:",
     "@commitlint/config-conventional": "catalog:",
@@ -58,6 +59,7 @@
     "@vitest/ui": "catalog:",
     "knip": "catalog:",
     "lefthook": "catalog:",
+    "socket.io": "^4.x",
     "turbo": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",

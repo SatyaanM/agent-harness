@@ -28,6 +28,7 @@ import {
   loadAgentConfig,
   MailboxRepository,
   ProviderRuntimeState,
+  releaseSessionIndex,
   runCommandTool,
   SessionRepository,
   SessionRuntime,
@@ -142,6 +143,7 @@ export class SessionManager {
   }
 
   private async performClose(): Promise<void> {
+    const sessionsDir = getConfig().SESSIONS_DIR;
     if (this.providerReconfiguration) await this.providerReconfiguration;
     const reset = this.resetRuntimeGeneration(
       new DOMException("Server is shutting down", "AbortError"),
@@ -149,6 +151,7 @@ export class SessionManager {
     this.providerReconfiguration = reset;
     try {
       await reset;
+      await releaseSessionIndex(sessionsDir);
       this.executionLimiter = undefined;
       this.deletedSessions.clear();
       const db = this.db;
