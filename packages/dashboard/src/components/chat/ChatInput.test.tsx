@@ -35,6 +35,7 @@ describe("ChatInput", () => {
     useSessionStore.setState({
       activeSessionId: "session-a",
       sessions: [createTestSession({ sessionId: "session-a" })],
+      streamingMessageIds: {},
     });
   });
 

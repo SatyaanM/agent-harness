@@ -28,6 +28,8 @@ export default function ChatInput() {
   const sessions = useSessionStore((s) => s.sessions);
   const addMessage = useSessionStore((s) => s.addMessage);
   const updateMessage = useSessionStore((s) => s.updateMessage);
+  const beginMessageStream = useSessionStore((s) => s.beginMessageStream);
+  const finishMessageStream = useSessionStore((s) => s.finishMessageStream);
   const ttsEnabled = useTTSStore((s) => s.enabled);
   const playTTS = useTTSStore((s) => s.play);
   const pendingPrefill = useChatInputStore((s) => s.pendingPrefill);
@@ -42,6 +44,7 @@ export default function ChatInput() {
 
   const performRequest = async (request: Omit<PendingRequest, "error">, retryExisting = false) => {
     setSubmitting(true);
+    beginMessageStream(request.sessionId, request.assistantMessageId);
     updateMessage(request.sessionId, request.assistantMessageId, "");
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
@@ -91,6 +94,7 @@ export default function ChatInput() {
       if (!completed) throw new Error("The response stream ended before completion.");
       reader.releaseLock();
       reader = undefined;
+      finishMessageStream(request.sessionId, request.assistantMessageId);
       setPendingRequest(null);
 
       // Auto-play TTS if enabled

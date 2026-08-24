@@ -13,7 +13,11 @@ function makeServerSession(overrides: Partial<ServerSession> = {}): ServerSessio
 }
 
 beforeEach(() => {
-  useSessionStore.setState({ sessions: [], activeSessionId: null });
+  useSessionStore.setState({
+    sessions: [],
+    activeSessionId: null,
+    streamingMessageIds: {},
+  });
 });
 
 describe("session server synchronization", () => {
@@ -122,6 +126,123 @@ describe("session server synchronization", () => {
       ["assistant", "Initial response"],
       ["user", "Follow-up question"],
       ["assistant", "partial answer"],
+    ]);
+  });
+
+  it("keeps a correlated streaming placeholder updateable across intermediate authoritative syncs", () => {
+    useSessionStore.getState().addSession(
+      createTestSession({
+        sessionId: "s-1",
+        messages: [
+          createTestMessage({ id: "opt-user", role: "user", content: "Research it" }),
+          createTestMessage({
+            id: "opt-assistant",
+            role: "assistant",
+            content: "First delta",
+          }),
+        ],
+      }),
+    );
+    useSessionStore.getState().beginMessageStream("s-1", "opt-assistant");
+
+    useSessionStore.getState().syncFromServer(
+      makeServerSession({
+        messages: [
+          { role: "user", content: "Research it" },
+          {
+            role: "assistant",
+            content: "I will inspect the source.",
+            toolCalls: [{ toolCallId: "call-1", toolName: "inspect", args: {} }],
+          },
+          { role: "tool", content: "source result", toolCallId: "call-1" },
+        ],
+      }),
+    );
+
+    useSessionStore.getState().updateMessage("s-1", "opt-assistant", "First delta continued");
+    expect(useSessionStore.getState().sessions[0]?.messages.at(-1)).toEqual(
+      expect.objectContaining({ id: "opt-assistant", content: "First delta continued" }),
+    );
+
+    useSessionStore.getState().finishMessageStream("s-1", "opt-assistant");
+    useSessionStore.getState().syncFromServer(
+      makeServerSession({
+        messages: [
+          { role: "user", content: "Research it" },
+          {
+            role: "assistant",
+            content: "I will inspect the source.",
+            toolCalls: [{ toolCallId: "call-1", toolName: "inspect", args: {} }],
+          },
+          { role: "tool", content: "source result", toolCallId: "call-1" },
+          { role: "assistant", content: "The final answer." },
+        ],
+      }),
+    );
+
+    expect(useSessionStore.getState().sessions[0]?.messages).toEqual([
+      expect.objectContaining({ id: "srv-0", role: "user", content: "Research it" }),
+      expect.objectContaining({
+        id: "srv-1",
+        role: "assistant",
+        content: "I will inspect the source.",
+      }),
+      expect.objectContaining({ id: "srv-2", role: "tool", content: "source result" }),
+      expect.objectContaining({
+        id: "srv-3",
+        role: "assistant",
+        content: "The final answer.",
+      }),
+    ]);
+  });
+
+  it("removes a streaming placeholder on completion when the terminal sync arrived first", () => {
+    useSessionStore.getState().addSession(
+      createTestSession({
+        sessionId: "s-1",
+        messages: [
+          createTestMessage({ id: "opt-user", role: "user", content: "Question" }),
+          createTestMessage({ id: "opt-assistant", role: "assistant", content: "partial" }),
+        ],
+      }),
+    );
+    useSessionStore.getState().beginMessageStream("s-1", "opt-assistant");
+    useSessionStore.getState().syncFromServer(
+      makeServerSession({
+        messages: [
+          { role: "user", content: "Question" },
+          { role: "assistant", content: "durable answer" },
+        ],
+      }),
+    );
+
+    expect(useSessionStore.getState().sessions[0]?.messages.at(-1)?.id).toBe("opt-assistant");
+    useSessionStore.getState().finishMessageStream("s-1", "opt-assistant");
+
+    expect(useSessionStore.getState().sessions[0]?.messages).toEqual([
+      expect.objectContaining({ id: "srv-0", role: "user", content: "Question" }),
+      expect.objectContaining({ id: "srv-1", role: "assistant", content: "durable answer" }),
+    ]);
+  });
+
+  it("retains a completed stream through a stale sync until its user is authoritative", () => {
+    useSessionStore.getState().addSession(
+      createTestSession({
+        sessionId: "s-1",
+        messages: [
+          createTestMessage({ id: "opt-user", role: "user", content: "Question" }),
+          createTestMessage({ id: "opt-assistant", role: "assistant", content: "answer" }),
+        ],
+      }),
+    );
+    useSessionStore.getState().beginMessageStream("s-1", "opt-assistant");
+    useSessionStore.getState().finishMessageStream("s-1", "opt-assistant");
+
+    useSessionStore.getState().syncFromServer(makeServerSession({ messages: [] }));
+
+    expect(useSessionStore.getState().sessions[0]?.messages).toEqual([
+      expect.objectContaining({ id: "opt-user", content: "Question" }),
+      expect.objectContaining({ id: "opt-assistant", content: "answer" }),
     ]);
   });
 });

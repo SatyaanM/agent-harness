@@ -54,11 +54,14 @@ export interface Session {
 interface SessionStore {
   sessions: Session[];
   activeSessionId: string | null;
+  streamingMessageIds: Record<string, string[]>;
   addSession: (session: Session) => void;
   setActiveSession: (sessionId: string | null) => void;
   setAgentName: (sessionId: string, agentName: string) => void;
   addMessage: (sessionId: string, message: Message) => void;
   updateMessage: (sessionId: string, messageId: string, content: string) => void;
+  beginMessageStream: (sessionId: string, messageId: string) => void;
+  finishMessageStream: (sessionId: string, messageId: string) => void;
   syncFromServer: (data: ServerSession) => void;
   hydrate: (sessions: ServerSession[]) => void;
   removeSession: (sessionId: string) => void;
@@ -86,6 +89,7 @@ export interface ServerSession {
 export const useSessionStore = create<SessionStore>((set) => ({
   sessions: [],
   activeSessionId: null,
+  streamingMessageIds: {},
 
   addSession: (session) =>
     set((state) => ({
@@ -119,8 +123,55 @@ export const useSessionStore = create<SessionStore>((set) => ({
       ),
     })),
 
+  beginMessageStream: (sessionId, messageId) =>
+    set((state) => {
+      const current = state.streamingMessageIds[sessionId] ?? [];
+      if (current.includes(messageId)) return state;
+      return {
+        streamingMessageIds: {
+          ...state.streamingMessageIds,
+          [sessionId]: [...current, messageId],
+        },
+      };
+    }),
+
+  finishMessageStream: (sessionId, messageId) =>
+    set((state) => {
+      const remaining = (state.streamingMessageIds[sessionId] ?? []).filter(
+        (id) => id !== messageId,
+      );
+      const streamingMessageIds = { ...state.streamingMessageIds };
+      if (remaining.length === 0) {
+        delete streamingMessageIds[sessionId];
+      } else {
+        streamingMessageIds[sessionId] = remaining;
+      }
+      const sessions = state.sessions.map((session) => {
+        if (session.sessionId !== sessionId) return session;
+        const messageIndex = session.messages.findIndex((message) => message.id === messageId);
+        if (messageIndex < 0) return session;
+        const preceding = session.messages[messageIndex - 1];
+        const userIsStillOptimistic =
+          preceding?.role === "user" && !preceding.id.startsWith("srv-");
+        if (userIsStillOptimistic) return session;
+
+        // A server sync already committed this turn while the SSE stream was
+        // active. It preserved the correlated placeholder until now; remove
+        // that placeholder without disturbing durable multi-step messages.
+        return {
+          ...session,
+          messages: session.messages.filter((message) => message.id !== messageId),
+        };
+      });
+      return {
+        sessions,
+        streamingMessageIds,
+      };
+    }),
+
   hydrate: (serverSessions) =>
     set({
+      streamingMessageIds: {},
       sessions: serverSessions.map((data) => {
         const messages = data.messages.map((m, i) => serverMessageToClient(m, i));
         return {
@@ -143,7 +194,9 @@ export const useSessionStore = create<SessionStore>((set) => ({
         const neighbor = state.sessions[idx + 1] ?? state.sessions[idx - 1];
         activeSessionId = neighbor?.sessionId ?? null;
       }
-      return { sessions, activeSessionId };
+      const streamingMessageIds = { ...state.streamingMessageIds };
+      delete streamingMessageIds[sessionId];
+      return { sessions, activeSessionId, streamingMessageIds };
     }),
 
   renameSession: (sessionId, title) =>
@@ -171,7 +224,11 @@ export const useSessionStore = create<SessionStore>((set) => ({
         };
       }
 
-      const mergedMessages = reconcileOptimisticMessages(existing.messages, messages);
+      const mergedMessages = reconcileOptimisticMessages(
+        existing.messages,
+        messages,
+        new Set(state.streamingMessageIds[data.sessionId] ?? []),
+      );
 
       return {
         sessions: state.sessions.map((s) =>
@@ -191,6 +248,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
 export function reconcileOptimisticMessages(
   existingMessages: Message[],
   serverMessages: Message[],
+  streamingMessageIds: ReadonlySet<string> = new Set(),
 ): Message[] {
   const optimistic = existingMessages.filter((m) => !m.id.startsWith("srv-"));
   if (optimistic.length === 0) return serverMessages;
@@ -217,7 +275,7 @@ export function reconcileOptimisticMessages(
         currentTurnIsCommitted = false;
         uncommitted.push(opt);
       }
-    } else if (!currentTurnIsCommitted) {
+    } else if (!currentTurnIsCommitted || streamingMessageIds.has(opt.id)) {
       uncommitted.push(opt);
     }
   }
