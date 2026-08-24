@@ -14,6 +14,27 @@ const config: Config = {
 };
 
 describe("ProviderRegistry", () => {
+  it("preserves slash-containing IDs for configured providers and translates only legacy IDs", () => {
+    const configured = new ProviderRegistry({
+      ...config,
+      PROVIDERS: [
+        {
+          id: "configured",
+          displayName: "Configured",
+          protocol: "openai",
+          baseUrl: "https://configured.example/v1",
+          apiKeyEnv: "TEST_KEY",
+          enabled: true,
+          priority: 0,
+        },
+      ],
+    });
+    expect(configured.resolveTargets("vendor/model")[0]?.modelId).toBe("vendor/model");
+
+    const legacy = new ProviderRegistry(config);
+    expect(legacy.resolveTargets("opencode-go/qwen3.7-plus")[0]?.modelId).toBe("qwen3.7-plus");
+  });
+
   it("uses legacy fallback when no providers are configured", () => {
     const registry = new ProviderRegistry(config);
     const providers = registry.getProviders();

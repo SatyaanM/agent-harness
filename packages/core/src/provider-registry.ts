@@ -1,5 +1,11 @@
 import type { Config, ProviderEntry } from "./config.js";
 
+export interface ProviderTarget {
+  provider: ProviderEntry;
+  modelId: string;
+  protocol: "openai" | "anthropic";
+}
+
 /** Escape regex metacharacters in a glob pattern, then convert `*` to `.*`. */
 function globToRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/([.+?^${}()|[\]\\])/g, "\\$1").replace(/\*/g, ".*");
@@ -8,8 +14,10 @@ function globToRegex(pattern: string): RegExp {
 
 export class ProviderRegistry {
   private providers: ProviderEntry[] = [];
+  private readonly legacy: boolean;
 
   constructor(config: Config) {
+    this.legacy = !config.PROVIDERS || config.PROVIDERS.length === 0;
     if (config.PROVIDERS && config.PROVIDERS.length > 0) {
       this.providers = [...config.PROVIDERS];
     } else {
@@ -26,6 +34,20 @@ export class ProviderRegistry {
         },
       ];
     }
+  }
+
+  resolveTargets(modelId: string, preferredProviderId?: string): ProviderTarget[] {
+    return this.resolveProvider(modelId, preferredProviderId).map((provider) => {
+      if (!this.legacy) return { provider, modelId, protocol: provider.protocol };
+      const translated = modelId.startsWith("opencode-go/")
+        ? modelId.slice("opencode-go/".length)
+        : modelId;
+      return {
+        provider,
+        modelId: translated,
+        protocol: LEGACY_ANTHROPIC_MODELS.has(translated) ? "anthropic" : "openai",
+      };
+    });
   }
 
   getProviders(): ProviderEntry[] {
@@ -63,3 +85,12 @@ export class ProviderRegistry {
     return eligible;
   }
 }
+
+const LEGACY_ANTHROPIC_MODELS = new Set([
+  "minimax-m3",
+  "minimax-m2.7",
+  "minimax-m2.5",
+  "qwen3.7-max",
+  "qwen3.7-plus",
+  "qwen3.6-plus",
+]);

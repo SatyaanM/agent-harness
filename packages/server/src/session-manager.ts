@@ -27,6 +27,7 @@ import {
   LegacyMigrator,
   loadAgentConfig,
   MailboxRepository,
+  ProviderRuntimeState,
   runCommandTool,
   SessionRepository,
   SessionRuntime,
@@ -75,6 +76,10 @@ export class SessionManager {
   >();
   private deletedSessions = new Set<string>();
   private executionLimiter: ExecutionLimiter | undefined;
+  private providerRuntime: ProviderRuntimeState | undefined;
+  private providerReconfiguration: Promise<void> | undefined;
+  private lifecycleWaiters = new Set<() => void>();
+  private backgroundDeliveries = new Set<Promise<unknown>>();
   private db: ISqliteDatabase | undefined;
 
   async initialize(customDb?: ISqliteDatabase): Promise<void> {
@@ -176,6 +181,9 @@ export class SessionManager {
   }
 
   getOrCreate(sessionId: string): SessionRuntime {
+    if (this.providerReconfiguration) {
+      throw new Error("Provider settings reconfiguration is in progress");
+    }
     if (!this.isSessionAvailable(sessionId)) {
       throw new Error(`Session ${sessionId} was deleted`);
     }
@@ -183,7 +191,8 @@ export class SessionManager {
     const executionLimiter = this.getExecutionLimiter(config.MAX_CONCURRENT_AGENTS);
     let runtime = this.runtimes.get(sessionId);
     if (!runtime) {
-      const llmClient = createVercelAILLMClient(config);
+      this.providerRuntime ??= new ProviderRuntimeState(config);
+      const llmClient = createVercelAILLMClient(config, this.providerRuntime);
       const capabilityRegistry = new CapabilityRegistry({
         workspaceRoot: config.ROOT,
         baseUrl: config.PROVIDER_ENDPOINT,
@@ -218,6 +227,56 @@ export class SessionManager {
     this.runtimes.delete(sessionId);
   }
 
+  wake(sessionId: string): void {
+    this.startBackgroundDelivery(sessionId, this.getOrCreate(sessionId));
+  }
+
+  async reconfigureAfterSettingsUpdate(): Promise<void> {
+    if (this.providerReconfiguration) return this.providerReconfiguration;
+    const operation = this.performSettingsReconfiguration();
+    this.providerReconfiguration = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.providerReconfiguration === operation) this.providerReconfiguration = undefined;
+    }
+  }
+
+  private async performSettingsReconfiguration(): Promise<void> {
+    const reason = new DOMException("Server settings changed", "AbortError");
+    for (const controllers of this.sessionControllers.values()) {
+      for (const controller of controllers) controller.abort(reason);
+    }
+    for (const worker of this.workerControllers.values()) worker.controller.abort(reason);
+    await this.waitForActiveWorkToSettle();
+    this.runtimes.clear();
+    this.providerRuntime = undefined;
+  }
+
+  private waitForActiveWorkToSettle(): Promise<void> {
+    if (
+      this.sessionControllers.size === 0 &&
+      this.workerControllers.size === 0 &&
+      this.backgroundDeliveries.size === 0
+    ) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => this.lifecycleWaiters.add(resolve));
+  }
+
+  private notifyLifecycleWaiters(): void {
+    if (
+      this.sessionControllers.size !== 0 ||
+      this.workerControllers.size !== 0 ||
+      this.backgroundDeliveries.size !== 0
+    ) {
+      return;
+    }
+    const waiters = [...this.lifecycleWaiters];
+    this.lifecycleWaiters.clear();
+    for (const resolve of waiters) resolve();
+  }
+
   trackSession(sessionId: string, controller: AbortController): void {
     let controllers = this.sessionControllers.get(sessionId);
     if (!controllers) {
@@ -235,6 +294,7 @@ export class SessionManager {
         this.sessionControllers.delete(sessionId);
       }
     }
+    this.notifyLifecycleWaiters();
   }
 
   trackWorker(taskId: string, parentSessionId: string, controller: AbortController): void {
@@ -243,6 +303,7 @@ export class SessionManager {
 
   onWorkerSettled(taskId: string): void {
     this.workerControllers.delete(taskId);
+    this.notifyLifecycleWaiters();
   }
 
   isSessionAvailable(sessionId: string): boolean {
@@ -279,6 +340,7 @@ export class SessionManager {
       worker.controller.abort();
       this.workerControllers.delete(taskId);
     }
+    this.notifyLifecycleWaiters();
   }
 
   onWorkerCompleted(delegatingSessionId: string, pending: PendingMessage): void {
@@ -290,12 +352,11 @@ export class SessionManager {
       summary: pending.summary,
     });
 
-    const runtime = this.runtimes.get(delegatingSessionId);
+    const runtime = this.providerReconfiguration
+      ? undefined
+      : this.runtimes.get(delegatingSessionId);
     if (runtime) {
-      // Loaded session: wake it to process the delivered completion.
-      runtime.deliver().catch((err) => {
-        logger.error("Wake run failed", { sessionId: delegatingSessionId, ...describeError(err) });
-      });
+      this.startBackgroundDelivery(delegatingSessionId, runtime);
     }
     // Not loaded: the pending message stays durable on disk until the session is loaded.
   }
@@ -305,7 +366,21 @@ export class SessionManager {
     if (!worker) return false;
     worker.controller.abort();
     this.workerControllers.delete(taskId);
+    this.notifyLifecycleWaiters();
     return true;
+  }
+
+  private startBackgroundDelivery(sessionId: string, runtime: SessionRuntime): void {
+    const delivery = runtime
+      .deliver()
+      .catch((err) => {
+        logger.error("Wake run failed", { sessionId, ...describeError(err) });
+      })
+      .finally(() => {
+        this.backgroundDeliveries.delete(delivery);
+        this.notifyLifecycleWaiters();
+      });
+    this.backgroundDeliveries.add(delivery);
   }
 
   metrics(): {

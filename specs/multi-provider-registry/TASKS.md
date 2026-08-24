@@ -14,3 +14,7 @@ read_when:
 - [x] Update `GET /api/settings/models` in `packages/server/src/routes/settings.ts` to aggregate multiple providers.
 - [x] Add settings CRUD UI and per-provider connectivity testing.
 - [x] Write tests for preferred routing, transient fallback, non-transient failures, cancellation, schemas, settings UI, and connectivity.
+- [x] Record provider runtime ownership and reconfiguration semantics in ADR 0006.
+- [x] Normalize protocol-realistic OpenAI and Anthropic discovery/connectivity.
+- [x] Share circuit and RPM/TPM admission state across server-created clients.
+- [x] Abort and unload cached runtimes after accepted settings replacement.

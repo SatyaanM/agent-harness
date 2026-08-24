@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Config } from "../config.js";
+import { ProviderRuntimeState } from "../provider-runtime.js";
 import { createVercelAILLMClient } from "./vercel-ai.js";
 
 interface GenerateTextResultMock {
@@ -19,7 +20,8 @@ const mocks = vi.hoisted(() => ({
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   })),
   model: { modelId: "test-model" },
-  createOpenAI: vi.fn(() => ({ chat: () => ({ modelId: "openai-model" }) })),
+  openAIChat: vi.fn(() => ({ modelId: "openai-model" })),
+  createOpenAI: vi.fn(() => ({ chat: mocks.openAIChat })),
   createAnthropic: vi.fn(() => () => ({ modelId: "anthropic-model" })),
 }));
 
@@ -47,6 +49,7 @@ const config: Config = {
 
 beforeEach(() => {
   mocks.createOpenAI.mockClear();
+  mocks.openAIChat.mockClear();
   mocks.createAnthropic.mockClear();
   mocks.generateText.mockReset();
   mocks.generateText.mockResolvedValue({
@@ -58,6 +61,33 @@ beforeEach(() => {
 });
 
 describe("Vercel AI adapter", () => {
+  it("preserves configured slash-containing model IDs and shares rate admission", async () => {
+    const limitedConfig: Config = {
+      ...config,
+      PROVIDERS: [
+        {
+          id: "limited",
+          displayName: "Limited",
+          protocol: "openai",
+          baseUrl: "https://limited.example/v1",
+          apiKeyEnv: "TEST_API_KEY",
+          rateLimit: { requestsPerMinute: 1 },
+          enabled: true,
+          priority: 0,
+        },
+      ],
+    };
+    const shared = new ProviderRuntimeState(limitedConfig);
+    const first = createVercelAILLMClient(limitedConfig, shared);
+    const second = createVercelAILLMClient(limitedConfig, shared);
+
+    await first.chat({ messages: [{ role: "user", content: "hello" }], model: "vendor/model" });
+    expect(mocks.openAIChat).toHaveBeenCalledWith("vendor/model");
+    await expect(
+      second.chat({ messages: [{ role: "user", content: "again" }], model: "vendor/model" }),
+    ).rejects.toThrow("rate limit");
+    expect(mocks.generateText).toHaveBeenCalledTimes(1);
+  });
   it("passes cancellation through the AI SDK abortSignal option", async () => {
     const controller = new AbortController();
     const client = createVercelAILLMClient(config);

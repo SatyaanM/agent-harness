@@ -4,18 +4,11 @@ import { generateText, tool } from "ai";
 import type { Message } from "../agent/types.js";
 import type { Config } from "../config.js";
 import { createLogger } from "../contracts/logging.js";
-import { ProviderRegistry } from "../provider-registry.js";
+import type { ProviderTarget } from "../provider-registry.js";
+import { ProviderRuntimeState } from "../provider-runtime.js";
 import type { LLMChatParams, LLMClient, LLMResponse } from "./client.js";
 
-// Models that use Anthropic-compatible endpoint
-const ANTHROPIC_MODELS = new Set([
-  "minimax-m3",
-  "minimax-m2.7",
-  "minimax-m2.5",
-  "qwen3.7-max",
-  "qwen3.7-plus",
-  "qwen3.6-plus",
-]);
+const logger = createLogger("core.llm.provider-router");
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -35,61 +28,38 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export function createVercelAILLMClient(config: Config): LLMClient {
-  const logger = createLogger("core.llm.provider-router");
-  const registry = new ProviderRegistry(config);
-  // Circuit breaker state: provider id -> timestamp when it opens (fails)
-  const openProviders = new Map<string, number>();
-  const CIRCUIT_OPEN_DURATION_MS = 60 * 1000; // 1 minute
-
+export function createVercelAILLMClient(
+  config: Config,
+  providerRuntime: ProviderRuntimeState = new ProviderRuntimeState(config),
+): LLMClient {
   return {
     async chat(params: LLMChatParams): Promise<LLMResponse> {
-      const cleanModelId = params.model.startsWith("opencode-go/")
-        ? params.model.slice("opencode-go/".length)
-        : params.model;
-
-      const eligibleProviders = registry.resolveProvider(cleanModelId, params.preferredProviderId);
-      if (eligibleProviders.length === 0) {
-        throw new Error(`No eligible provider found for model ${cleanModelId}`);
+      const eligibleTargets = providerRuntime.registry.resolveTargets(
+        params.model,
+        params.preferredProviderId,
+      );
+      if (eligibleTargets.length === 0) {
+        throw new Error(`No eligible provider found for model ${params.model}`);
       }
 
-      const systemParts = [
-        params.system,
-        ...params.messages.filter((m) => m.role === "system").map((m) => m.content),
-      ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
-      const system = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
-
+      const system = buildSystem(params);
       const messages = convertMessages(params.messages);
-      const tools = params.tools
-        ? Object.fromEntries(
-            params.tools.map((t) => [
-              t.name,
-              tool({
-                description: t.description,
-                inputSchema: t.parameters,
-              }),
-            ]),
-          )
-        : undefined;
+      const tools = buildTools(params);
 
       let lastError: Error | null = null;
       let attempt = 0;
 
-      for (const provider of eligibleProviders) {
-        // Check circuit breaker
-        const openedAt = openProviders.get(provider.id);
-        if (openedAt && Date.now() - openedAt < CIRCUIT_OPEN_DURATION_MS) {
-          continue; // Skip open provider
+      const estimatedTokens = estimateAdmissionTokens(params);
+      for (const target of eligibleTargets) {
+        const { provider } = target;
+        if (providerRuntime.isCircuitOpen(provider.id)) continue;
+
+        const admissionError = reserveTarget(providerRuntime, target, estimatedTokens);
+        if (admissionError) {
+          lastError = admissionError;
+          attempt++;
+          continue;
         }
-
-        const apiKey = process.env[provider.apiKeyEnv] ?? "";
-        const isAnthropic =
-          provider.protocol === "anthropic" ||
-          (provider.id === "default" && ANTHROPIC_MODELS.has(cleanModelId));
-
-        const model = isAnthropic
-          ? createAnthropic({ baseURL: provider.baseUrl, apiKey })(cleanModelId)
-          : createOpenAI({ baseURL: provider.baseUrl, apiKey }).chat(cleanModelId);
 
         try {
           if (attempt > 0) {
@@ -98,59 +68,12 @@ export function createVercelAILLMClient(config: Config): LLMClient {
             await delay(backoff, params.signal);
           }
 
-          const result = await generateText({
-            model,
-            messages,
-            ...(system ? { system } : {}),
-            ...(tools ? { tools } : {}),
-            ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
-            ...(params.signal ? { abortSignal: params.signal } : {}),
-          });
+          const response = await invokeProvider(target, params, system, messages, tools);
 
-          // Reset circuit breaker on success
-          openProviders.delete(provider.id);
-
-          const resultWithReasoning = optionalRecord(result);
-          const responseText = result.text;
-          const rawReasoning =
-            resultWithReasoning.reasoning ?? resultWithReasoning.reasoning_content;
-          const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
-          const toolCalls = result.toolCalls?.length
-            ? result.toolCalls.map((tc) => ({
-                toolCallId: tc.toolCallId,
-                toolName: tc.toolName,
-                args: requireRecord(tc.input, `tool call ${tc.toolCallId} args`),
-              }))
-            : undefined;
-
-          const message: Message = {
-            role: "assistant",
-            content: responseText || "",
-            ...(reasoning ? { reasoning } : {}),
-            ...(toolCalls ? { toolCalls } : {}),
-          };
-
-          return {
-            message,
-            finishReason: mapFinishReason(result.finishReason),
-            ...(toolCalls ? { toolCalls } : {}),
-            usage: {
-              inputTokens: result.usage.inputTokens,
-              outputTokens: result.usage.outputTokens,
-              totalTokens: result.usage.totalTokens,
-            },
-          };
+          providerRuntime.closeCircuit(provider.id);
+          return response;
         } catch (error: unknown) {
-          if (params.signal?.aborted || isAbortError(error)) throw error;
-          if (!isTransientProviderError(error)) throw error;
-
-          lastError = error instanceof Error ? error : new Error(String(error));
-          openProviders.set(provider.id, Date.now());
-          logger.warn("Transient provider failure; opening circuit and trying fallback", {
-            providerId: provider.id,
-            model: cleanModelId,
-            statusCode: getStatusCode(error),
-          });
+          lastError = recordTransientFailure(providerRuntime, target, params, error);
           attempt++;
         }
       }
@@ -166,6 +89,132 @@ export function createVercelAILLMClient(config: Config): LLMClient {
       });
     },
   };
+}
+
+function reserveTarget(
+  providerRuntime: ProviderRuntimeState,
+  target: ProviderTarget,
+  estimatedTokens: number,
+): ProviderRateLimitError | undefined {
+  const admission = providerRuntime.reserve(target.provider, estimatedTokens);
+  if (admission.allowed) return undefined;
+  logger.warn("Configured provider rate limit denied attempt; trying fallback", {
+    providerId: target.provider.id,
+    model: target.modelId,
+    limit: admission.reason,
+    retryAfterMs: admission.retryAfterMs,
+  });
+  return new ProviderRateLimitError(target.provider.id, admission.reason, admission.retryAfterMs);
+}
+
+function recordTransientFailure(
+  providerRuntime: ProviderRuntimeState,
+  target: ProviderTarget,
+  params: LLMChatParams,
+  error: unknown,
+): Error {
+  if (params.signal?.aborted || isAbortError(error)) throw error;
+  if (!isTransientProviderError(error)) throw error;
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  providerRuntime.openCircuit(target.provider.id);
+  logger.warn("Transient provider failure; opening circuit and trying fallback", {
+    providerId: target.provider.id,
+    model: target.modelId,
+    statusCode: getStatusCode(error),
+  });
+  return normalized;
+}
+
+function buildSystem(params: LLMChatParams): string | undefined {
+  const parts = [
+    params.system,
+    ...params.messages
+      .filter((message) => message.role === "system")
+      .map((message) => message.content),
+  ].filter((part): part is string => typeof part === "string" && part.trim().length > 0);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+function buildTools(params: LLMChatParams) {
+  if (!params.tools) return undefined;
+  return Object.fromEntries(
+    params.tools.map((entry) => [
+      entry.name,
+      tool({ description: entry.description, inputSchema: entry.parameters }),
+    ]),
+  );
+}
+
+async function invokeProvider(
+  target: ProviderTarget,
+  params: LLMChatParams,
+  system: string | undefined,
+  messages: ReturnType<typeof convertMessages>,
+  tools: ReturnType<typeof buildTools>,
+): Promise<LLMResponse> {
+  const apiKey = process.env[target.provider.apiKeyEnv] ?? "";
+  const model =
+    target.protocol === "anthropic"
+      ? createAnthropic({ baseURL: target.provider.baseUrl, apiKey })(target.modelId)
+      : createOpenAI({ baseURL: target.provider.baseUrl, apiKey }).chat(target.modelId);
+  const result = await generateText({
+    model,
+    messages,
+    ...(system ? { system } : {}),
+    ...(tools ? { tools } : {}),
+    ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
+    ...(params.signal ? { abortSignal: params.signal } : {}),
+  });
+  const resultRecord = optionalRecord(result);
+  const rawReasoning = resultRecord.reasoning ?? resultRecord.reasoning_content;
+  const reasoning = typeof rawReasoning === "string" ? rawReasoning : undefined;
+  const toolCalls = result.toolCalls?.length
+    ? result.toolCalls.map((call) => ({
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        args: requireRecord(call.input, `tool call ${call.toolCallId} args`),
+      }))
+    : undefined;
+  const message: Message = {
+    role: "assistant",
+    content: result.text || "",
+    ...(reasoning ? { reasoning } : {}),
+    ...(toolCalls ? { toolCalls } : {}),
+  };
+  return {
+    message,
+    finishReason: mapFinishReason(result.finishReason),
+    ...(toolCalls ? { toolCalls } : {}),
+    usage: {
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      totalTokens: result.usage.totalTokens,
+    },
+  };
+}
+
+class ProviderRateLimitError extends Error {
+  readonly statusCode = 429;
+
+  constructor(
+    providerId: string,
+    limit: "requests" | "tokens",
+    readonly retryAfterMs: number,
+  ) {
+    super(`Configured ${limit} rate limit exceeded for provider ${providerId}`);
+    this.name = "ProviderRateLimitError";
+  }
+}
+
+function estimateAdmissionTokens(params: LLMChatParams): number {
+  const characters =
+    (params.system?.length ?? 0) +
+    JSON.stringify(params.messages).length +
+    (params.tools?.reduce(
+      (total, entry) => total + entry.name.length + entry.description.length,
+      0,
+    ) ?? 0);
+  return Math.max(1, Math.ceil(characters / 4)) + (params.maxOutputTokens ?? 4096);
 }
 
 function getStatusCode(error: unknown): number | undefined {

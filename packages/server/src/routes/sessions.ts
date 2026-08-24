@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SessionData } from "@agent-harness/core";
 import {
-  createLogger,
-  describeError,
   getConfig,
   MailboxRepository,
   OpenSessionsRepository,
@@ -25,8 +23,6 @@ import { sessionManager } from "../session-manager.js";
 import { emitAgentEvent } from "../ws/events.js";
 
 export const sessionsRouter: Router = Router();
-
-const logger = createLogger("server.sessions");
 
 const SessionParamsSchema = z.object({ id: IdentifierSchema }).strict();
 const OpenSessionsUpdateSchema = z
@@ -230,10 +226,7 @@ sessionsRouter.post(
       : (session.mailbox?.length ?? 0);
     let woke = false;
     if (pendingCount > 0) {
-      const runtime = sessionManager.getOrCreate(sessionId);
-      runtime.deliver().catch((err) => {
-        logger.error("Wake run failed", { sessionId, ...describeError(err) });
-      });
+      sessionManager.wake(sessionId);
       woke = true;
     }
 

@@ -22,6 +22,8 @@ Agent Harness currently assumes a single global provider endpoint (`PROVIDER_END
 - Remove hardcoded protocol logic (e.g., `ANTHROPIC_MODELS`) by declaring protocols explicitly per provider.
 - Aggregate model capabilities seamlessly in the UI via `GET /api/settings/models`.
 - Maintain backward compatibility with existing single-endpoint configurations.
+- Apply accepted settings to all subsequently executing work without leaving loaded sessions on stale clients.
+- Enforce configured provider request/token minute budgets process-wide with bounded local admission.
 
 ### Non-goals
 - Per-tool-call routing (a single execution run will use the same provider consistently).
@@ -72,6 +74,8 @@ Update agent configuration (frontmatter/schema) to support optional `model` and 
 - Server loads the `providers` array from `.harness/settings.json` alongside the existing legacy flat config.
 - Modify `GET /api/settings/models` to iterate through all enabled providers in `ProviderRegistry`, fetch models from each, and return a deduplicated, aggregated list.
 - Add CRUD endpoints for `ProviderEntry` management.
+- Use protocol-specific authentication and response parsing for OpenAI and Anthropic model discovery.
+- After an accepted settings write, abort active work and unload cached runtimes before the new configuration generation is used.
 
 ### 5. Fallback Mechanism
 Modify the LLM client execution flow to handle fallbacks. If the primary provider returns a 429 or 5xx error:
@@ -81,6 +85,7 @@ Modify the LLM client execution flow to handle fallbacks. If the primary provide
 - Retrieve the next eligible provider from the `ProviderRegistry`.
 - Re-initialize the client and retry.
 - Log failures with structured logging, ensuring telemetry tools can alert on provider degradation.
+- Share circuit state across loaded sessions. Before each attempt, atomically reserve the configured request and conservative token estimate; a denied reservation behaves as a local 429 and may fall back without waiting.
 
 ### 6. Capability Registry Integration
 Update `CapabilityRegistry` calls to use the dynamically resolved provider ID rather than assuming a single provider context.
@@ -97,15 +102,17 @@ If no `providers` array is defined in `.harness/settings.json`, automatically co
 5. **Settings UI integration:** The settings UI can perform CRUD operations on providers and successfully test connectivity to each endpoint.
 6. **Agent routing overrides:** Defining `model: "custom-model"` and/or `provider: "custom-id"` in an agent's frontmatter overrides the default global model and provider selection.
 7. **Model aggregation:** `GET /api/settings/models` successfully fetches and deduplicates models from all enabled providers.
+8. **Protocol-realistic discovery:** OpenAI uses bearer authentication and OpenAI list envelopes; Anthropic uses `x-api-key` plus `anthropic-version` and Anthropic model metadata. Both normalize to the public response.
+9. **Live reconfiguration:** A successful settings write aborts active parent/worker work, unloads loaded runtimes, and resets provider runtime state before another delivery.
+10. **Enforced limits:** Configured RPM/TPM limits are enforced across session clients without an unbounded wait queue.
 
-## Open questions and decisions
+## Deferred presentation question
 
-- **Wildcard matching:** Should `supportedModels` support glob patterns (e.g., `gpt-4-*`), or just strict string matching / explicit arrays?
-- **Fallback state persistence:** How long should a provider remain "down" in the fallback chain after a 5xx error? (Decision needed: Should we implement a basic circuit breaker or stateless retries?)
-- **UI UX for Fallbacks:** Should the UI surface which provider was ultimately used for a turn if a fallback occurred?
+- **UI UX for fallbacks:** surfacing the provider ultimately used for an individual turn remains future presentation work.
 
 ## Implemented decisions
 
 - `supportedModels` accepts exact IDs and `*` wildcards; other regular-expression metacharacters remain literal.
 - A transient 429/5xx opens a process-local circuit for one minute. Fallback attempts use bounded exponential backoff. Abort and non-transient failures propagate immediately without replay.
 - Provider IDs are unique, bounded identifiers. The settings editor performs persisted list CRUD and exposes a credential-safe connectivity test; fallback-provider display in individual turns remains future presentation work.
+- Provider runtime state, circuit health, and rate admission are server-owned as recorded in [ADR 0006](../../docs/decisions/0006-server-owned-provider-runtime.md). Settings replacement cancels and unloads the prior generation.

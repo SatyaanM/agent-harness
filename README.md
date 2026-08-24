@@ -113,7 +113,7 @@ PROVIDER_ENDPOINT=https://openrouter.ai/api/v1
 PROVIDER_ENDPOINT=http://localhost:11434/v1
 ```
 
-**Model routing note:** configured provider entries declare their protocol and optional exact or `*` wildcard model patterns. Lower priorities are attempted first. An agent's optional `provider` frontmatter field selects its preferred eligible provider; only HTTP 429 and 5xx failures open that provider's circuit and advance to a fallback. Cancellation and non-transient 4xx failures are never replayed. The legacy synthetic provider retains historical model/protocol compatibility when the registry is absent.
+**Model routing note:** configured provider entries declare their protocol, optional exact or `*` wildcard model patterns, and optional request/token minute budgets. Lower priorities are attempted first. An agent's optional `provider` frontmatter field selects its preferred eligible provider. Provider IDs and model IDs (including `/`) stay separate and configured model IDs are sent unchanged. A local rate denial or upstream HTTP 429/5xx advances to a fallback; upstream transient failures also open the provider's shared one-minute circuit. Cancellation and non-transient 4xx failures are never replayed. Saving settings aborts active runs, waits for their terminal cleanup, and unloads cached runtimes before the next configuration generation. The legacy synthetic provider retains historical prefix/protocol compatibility when the registry is absent.
 
 **Capability discovery status:** core contains manual, cache, models.dev, and probe tiers, but `Agent.run()` does not currently call the registry. Treat configured tools and provider compatibility as operator responsibility until that integration is designed and tested.
 

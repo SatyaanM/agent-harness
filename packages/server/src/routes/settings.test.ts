@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { resetConfig } from "@agent-harness/core";
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
+import { sessionManager } from "../session-manager.js";
 
 const tempDirs: string[] = [];
 const originalRoot = process.env.ROOT;
@@ -26,6 +27,36 @@ afterEach(async () => {
 });
 
 describe("settings ownership and repair", () => {
+  it("reconfigures server-owned loaded runtimes after the settings snapshot is saved", async () => {
+    const { app } = await fixture();
+    const reconfigure = vi.spyOn(sessionManager, "reconfigureAfterSettingsUpdate");
+
+    const response = await request(app).put("/api/settings").send({ DEFAULT_MODEL: "new/model" });
+
+    expect(response.status).toBe(200);
+    expect(reconfigure).toHaveBeenCalledOnce();
+  });
+
+  it("does not complete a settings update until an aborted active delivery is cleaned up", async () => {
+    const { app } = await fixture();
+    const controller = new AbortController();
+    sessionManager.trackSession("active-settings-delivery", controller);
+
+    const update = request(app)
+      .put("/api/settings")
+      .send({ DEFAULT_MODEL: "next/model" })
+      .then((response) => response);
+    await vi.waitFor(() => expect(controller.signal.aborted).toBe(true));
+    let settled = false;
+    void update.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    sessionManager.clearSession("active-settings-delivery", controller);
+    await expect(update).resolves.toMatchObject({ status: 200 });
+  });
   it("reports the actual environment-owned root instead of a legacy persisted value", async () => {
     const { app, root, settingsFile } = await fixture();
     await writeFile(settingsFile, JSON.stringify({ ROOT: path.join(root, "ignored") }), "utf8");

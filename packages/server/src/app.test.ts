@@ -177,7 +177,9 @@ describe("upstream trust boundaries", () => {
     expect(res.body).toEqual({ connected: true, modelCount: 1 });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://custom.example/v1/models",
-      expect.objectContaining({ headers: { Authorization: "Bearer provider-secret" } }),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer provider-secret" }),
+      }),
     );
     expect(res.text).not.toContain("provider-secret");
     delete process.env.CUSTOM_PROVIDER_KEY;

@@ -9,6 +9,26 @@ import { describe, expect, it } from "vitest";
 import { SessionManager } from "./session-manager.js";
 
 describe("SessionManager lifecycle ownership", () => {
+  it("blocks a replacement runtime until aborted parent and worker work reaches terminal cleanup", async () => {
+    const manager = new SessionManager();
+    const parent = new AbortController();
+    const worker = new AbortController();
+    manager.getOrCreate("loaded-session");
+    manager.trackSession("loaded-session", parent);
+    manager.trackWorker("task-1", "loaded-session", worker);
+
+    const reconfiguration = manager.reconfigureAfterSettingsUpdate();
+
+    expect(parent.signal.aborted).toBe(true);
+    expect(worker.signal.aborted).toBe(true);
+    expect(() => manager.getOrCreate("loaded-session")).toThrow("reconfiguration is in progress");
+    manager.clearSession("loaded-session", parent);
+    manager.onWorkerSettled("task-1");
+    await reconfiguration;
+    expect(manager.isLoaded("loaded-session")).toBe(false);
+    expect(manager.metrics().activeWorkers).toBe(0);
+  });
+
   it("unloads a deleted parent, aborts its workers, and rejects late delivery", () => {
     const manager = new SessionManager();
     const controller = new AbortController();

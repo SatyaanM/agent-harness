@@ -124,7 +124,10 @@ export {
 } from "./plugin/types.js";
 export type { InboxItemMetadata, TrackItemInput } from "./presentation/inbox.js";
 export { InboxManager } from "./presentation/inbox.js";
+export type { ProviderTarget } from "./provider-registry.js";
 export { ProviderRegistry } from "./provider-registry.js";
+export type { ProviderAdmission, ProviderRuntimeOptions } from "./provider-runtime.js";
+export { ProviderRuntimeState } from "./provider-runtime.js";
 export type { ExecutionLimiterSnapshot } from "./runtime/execution-limiter.js";
 export { ExecutionLimiter, ExecutionQueueFullError } from "./runtime/execution-limiter.js";
 export { createEditFileTool } from "./tool/editFile.js";

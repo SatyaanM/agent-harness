@@ -12,7 +12,6 @@ import {
   ProviderEntrySchema,
   ProviderRegistry,
   parseBoundary,
-  parseJsonResponseBoundary,
   resetConfig,
   stringifyJsonBounded,
 } from "@agent-harness/core";
@@ -20,6 +19,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../http/async-handler.js";
 import { validateRequest } from "../http/validation.js";
+import { fetchProviderModels } from "../provider-models.js";
 import { sessionManager } from "../session-manager.js";
 
 const logger = createLogger("server.settings");
@@ -50,19 +50,6 @@ const PersistedSettingsSchema = ConfigSchema.pick({
   .strict();
 const SettingsUpdateSchema = PersistedSettingsSchema;
 const MAX_SETTINGS_BYTES = 2_000_000;
-const ModelsResponseSchema = z.object({
-  object: z.string().max(128),
-  data: z
-    .array(
-      z.object({
-        id: z.string().min(1).max(512),
-        object: z.string().max(128),
-        created: z.number().finite(),
-        owned_by: z.string().max(512),
-      }),
-    )
-    .max(10_000),
-});
 const ProviderParamsSchema = z
   .object({
     id: z
@@ -92,25 +79,7 @@ settingsRouter.get(
       const registry = new ProviderRegistry(config);
       const providers = registry.getProviders();
 
-      const fetchPromises = providers.map(async (provider) => {
-        const apiKey = process.env[provider.apiKeyEnv];
-        const response = await fetch(`${provider.baseUrl.replace(/\/$/u, "")}/models`, {
-          headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!response.ok) {
-          throw new Error(
-            `Failed to fetch models from provider ${provider.id}: ${response.status}`,
-          );
-        }
-        const data = await parseJsonResponseBoundary(
-          response,
-          ModelsResponseSchema,
-          `models response ${provider.id}`,
-          2_000_000,
-        );
-        return data.data;
-      });
+      const fetchPromises = providers.map((provider) => fetchProviderModels(provider));
 
       const results = await Promise.allSettled(fetchPromises);
 
@@ -170,19 +139,8 @@ settingsRouter.post(
     }
     const provider = body.provider;
     try {
-      const apiKey = process.env[provider.apiKeyEnv];
-      const response = await fetch(`${provider.baseUrl.replace(/\/$/u, "")}/models`, {
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!response.ok) throw new Error(`Provider returned ${response.status}`);
-      const models = await parseJsonResponseBoundary(
-        response,
-        ModelsResponseSchema,
-        `models response ${provider.id}`,
-        2_000_000,
-      );
-      res.json({ connected: true, modelCount: models.data.length });
+      const models = await fetchProviderModels(provider);
+      res.json({ connected: true, modelCount: models.length });
     } catch (error) {
       logger.warn("Provider connectivity test failed", {
         providerId: provider.id,
@@ -193,46 +151,50 @@ settingsRouter.post(
   }),
 );
 
-settingsRouter.put("/", (req, res) => {
-  const body = validateRequest(SettingsUpdateSchema, req.body, res);
-  if (!body) return;
-  let config: Config;
-  try {
-    config = getConfig();
-  } catch (error) {
-    if (!(error instanceof BoundaryValidationError) || !fs.existsSync(getSettingsFile())) {
-      throw error;
+settingsRouter.put(
+  "/",
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(SettingsUpdateSchema, req.body, res);
+    if (!body) return;
+    let config: Config;
+    try {
+      config = getConfig();
+    } catch (error) {
+      if (!(error instanceof BoundaryValidationError) || !fs.existsSync(getSettingsFile())) {
+        throw error;
+      }
+      quarantineInvalidSettings();
+      resetConfig();
+      config = getConfig();
     }
-    quarantineInvalidSettings();
-    resetConfig();
-    config = getConfig();
-  }
 
-  const updated: Record<string, unknown> = { ...config };
-  for (const key of SETTING_KEYS) {
-    if (body[key] !== undefined) {
-      updated[key] = body[key];
+    const updated: Record<string, unknown> = { ...config };
+    for (const key of SETTING_KEYS) {
+      if (body[key] !== undefined) {
+        updated[key] = body[key];
+      }
     }
-  }
 
-  try {
-    const parsed = parseBoundary(ConfigSchema, updated, "settings update");
-    savePersistedSettings(parsed);
-    resetConfig();
-    sessionManager.audit({
-      actorType: "user",
-      actorId: "user",
-      action: "settings.update",
-      resourceType: "system",
-      resourceId: "settings",
-      payload: body,
-    });
-    res.json(parsed);
-  } catch (error) {
-    logger.error("Failed to save settings", { ...describeError(error) });
-    res.status(500).json({ error: "Failed to save settings" });
-  }
-});
+    try {
+      const parsed = parseBoundary(ConfigSchema, updated, "settings update");
+      savePersistedSettings(parsed);
+      resetConfig();
+      await sessionManager.reconfigureAfterSettingsUpdate();
+      sessionManager.audit({
+        actorType: "user",
+        actorId: "user",
+        action: "settings.update",
+        resourceType: "system",
+        resourceId: "settings",
+        payload: body,
+      });
+      res.json(parsed);
+    } catch (error) {
+      logger.error("Failed to save settings", { ...describeError(error) });
+      res.status(500).json({ error: "Failed to save settings" });
+    }
+  }),
+);
 
 function savePersistedSettings(settings: Config): void {
   const file = getSettingsFile();
