@@ -113,8 +113,9 @@ export { LLMResponseSchema, LLMUsageSchema } from "./llm/client.js";
 export { createVercelAILLMClient } from "./llm/vercel-ai.js";
 export { CapabilityCache } from "./persistence/capability-cache.js";
 export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
-export type { PendingMessage, SessionData } from "./persistence/session.js";
+export type { CompactionRange, PendingMessage, SessionData } from "./persistence/session.js";
 export {
+  CompactionRangeSchema,
   createSessionData,
   PendingMessageSchema,
   SessionDataSchema,

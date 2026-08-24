@@ -1,28 +1,45 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createDatabaseConnection } from "./db.js";
 import {
   ChecksumMismatchError,
+  COMPACTION_RECORDS_DOWN,
+  COMPACTION_RECORDS_UP,
   computeSqlChecksum,
   type MigrationFile,
   SqliteMigrator,
 } from "./migrator.js";
 
 describe("SqliteMigrator", () => {
+  it("keeps the versioned compaction up/down files synchronized with the executable migration", () => {
+    const upFile = readFileSync(
+      new URL("./migrations/003_compaction_records.sql", import.meta.url),
+      "utf8",
+    );
+    const downFile = readFileSync(
+      new URL("./migrations/003_compaction_records.down.sql", import.meta.url),
+      "utf8",
+    );
+    expect(COMPACTION_RECORDS_UP.replace(/^--[^\n]*\n/u, "").trim()).toBe(upFile.trim());
+    expect(COMPACTION_RECORDS_DOWN.replace(/^--[^\n]*\n/u, "").trim()).toBe(downFile.trim());
+  });
+
   it("applies baseline initial schema migration up cleanly", () => {
     const db = createDatabaseConnection(":memory:");
     const migrator = new SqliteMigrator(db);
 
     const pending = migrator.getPendingMigrations();
-    expect(pending).toHaveLength(2);
+    expect(pending).toHaveLength(3);
     expect(pending[0]?.version).toBe(1);
     expect(pending[1]?.version).toBe(2);
+    expect(pending[2]?.version).toBe(3);
 
     const result = migrator.up();
-    expect(result.appliedCount).toBe(2);
-    expect(result.versions).toEqual([1, 2]);
+    expect(result.appliedCount).toBe(3);
+    expect(result.versions).toEqual([1, 2, 3]);
 
     const applied = migrator.getAppliedMigrations();
-    expect(applied).toHaveLength(2);
+    expect(applied).toHaveLength(3);
     expect(applied[0]?.version).toBe(1);
     expect(applied[0]?.name).toBe("001_initial_schema");
     expect(applied[1]?.version).toBe(2);
@@ -44,6 +61,29 @@ describe("SqliteMigrator", () => {
     expect(tableNames).toContain("mailbox_events");
     expect(tableNames).toContain("open_sessions");
     expect(tableNames).toContain("audit_events");
+    expect(tableNames).toContain("compaction_records");
+
+    const compactionSchema = db
+      .prepare<[string], { sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("compaction_records")?.sql;
+    expect(compactionSchema).toContain("uq_compaction_session_range");
+    expect(compactionSchema).toContain("end_sequence > start_sequence");
+    const compactionIndexes = db
+      .prepare<[], { name: string; unique: number }>("PRAGMA index_list(compaction_records)")
+      .all();
+    expect(compactionIndexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "idx_compaction_records_session_seq" }),
+      ]),
+    );
+    const triggers = db
+      .prepare<[], { name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
+      )
+      .all();
+    expect(triggers.map((trigger) => trigger.name)).toContain("trg_compaction_records_validate");
 
     // Re-running up is a no-op
     const reUp = migrator.up();
@@ -58,12 +98,19 @@ describe("SqliteMigrator", () => {
 
     // 1. Up
     migrator.up();
-    expect(migrator.getAppliedMigrations()).toHaveLength(2);
+    expect(migrator.getAppliedMigrations()).toHaveLength(3);
+    expect(
+      db
+        .prepare<[], { name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_compaction_records_validate'",
+        )
+        .get()?.name,
+    ).toBe("trg_compaction_records_validate");
 
     // 2. Down
     const downRes = migrator.down(0);
-    expect(downRes.rolledBackCount).toBe(2);
-    expect(downRes.versions).toEqual([2, 1]);
+    expect(downRes.rolledBackCount).toBe(3);
+    expect(downRes.versions).toEqual([3, 2, 1]);
 
     // Check tables dropped
     const tablesAfterDown = db
@@ -75,9 +122,53 @@ describe("SqliteMigrator", () => {
 
     // 3. Up again
     const reUpRes = migrator.up();
-    expect(reUpRes.appliedCount).toBe(2);
-    expect(migrator.getAppliedMigrations()).toHaveLength(2);
+    expect(reUpRes.appliedCount).toBe(3);
+    expect(migrator.getAppliedMigrations()).toHaveLength(3);
 
+    db.close();
+  });
+
+  it("removes only derived summaries when rolling compaction back to version 2", () => {
+    const db = createDatabaseConnection(":memory:");
+    const migrator = new SqliteMigrator(db);
+    migrator.up();
+    expect(
+      db.prepare<[], { foreign_keys: number }>("PRAGMA foreign_keys").get()?.foreign_keys,
+    ).toBe(1);
+    db.exec(`
+      INSERT INTO sessions (id, agent_name, prompt, created_at, updated_at)
+      VALUES ('rollback-session', 'agent', 'prompt', 0, 0);
+      INSERT INTO messages (id, session_id, role, content, sequence_num, created_at, metadata)
+      VALUES
+        ('original-user', 'rollback-session', 'user', 'exact original', 0, 0, NULL),
+        ('original-system', 'rollback-session', 'system', 'canonical system', 1, 0, NULL),
+        ('derived-summary', 'rollback-session', 'system', 'derived', 2, 0,
+         '{"meta":{"kind":"compaction_summary","startSequence":0,"endSequence":1}}');
+      INSERT INTO compaction_records (
+        session_id, summary_message_id, start_sequence, end_sequence,
+        original_token_estimate, summary_token_estimate, compacted_at, model_used
+      ) VALUES ('rollback-session', 'derived-summary', 0, 1, 10, 2, 1, 'model');
+    `);
+
+    expect(migrator.down(2).versions).toEqual([3]);
+    expect(
+      db
+        .prepare<[], { id: string; content: string }>(
+          "SELECT id, content FROM messages ORDER BY sequence_num ASC",
+        )
+        .all(),
+    ).toEqual([
+      { id: "original-user", content: "exact original" },
+      { id: "original-system", content: "canonical system" },
+    ]);
+    expect(migrator.up().versions).toEqual([3]);
+    expect(
+      db
+        .prepare<[], { name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'compaction_records'",
+        )
+        .get()?.name,
+    ).toBe("compaction_records");
     db.close();
   });
 

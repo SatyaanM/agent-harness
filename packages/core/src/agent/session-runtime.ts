@@ -5,7 +5,7 @@ import { createLogger, type Logger } from "../contracts/logging.js";
 import { type PendingMessage, PendingMessageSchema } from "../contracts/session.js";
 import { getTracer, SpanStatusCode } from "../contracts/tracing.js";
 
-import type { LLMClient } from "../llm/client.js";
+import type { LLMClient, LLMUsage } from "../llm/client.js";
 import type { SessionData } from "../persistence/session.js";
 import { SessionStore } from "../persistence/session.js";
 import { MailboxRepository } from "../persistence/sqlite/mailbox-repo.js";
@@ -17,11 +17,13 @@ import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
 import { isRecord, parseJsonBoundary } from "../validation.js";
 import { Agent, type StreamPerformanceMetrics } from "./agent.js";
+import { CompactionResponseError, Compactor, estimateMessagesTokens } from "./compactor.js";
 import {
   AgentBudgetExceededError,
   AgentCancelledError,
   type AgentConfig,
   type AgentResult,
+  type CapabilityMatrix,
   type Message,
 } from "./types.js";
 
@@ -138,6 +140,11 @@ export interface SessionRuntimeOptions {
   onEvent?: (event: SessionRuntimeEvent) => void;
   isSessionAvailable?: (sessionId: string) => boolean;
 }
+
+const DEFAULT_COMPACTION_THRESHOLD = 0.8;
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+const DEFAULT_KEEP_RECENT_MESSAGES = 8;
+const DEFAULT_COMPACTION_CHUNK_MESSAGES = 50;
 
 export class SessionRuntime {
   private queue: Promise<unknown> = Promise.resolve();
@@ -551,6 +558,9 @@ export class SessionRuntime {
         const runConfig = { ...agentConfig, tools: runTools };
         let latestRunMessages: Message[] | undefined;
         const streamMetrics: StreamPerformanceMetrics[] = [];
+        let modelHistory = [...baseHistory, ...deliveredSystem];
+        let modelHistoryLength = modelHistory.length;
+        let compactionTokenUsage: LLMUsage | undefined;
         const agent = new Agent(
           runConfig,
           this.options.toolRegistry,
@@ -562,7 +572,7 @@ export class SessionRuntime {
               // Live update: emit the session with the messages produced so far,
               // so the chat fills in as the agent works instead of all at once.
               const liveAppended = e.messages
-                .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
+                .slice(modelHistoryLength + (message ? 1 : 0))
                 .map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
               this.emit({
                 type: "session:updated",
@@ -615,14 +625,29 @@ export class SessionRuntime {
 
         let result: AgentResult;
         try {
-          const execute = () => {
+          const execute = async () => {
             this.emit({ type: "agent:started", agentName: agentConfig.name, ...correlation });
-            return agent.run(message, [...baseHistory, ...deliveredSystem], signal);
+            const resolvedCapabilities = await agent.resolveCapabilities();
+            if (this.messageRepo) {
+              const prepared = await this.prepareActiveContext(
+                agentConfig,
+                resolvedCapabilities,
+                message,
+                signal,
+              );
+              modelHistory = prepared.history;
+              modelHistoryLength = modelHistory.length;
+              compactionTokenUsage = prepared.compactionTokenUsage;
+            }
+            return agent.run(message, modelHistory, signal, resolvedCapabilities);
           };
           result = this.options.executionLimiter
             ? await this.options.executionLimiter.run(execute, signal)
             : await execute();
         } catch (error) {
+          if (error instanceof CompactionResponseError && error.usage) {
+            compactionTokenUsage = error.usage;
+          }
           const errorMessage = error instanceof Error ? error.message : String(error);
           const errorCode = describeError(error).code;
           const isCancelled =
@@ -634,7 +659,7 @@ export class SessionRuntime {
           logger.error("Agent run failed", { code: errorCode, cancelled: isCancelled });
 
           const partial = (latestRunMessages ?? [])
-            .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
+            .slice(modelHistoryLength + (message ? 1 : 0))
             .map((entry) => ({ ...entry, createdAt: entry.createdAt ?? new Date().toISOString() }));
 
           await this.persistRunCompletion(
@@ -648,6 +673,7 @@ export class SessionRuntime {
             agentConfig.name,
             errorCode,
             streamMetrics,
+            compactionTokenUsage,
           );
 
           this.emit({
@@ -670,7 +696,7 @@ export class SessionRuntime {
         // (baseHistory + deliveredSystem + the prompt agent.run re-added), keeping
         // only the messages this run actually produced.
         const appended = result.messages
-          .slice(baseHistory.length + deliveredSystem.length + (message ? 1 : 0))
+          .slice(modelHistoryLength + (message ? 1 : 0))
           .map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
 
         await this.persistRunCompletion(
@@ -684,6 +710,7 @@ export class SessionRuntime {
           agentConfig.name,
           undefined,
           streamMetrics,
+          compactionTokenUsage,
         );
 
         if (this.isAvailable()) {
@@ -717,6 +744,7 @@ export class SessionRuntime {
     agentName: string,
     errorCode?: string,
     streamMetrics: StreamPerformanceMetrics[] = [],
+    compactionTokenUsage?: LLMUsage,
   ): Promise<void> {
     session.messages.push(...messagesToPersist);
     session.result = { status: sessionResultStatus, summary };
@@ -746,7 +774,12 @@ export class SessionRuntime {
         runRepo.update(runId, {
           status: runStatus,
           tokenUsage:
-            streamMetrics.length > 0 ? { streaming: { steps: streamMetrics } } : undefined,
+            streamMetrics.length > 0 || compactionTokenUsage
+              ? {
+                  ...(streamMetrics.length > 0 ? { streaming: { steps: streamMetrics } } : {}),
+                  ...(compactionTokenUsage ? { compactionTokenUsage } : {}),
+                }
+              : undefined,
           errorCode: errorCode ?? null,
           errorMessage: runStatus === "failed" ? summary : null,
           completedAt: Date.now(),
@@ -781,4 +814,79 @@ export class SessionRuntime {
       }
     }
   }
+
+  private async prepareActiveContext(
+    agentConfig: AgentConfig,
+    resolvedCapabilities: CapabilityMatrix,
+    deliveredPrompt: string | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<{ history: Message[]; compactionTokenUsage?: LLMUsage }> {
+    const messageRepo = this.messageRepo;
+    if (!messageRepo) return { history: [] };
+
+    const contextWindowTokens =
+      positiveCapability(resolvedCapabilities.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+    const maxOutputTokens = positiveCapability(resolvedCapabilities.maxTokens);
+    const threshold = agentConfig.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
+    const activeRows = messageRepo.getActiveContext(this.options.sessionId);
+    const activeMessages = activeRows.map((row) => messageRepo.toMessage(row));
+
+    let compactionTokenUsage: LLMUsage | undefined;
+    if (
+      agentConfig.compaction !== false &&
+      estimateMessagesTokens(activeMessages) > contextWindowTokens * threshold
+    ) {
+      const candidate = messageRepo.selectCompactionCandidate(this.options.sessionId, {
+        keepRecentMessages:
+          agentConfig.compactionKeepRecentMessages ?? DEFAULT_KEEP_RECENT_MESSAGES,
+        chunkMessages: agentConfig.compactionChunkMessages ?? DEFAULT_COMPACTION_CHUNK_MESSAGES,
+      });
+      const first = candidate[0];
+      const last = candidate.at(-1);
+      if (first && last) {
+        const compacted = await new Compactor(this.options.llmClient).compact(
+          candidate.map((row) => messageRepo.toMessage(row)),
+          agentConfig.model,
+          {
+            contextWindowTokens,
+            maxOutputTokens,
+            preferredProviderId: agentConfig.provider,
+            signal,
+          },
+        );
+        messageRepo.createCompaction({
+          sessionId: this.options.sessionId,
+          summaryContent: compacted.summary,
+          startSequence: first.sequence_num,
+          endSequence: last.sequence_num,
+          originalTokenEstimate: compacted.originalTokenEstimate,
+          summaryTokenEstimate: compacted.summaryTokenEstimate,
+          compactedAt: Date.now(),
+          modelUsed: agentConfig.model,
+        });
+        compactionTokenUsage = compacted.usage;
+      }
+    }
+
+    const refreshed = messageRepo
+      .getActiveContext(this.options.sessionId)
+      .map((row) => ({ row, message: messageRepo.toMessage(row) }));
+    if (deliveredPrompt) {
+      for (let index = refreshed.length - 1; index >= 0; index -= 1) {
+        const entry = refreshed[index];
+        if (entry?.message.role === "user" && entry.message.content === deliveredPrompt) {
+          refreshed.splice(index, 1);
+          break;
+        }
+      }
+    }
+    return {
+      history: refreshed.map((entry) => entry.message),
+      ...(compactionTokenUsage ? { compactionTokenUsage } : {}),
+    };
+  }
+}
+
+function positiveCapability(value: number | undefined): number | undefined {
+  return value !== undefined && value > 0 ? value : undefined;
 }

@@ -6,11 +6,20 @@ read_when:
 
 # Conversation Compaction Tasks
 
-- [ ] Create SQLite migration `003_compaction_records.sql` for the tracking table.
-- [ ] Implement `Compactor` class in `packages/core/src/agent/compactor.ts`.
-- [ ] Add semantic memory extraction prompts to the compaction logic.
-- [ ] Update `MessageRepository` to retrieve context dynamically swapped with summary blocks.
-- [ ] Add context threshold calculation logic to `SessionRuntime.deliver()`.
-- [ ] Trigger `Compactor` safely before LLM execution when threshold is exceeded.
-- [ ] Add token cost tracking for compaction tasks to the run metadata.
-- [ ] Write integration tests verifying idempotent tracking and context replacement.
+- [x] Create SQLite migration `003_compaction_records.sql` for the tracking table.
+- [x] Implement `Compactor` class in `packages/core/src/agent/compactor.ts`.
+- [x] Add semantic memory extraction prompts to the compaction logic.
+- [x] Update `MessageRepository` to retrieve context dynamically swapped with summary blocks.
+- [x] Add context threshold calculation logic to `SessionRuntime.deliver()`.
+- [x] Trigger `Compactor` safely before LLM execution when threshold is exceeded.
+- [x] Add token cost tracking for compaction tasks to the run metadata.
+- [x] Write integration tests verifying idempotent tracking and context replacement.
+- [x] Specify distinct context-window, provider output-capability, and requested output-token semantics.
+- [x] Add tool-call/result atomic candidate-boundary regressions and implementation.
+- [x] Bound compaction-only input projection and summary output request/response.
+- [x] Reject unusable compaction responses without durable writes.
+- [x] Make v3 -> v2 rollback delete only referenced derived summaries and prove up/down/up integrity.
+- [x] Exclude persisted assistant reasoning from compaction projection and token estimation.
+- [x] Persist provider usage from rejected compaction responses without summary/range state.
+- [ ] After PR #31 rebase, share one per-run capability matrix between compaction and `Agent`.
+- [ ] After PR #32 rebase, prove streaming and compaction token-usage metadata merge.

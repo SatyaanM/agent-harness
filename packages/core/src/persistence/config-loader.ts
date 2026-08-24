@@ -40,6 +40,10 @@ export function loadAgentConfig(filePath: string): AgentConfig {
       maxOutputTokens: parsed.maxOutputTokens,
       maxTotalTokens: parsed.maxTotalTokens,
       runTimeoutMs: parsed.runTimeoutMs,
+      compaction: parsed.compaction,
+      compactionThreshold: parsed.compactionThreshold,
+      compactionKeepRecentMessages: parsed.compactionKeepRecentMessages,
+      compactionChunkMessages: parsed.compactionChunkMessages,
     },
     `agent configuration ${filePath}`,
   );

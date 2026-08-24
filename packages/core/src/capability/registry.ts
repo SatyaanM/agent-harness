@@ -39,11 +39,17 @@ export class CapabilityRegistry {
     const targets = this.providerRegistry?.resolveTargets(model, preferredProviderId);
     if (!targets) return this.lookup(preferredProviderId ?? "default", model, sdk, agentConfig);
     if (targets.length === 0) return conservativeCapabilities();
+    const correlationConfig = agentConfig?.modelIdMapping
+      ? { modelIdMapping: agentConfig.modelIdMapping }
+      : undefined;
     const matrices: CapabilityMatrix[] = [];
     for (const target of targets) {
-      matrices.push(await this.lookup(target.provider.id, target.modelId, sdk, agentConfig));
+      matrices.push(await this.lookup(target.provider.id, target.modelId, sdk, correlationConfig));
     }
-    return intersectCapabilityMatrices(matrices);
+    return applyManualCapabilities(
+      intersectCapabilityMatrices(matrices),
+      agentConfig?.capabilities,
+    );
   }
 
   async lookup(
@@ -73,7 +79,7 @@ export class CapabilityRegistry {
       // Tier-1 bounds belong to this agent invocation. Persisting the merged
       // matrix would leak one agent's restrictions into every agent using the
       // same provider/model/SDK cache key.
-      return { ...base, ...agentConfig.capabilities };
+      return applyManualCapabilities(base, agentConfig.capabilities);
     }
 
     return base;
@@ -208,6 +214,7 @@ export class CapabilityRegistry {
       structuredOutputs: false,
       promptCaching: false,
       reasoning: false,
+      contextWindowTokens: 0,
       maxTokens: 0,
     };
   }
@@ -230,6 +237,7 @@ function conservativeCapabilities(): CapabilityMatrix {
     structuredOutputs: false,
     promptCaching: false,
     reasoning: false,
+    contextWindowTokens: 0,
     maxTokens: 0,
   };
 }
@@ -238,12 +246,36 @@ function providerConfigurationIdentity(target: ProviderTarget): string {
   return `${target.protocol}:${target.provider.baseUrl.replace(/\/+$/u, "")}:${target.provider.apiKeyEnv}`;
 }
 
+function applyManualCapabilities(
+  discovered: CapabilityMatrix,
+  manual: AgentConfigRef["capabilities"],
+): CapabilityMatrix {
+  if (!manual) return discovered;
+  return {
+    ...discovered,
+    ...manual,
+    contextWindowTokens: minimumPositiveCapability(
+      discovered.contextWindowTokens,
+      manual.contextWindowTokens,
+    ),
+    maxTokens: minimumPositiveCapability(discovered.maxTokens, manual.maxTokens),
+  };
+}
+
+function minimumPositiveCapability(...values: Array<number | undefined>): number {
+  const positive = values.filter((value): value is number => value !== undefined && value > 0);
+  return positive.length > 0 ? Math.min(...positive) : 0;
+}
+
 function intersectCapabilityMatrices(matrices: CapabilityMatrix[]): CapabilityMatrix {
   const [first, ...rest] = matrices;
   if (!first) return conservativeCapabilities();
   const knownMaxTokens = matrices
     .map((matrix) => matrix.maxTokens)
     .filter((maxTokens) => maxTokens > 0);
+  const knownContextWindowTokens = matrices
+    .map((matrix) => matrix.contextWindowTokens ?? 0)
+    .filter((contextWindowTokens) => contextWindowTokens > 0);
   return rest.reduce<CapabilityMatrix>(
     (intersection, matrix) => ({
       chat: intersection.chat && matrix.chat,
@@ -253,6 +285,8 @@ function intersectCapabilityMatrices(matrices: CapabilityMatrix[]): CapabilityMa
       structuredOutputs: intersection.structuredOutputs && matrix.structuredOutputs,
       promptCaching: intersection.promptCaching && matrix.promptCaching,
       reasoning: intersection.reasoning && matrix.reasoning,
+      contextWindowTokens:
+        knownContextWindowTokens.length > 0 ? Math.min(...knownContextWindowTokens) : 0,
       maxTokens: knownMaxTokens.length > 0 ? Math.min(...knownMaxTokens) : 0,
     }),
     first,

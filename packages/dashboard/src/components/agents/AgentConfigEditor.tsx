@@ -64,6 +64,9 @@ function configToMarkdown(config: AgentConfig): string {
     lines.push(`  tools: ${config.capabilities.tools}`);
     lines.push(`  vision: ${config.capabilities.vision}`);
     lines.push(`  streaming: ${config.capabilities.streaming}`);
+    if (config.capabilities.contextWindowTokens !== undefined) {
+      lines.push(`  contextWindowTokens: ${config.capabilities.contextWindowTokens}`);
+    }
     lines.push(`  maxTokens: ${config.capabilities.maxTokens}`);
   }
   if (config.modelIdMapping) {

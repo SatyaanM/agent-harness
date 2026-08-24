@@ -1099,4 +1099,339 @@ describe("SessionRuntime delivery invariants", () => {
 
     db.close();
   });
+
+  it("compacts before the primary call, preserves originals, and tracks separate usage", async () => {
+    const sessionsDir = await makeDirectory();
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+    new SessionRepository(db).create({
+      id: "compact-runtime",
+      agentName: "orchestrator",
+      prompt: "old prompt",
+    });
+    const originalMessages = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `historical message ${index} with enough content to consume context`,
+    }));
+    const messageRepo = new MessageRepository(db);
+    for (const [sequenceNum, historical] of originalMessages.entries()) {
+      messageRepo.create({
+        id: `historical-${sequenceNum}`,
+        sessionId: "compact-runtime",
+        ...historical,
+        sequenceNum,
+      });
+    }
+    await new SessionStore(sessionsDir).save(
+      createSessionData({
+        sessionId: "compact-runtime",
+        taskId: "compact-task",
+        prompt: "old prompt",
+        messages: originalMessages,
+      }),
+    );
+
+    const compactionCalls: LLMChatParams[] = [];
+    const primaryCalls: LLMChatParams[] = [];
+    const llmClient: LLMClient = {
+      async chat(params) {
+        compactionCalls.push(params);
+        return {
+          ...stop("MEMORY:\nuserPreference: concise\n\nSUMMARY:\nEarlier work completed."),
+          usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+        };
+      },
+      async *chatStream(params) {
+        primaryCalls.push(params);
+        yield { type: "text-delta" as const, text: "primary answer" };
+        yield {
+          type: "finish" as const,
+          finishReason: "stop" as const,
+          usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
+        };
+      },
+    };
+    const capabilities = new CapabilityRegistry({ workspaceRoot: sessionsDir });
+    const lookupModel = vi.spyOn(capabilities, "lookupModel").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: false,
+      streaming: true,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      contextWindowTokens: 4096,
+      maxTokens: 512,
+    });
+    const runtime = new SessionRuntime({
+      sessionId: "compact-runtime",
+      sessionsDir,
+      db,
+      resolveConfig: () => ({
+        ...config(),
+        provider: "preferred-provider",
+        capabilities: {
+          contextWindowTokens: 128_000,
+          maxTokens: 4096,
+        },
+        compactionThreshold: 0.01,
+        compactionKeepRecentMessages: 2,
+        compactionChunkMessages: 4,
+      }),
+      toolRegistry: new ToolRegistry(),
+      llmClient,
+      capabilityRegistry: capabilities,
+    });
+
+    await expect(runtime.deliver("new prompt")).resolves.toEqual(
+      expect.objectContaining({ status: "success", summary: "primary answer" }),
+    );
+
+    expect(lookupModel).toHaveBeenCalledTimes(1);
+    expect(compactionCalls).toHaveLength(1);
+    expect(compactionCalls[0]?.system).toContain("structured memory block");
+    expect(compactionCalls[0]).toEqual(
+      expect.objectContaining({
+        preferredProviderId: "preferred-provider",
+        maxOutputTokens: 512,
+      }),
+    );
+    expect(primaryCalls).toHaveLength(1);
+    expect(primaryCalls[0]?.messages.map((entry) => entry.content)).toEqual([
+      "MEMORY:\nuserPreference: concise\n\nSUMMARY:\nEarlier work completed.",
+      originalMessages[4]?.content,
+      originalMessages[5]?.content,
+      "new prompt",
+    ]);
+    const compactions = messageRepo.getCompactedRanges("compact-runtime");
+    expect(compactions).toEqual([
+      expect.objectContaining({ start_sequence: 0, end_sequence: 3, model_used: "fake-model" }),
+    ]);
+    expect(messageRepo.listRange("compact-runtime", 0, 3).map((row) => row.content)).toEqual(
+      originalMessages.slice(0, 4).map((entry) => entry.content),
+    );
+    const durableSession = await new SessionStore(sessionsDir).load("compact-runtime");
+    expect(durableSession?.messages.map((entry) => entry.content)).toEqual([
+      ...originalMessages.map((entry) => entry.content),
+      "new prompt",
+      "primary answer",
+    ]);
+    const run = new RunRepository(db).listBySession("compact-runtime")[0];
+    expect(JSON.parse(run?.token_usage ?? "null")).toEqual({
+      streaming: { steps: [expect.objectContaining({ outputTokens: 4 })] },
+      compactionTokenUsage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+    });
+    db.close();
+  });
+
+  it("retains compaction and streaming usage together when the primary stream fails", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+    new SessionRepository(db).create({
+      id: "compact-stream-failure",
+      agentName: "orchestrator",
+      prompt: "old prompt",
+    });
+    const messageRepo = new MessageRepository(db);
+    for (let sequenceNum = 0; sequenceNum < 6; sequenceNum += 1) {
+      messageRepo.create({
+        sessionId: "compact-stream-failure",
+        role: sequenceNum % 2 === 0 ? "user" : "assistant",
+        content: `historical message ${sequenceNum} with enough context to compact`,
+        sequenceNum,
+      });
+    }
+    const capabilities = new CapabilityRegistry({ workspaceRoot: tmpdir() });
+    vi.spyOn(capabilities, "lookupModel").mockResolvedValue({
+      chat: true,
+      tools: false,
+      vision: false,
+      streaming: true,
+      structuredOutputs: false,
+      promptCaching: false,
+      reasoning: false,
+      contextWindowTokens: 100,
+      maxTokens: 64,
+    });
+    const runtime = new SessionRuntime({
+      sessionId: "compact-stream-failure",
+      db,
+      resolveConfig: () => ({
+        ...config(),
+        compactionThreshold: 0.5,
+        compactionKeepRecentMessages: 2,
+        compactionChunkMessages: 4,
+      }),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          return {
+            ...stop("MEMORY:\nstate: retained\n\nSUMMARY:\nEarlier work."),
+            usage: { inputTokens: 30, outputTokens: 8, totalTokens: 38 },
+          };
+        },
+        async *chatStream() {
+          yield { type: "text-delta" as const, text: "partial" };
+          throw new Error("primary stream failed");
+        },
+      },
+      capabilityRegistry: capabilities,
+    });
+
+    await expect(runtime.deliver("new prompt")).rejects.toThrow("primary stream failed");
+
+    const failedRun = new RunRepository(db).listBySession("compact-stream-failure")[0];
+    expect(failedRun?.status).toBe("failed");
+    expect(JSON.parse(failedRun?.token_usage ?? "null")).toEqual({
+      streaming: { steps: [expect.objectContaining({ outputTokens: 2 })] },
+      compactionTokenUsage: { inputTokens: 30, outputTokens: 8, totalTokens: 38 },
+    });
+    db.close();
+  });
+
+  it("honors the compaction opt-out even above the configured threshold", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+    new SessionRepository(db).create({
+      id: "compact-disabled",
+      agentName: "orchestrator",
+      prompt: "old",
+    });
+    const messageRepo = new MessageRepository(db);
+    for (let sequenceNum = 0; sequenceNum < 6; sequenceNum++) {
+      messageRepo.create({
+        sessionId: "compact-disabled",
+        role: sequenceNum % 2 === 0 ? "user" : "assistant",
+        content: `large historical message ${sequenceNum}`,
+        sequenceNum,
+      });
+    }
+    const chat = vi.fn(async () => stop("one primary response"));
+    const runtime = new SessionRuntime({
+      sessionId: "compact-disabled",
+      db,
+      resolveConfig: () => ({
+        ...config(),
+        compaction: false,
+        capabilities: {
+          chat: true,
+          tools: false,
+          vision: false,
+          streaming: false,
+          maxTokens: 10,
+          contextWindowTokens: 10,
+        },
+      }),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+    });
+
+    await runtime.deliver("new prompt");
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(messageRepo.getCompactedRanges("compact-disabled")).toEqual([]);
+    db.close();
+  });
+
+  it("does not use the provider output-token capability as the context window", async () => {
+    const db = createDatabaseConnection(":memory:");
+    new SqliteMigrator(db).up();
+    new SessionRepository(db).create({ id: "separate-budgets", agentName: "agent", prompt: "old" });
+    const messageRepo = new MessageRepository(db);
+    for (let sequenceNum = 0; sequenceNum < 6; sequenceNum++) {
+      messageRepo.create({
+        sessionId: "separate-budgets",
+        role: sequenceNum % 2 === 0 ? "user" : "assistant",
+        content: `history ${sequenceNum} with enough text for the tiny output limit`,
+        sequenceNum,
+      });
+    }
+    const chat = vi.fn(async () => stop("primary"));
+    const runtime = new SessionRuntime({
+      sessionId: "separate-budgets",
+      db,
+      resolveConfig: () => ({
+        ...config(),
+        capabilities: {
+          chat: true,
+          tools: false,
+          vision: false,
+          streaming: false,
+          maxTokens: 1,
+          contextWindowTokens: 128_000,
+        },
+      }),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+    });
+
+    await runtime.deliver("new prompt");
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(messageRepo.getCompactedRanges("separate-budgets")).toEqual([]);
+    db.close();
+  });
+
+  it.each([
+    ["truncated", "length"],
+    ["content-filtered", "content-filter"],
+  ] as const)(
+    "persists usage but no derived state for a %s summary",
+    async (_case, finishReason) => {
+      const db = createDatabaseConnection(":memory:");
+      new SqliteMigrator(db).up();
+      new SessionRepository(db).create({ id: "bad-summary", agentName: "agent", prompt: "old" });
+      const messageRepo = new MessageRepository(db);
+      for (let sequenceNum = 0; sequenceNum < 6; sequenceNum++) {
+        messageRepo.create({
+          sessionId: "bad-summary",
+          role: sequenceNum % 2 === 0 ? "user" : "assistant",
+          content: `history ${sequenceNum} with enough text to compact`,
+          sequenceNum,
+        });
+      }
+      const chat = vi.fn(async () => ({
+        message: { role: "assistant" as const, content: "incomplete summary" },
+        finishReason,
+        usage: { inputTokens: 11, outputTokens: 3, totalTokens: 14 },
+      }));
+      const runtime = new SessionRuntime({
+        sessionId: "bad-summary",
+        db,
+        resolveConfig: () => ({
+          ...config(),
+          capabilities: {
+            chat: true,
+            tools: false,
+            vision: false,
+            streaming: false,
+            maxTokens: 100_000,
+            contextWindowTokens: 10,
+          },
+          compactionKeepRecentMessages: 2,
+          compactionChunkMessages: 4,
+        }),
+        toolRegistry: new ToolRegistry(),
+        llmClient: { chat },
+        capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
+      });
+
+      await expect(runtime.deliver("new prompt")).rejects.toThrow(/compaction response/i);
+      expect(messageRepo.getCompactedRanges("bad-summary")).toEqual([]);
+      expect(
+        messageRepo.listBySession("bad-summary").filter((row) => row.role === "system"),
+      ).toEqual([]);
+      expect(new RunRepository(db).listBySession("bad-summary")[0]).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          token_usage: JSON.stringify({
+            compactionTokenUsage: { inputTokens: 11, outputTokens: 3, totalTokens: 14 },
+          }),
+        }),
+      );
+      db.close();
+    },
+  );
 });

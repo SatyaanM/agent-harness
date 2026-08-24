@@ -93,4 +93,46 @@ Follow the bounds.
 
     expect(loadAgentConfig(file).capabilities).toEqual({ tools: false });
   });
+
+  it("preserves compaction opt-out and threshold controls from frontmatter", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "agent-config-compaction-"));
+    tempDirs.push(directory);
+    const file = path.join(directory, "agent.md");
+    await writeFile(
+      file,
+      `---
+name: compact-agent
+model: fake-model
+tools: []
+maxSteps: 2
+compaction: false
+compactionThreshold: 0.7
+compactionKeepRecentMessages: 10
+compactionChunkMessages: 24
+capabilities:
+  chat: true
+  tools: false
+  vision: false
+  streaming: true
+  contextWindowTokens: 128000
+  maxTokens: 4096
+---
+Keep the transcript exact.
+`,
+      "utf8",
+    );
+
+    expect(loadAgentConfig(file)).toEqual(
+      expect.objectContaining({
+        compaction: false,
+        compactionThreshold: 0.7,
+        compactionKeepRecentMessages: 10,
+        compactionChunkMessages: 24,
+        capabilities: expect.objectContaining({
+          contextWindowTokens: 128_000,
+          maxTokens: 4_096,
+        }),
+      }),
+    );
+  });
 });

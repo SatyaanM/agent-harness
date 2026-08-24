@@ -105,6 +105,7 @@ export async function fetchCapabilities(
     structuredOutputs: false,
     promptCaching: false,
     reasoning: false,
+    contextWindowTokens: entry.limit?.context ?? 0,
     maxTokens: entry.limit?.output ?? 0,
   };
 }

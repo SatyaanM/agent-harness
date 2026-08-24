@@ -17,6 +17,7 @@ export const CapabilityMatrixSchema = z
     structuredOutputs: z.boolean().default(false),
     promptCaching: z.boolean().default(false),
     reasoning: z.boolean().default(false),
+    contextWindowTokens: z.number().int().nonnegative().max(10_000_000).optional(),
     maxTokens: z.number().int().nonnegative().max(10_000_000),
   })
   .strict();
@@ -43,6 +44,10 @@ export const AgentConfigSchema = z
     description: z.string().max(10_000).optional(),
     capabilities: CapabilityMatrixSchema.partial().optional(),
     modelIdMapping: z.string().max(256).optional(),
+    compaction: z.boolean().optional(),
+    compactionThreshold: z.number().positive().max(1).optional(),
+    compactionKeepRecentMessages: z.number().int().min(2).max(1_000).optional(),
+    compactionChunkMessages: z.number().int().min(2).max(1_000).optional(),
   })
   .strict();
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;

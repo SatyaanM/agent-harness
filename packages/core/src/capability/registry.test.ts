@@ -25,6 +25,45 @@ afterEach(async () => {
 });
 
 describe("CapabilityRegistry manual overrides", () => {
+  it("keeps discovered numeric ceilings when a manual override is larger", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
+    tempDirs.push(root);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              provider: {
+                id: "provider",
+                models: {
+                  model: {
+                    tool_call: false,
+                    limit: { context: 4096, output: 512 },
+                  },
+                },
+              },
+            }),
+          ),
+      ),
+    );
+    const registry = new CapabilityRegistry({ workspaceRoot: root });
+
+    const capabilities = await registry.lookupModel("model", undefined, "vercel-ai", {
+      capabilities: {
+        tools: true,
+        contextWindowTokens: 128_000,
+        maxTokens: 4096,
+      },
+    });
+
+    expect(capabilities).toMatchObject({
+      tools: true,
+      contextWindowTokens: 4096,
+      maxTokens: 512,
+    });
+  });
+
   it("intersects capabilities across every eligible fallback target", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
     tempDirs.push(root);
@@ -84,6 +123,7 @@ describe("CapabilityRegistry manual overrides", () => {
         structuredOutputs: true,
         promptCaching: true,
         reasoning: true,
+        contextWindowTokens: 128_000,
         maxTokens: 4096,
       })
       .mockResolvedValueOnce({
@@ -94,6 +134,7 @@ describe("CapabilityRegistry manual overrides", () => {
         structuredOutputs: false,
         promptCaching: false,
         reasoning: false,
+        contextWindowTokens: 32_000,
         maxTokens: 1024,
       })
       .mockResolvedValueOnce({
@@ -104,6 +145,7 @@ describe("CapabilityRegistry manual overrides", () => {
         structuredOutputs: true,
         promptCaching: true,
         reasoning: true,
+        contextWindowTokens: 0,
         maxTokens: 0,
       });
 
@@ -115,6 +157,7 @@ describe("CapabilityRegistry manual overrides", () => {
       structuredOutputs: false,
       promptCaching: false,
       reasoning: false,
+      contextWindowTokens: 32_000,
       maxTokens: 1024,
     });
     expect(lookup).toHaveBeenNthCalledWith(1, "full", "shared-model", "vercel-ai", undefined);
@@ -191,6 +234,7 @@ describe("CapabilityRegistry manual overrides", () => {
       structuredOutputs: false,
       promptCaching: false,
       reasoning: false,
+      contextWindowTokens: 0,
       maxTokens: 0,
     });
     delete process.env.FULL_PROBE_KEY;
@@ -690,6 +734,7 @@ describe("CapabilityRegistry manual overrides", () => {
         structuredOutputs: false,
         promptCaching: false,
         reasoning: false,
+        contextWindowTokens: 0,
         maxTokens: 0,
       },
     );
@@ -711,6 +756,34 @@ describe("CapabilityRegistry manual overrides", () => {
     });
 
     expect(capabilities.chat).toBe(false);
+    expect(capabilities.maxTokens).toBe(100);
+  });
+
+  it("preserves a discovered positive numeric ceiling when the manual value is unknown", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-capabilities-"));
+    tempDirs.push(root);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              provider: {
+                id: "provider",
+                models: { model: { limit: { context: 8192, output: 1024 } } },
+              },
+            }),
+          ),
+      ),
+    );
+    const registry = new CapabilityRegistry({ workspaceRoot: root });
+
+    const capabilities = await registry.lookup("provider", "model", "sdk", {
+      capabilities: { contextWindowTokens: 0, maxTokens: 0 },
+    });
+
+    expect(capabilities.contextWindowTokens).toBe(8192);
+    expect(capabilities.maxTokens).toBe(1024);
   });
 
   it("merges partial capability overrides on top of base defaults without wiping unspecified fields", async () => {
