@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  ChatStreamEventSchema,
   createLogger,
   describeError,
   getTracer,
@@ -49,9 +50,7 @@ chatRouter.post(
     // be GC'd only by the next prepareSessionDeletion — a tiny leak with no
     // correctness impact, but easy to avoid.
     if (!sessionManager.isSessionAvailable(sessionId)) {
-      res.write(
-        `data: ${JSON.stringify({ type: "error", error: "Session is no longer available" })}\n\n`,
-      );
+      writeChatEvent(res, { type: "error", error: "Session is no longer available" });
       res.end();
       return;
     }
@@ -84,11 +83,9 @@ chatRouter.post(
           if ("requestId" in event && event.requestId === requestId) {
             if (event.type === "agent:text-delta") {
               streamed = true;
-              res.write(`data: ${JSON.stringify({ type: "text-delta", text: event.text })}\n\n`);
+              writeChatEvent(res, { type: "text-delta", text: event.text });
             } else if (event.type === "agent:tool-call-delta") {
-              res.write(
-                `data: ${JSON.stringify({ type: "tool-call-delta", toolCall: event.toolCall })}\n\n`,
-              );
+              writeChatEvent(res, { type: "tool-call-delta", toolCall: event.toolCall });
             }
           }
         };
@@ -99,10 +96,10 @@ chatRouter.post(
             : await runtime.deliver(message, agentName, controller.signal, requestId);
           if (!streamed && result.summary) {
             for (const chunk of chunkSummary(result.summary)) {
-              res.write(`data: ${JSON.stringify({ type: "text-delta", text: chunk })}\n\n`);
+              writeChatEvent(res, { type: "text-delta", text: chunk });
             }
           }
-          res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+          writeChatEvent(res, { type: "done" });
           serverSpan.setStatus({
             code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
           });
@@ -118,7 +115,7 @@ chatRouter.post(
         ...describeError(error),
       });
       if (!res.destroyed) {
-        res.write(`data: ${JSON.stringify({ type: "error", error: "Agent request failed" })}\n\n`);
+        writeChatEvent(res, { type: "error", error: "Agent request failed" });
       }
     } finally {
       serverSpan.end();
@@ -137,4 +134,12 @@ function chunkSummary(summary: string): string[] {
     chunks.push(summary.slice(offset, offset + 40));
   }
   return chunks;
+}
+
+function writeChatEvent(
+  response: import("express").Response,
+  event: import("@agent-harness/core").ChatStreamEvent,
+): void {
+  const validated = ChatStreamEventSchema.parse(event);
+  response.write(`data: ${JSON.stringify(validated)}\n\n`);
 }

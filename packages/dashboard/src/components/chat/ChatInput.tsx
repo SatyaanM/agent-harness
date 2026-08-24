@@ -43,6 +43,7 @@ export default function ChatInput() {
   const performRequest = async (request: Omit<PendingRequest, "error">, retryExisting = false) => {
     setSubmitting(true);
     updateMessage(request.sessionId, request.assistantMessageId, "");
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       const stream = await sendMessage(
         request.sessionId,
@@ -52,7 +53,7 @@ export default function ChatInput() {
       );
       if (!stream) throw new Error("The server returned no response stream.");
 
-      const reader = stream.getReader();
+      reader = stream.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
       let buffer = "";
@@ -88,6 +89,8 @@ export default function ChatInput() {
       }
 
       if (!completed) throw new Error("The response stream ended before completion.");
+      reader.releaseLock();
+      reader = undefined;
       setPendingRequest(null);
 
       // Auto-play TTS if enabled
@@ -97,6 +100,8 @@ export default function ChatInput() {
         });
       }
     } catch (error) {
+      await reader?.cancel().catch(() => undefined);
+      reader = undefined;
       const detail = error instanceof Error ? error.message : "Unknown network error";
       updateMessage(request.sessionId, request.assistantMessageId, `Error: ${detail}`);
       setPendingRequest({ ...request, error: detail });

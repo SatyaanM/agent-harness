@@ -1,5 +1,6 @@
 import {
   AgentConfigSchema,
+  ChatStreamEventSchema,
   PluginManifestSchema as CorePluginManifestSchema,
   MAX_INBOX_FILE_RESPONSE_BYTES,
   MAX_SESSION_METADATA_RESPONSE_BYTES,
@@ -51,11 +52,6 @@ const OpenSessionResultSchema = z.object({
 const ErrorEnvelopeSchema = z.object({
   error: z.union([z.string(), z.object({ message: z.string() }).passthrough()]),
 });
-const ChatStreamEventSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text-delta"), text: z.string() }).strict(),
-  z.object({ type: z.literal("done") }).strict(),
-  z.object({ type: z.literal("error"), error: z.string() }).strict(),
-]);
 export type ChatStreamEvent = z.infer<typeof ChatStreamEventSchema>;
 
 async function parseJsonResponse<TSchema extends z.ZodTypeAny>(

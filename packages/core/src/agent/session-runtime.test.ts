@@ -78,6 +78,55 @@ afterEach(async () => {
 });
 
 describe("SessionRuntime delivery invariants", () => {
+  it("persists streamed reasoning without exposing it as a text delta", async () => {
+    const sessionsDir = await makeDirectory();
+    const capabilities = new CapabilityRegistry({ workspaceRoot: sessionsDir });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: true,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: true,
+      maxTokens: 0,
+    });
+    const runtime = new SessionRuntime({
+      sessionId: "stream-reasoning",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield { type: "reasoning-delta" as const, reasoning: "private thought" };
+          yield { type: "text-delta" as const, text: "public answer" };
+          yield { type: "finish" as const, finishReason: "stop" as const };
+        },
+      },
+      capabilityRegistry: capabilities,
+    });
+    const events: Array<{ type: string; text?: string }> = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.deliver("go", undefined, undefined, "request-1");
+
+    const saved = await new SessionStore(sessionsDir).load("stream-reasoning");
+    expect(saved?.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: "public answer",
+        reasoning: "private thought",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "agent:text-delta", text: "public answer" }),
+    );
+    expect(events).not.toContainEqual(expect.objectContaining({ text: "private thought" }));
+  });
+
   it("persists TTFT and token throughput in durable run metadata", async () => {
     vi.useFakeTimers();
     const db = createDatabaseConnection(":memory:");

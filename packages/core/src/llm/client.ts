@@ -66,6 +66,7 @@ export type LLMResponse = z.infer<typeof LLMResponseSchema>;
 
 export type LLMStreamDelta =
   | { type: "text-delta"; text: string }
+  | { type: "reasoning-delta"; reasoning: string }
   | { type: "tool-call-delta"; toolCall: { id: string; name: string; argumentsDelta: string } }
   | { type: "finish"; finishReason: LLMFinishReason; usage?: LLMUsage };
 

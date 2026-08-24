@@ -244,6 +244,14 @@ describe("upstream trust boundaries", () => {
           runId: "run-1",
           ...(requestId ? { requestId } : {}),
         });
+        listener?.({
+          type: "agent:tool-call-delta",
+          sessionId: "stream-session",
+          agentName: "orchestrator",
+          toolCall: { id: "call-1", name: "read", argumentsDelta: '{"path":' },
+          runId: "run-1",
+          ...(requestId ? { requestId } : {}),
+        });
         return {
           status: "success",
           summary: "provider-token",
@@ -257,6 +265,8 @@ describe("upstream trust boundaries", () => {
       .send({ sessionId: "stream-session", message: "hello" });
 
     expect(res.text.match(/provider-token/g)).toHaveLength(1);
+    expect(res.text).toContain('"type":"tool-call-delta"');
+    expect(res.text).toContain('"argumentsDelta":"{\\"path\\":"');
     expect(res.text).toContain('"type":"done"');
   });
 

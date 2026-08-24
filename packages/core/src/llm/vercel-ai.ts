@@ -156,10 +156,14 @@ export function createVercelAILLMClient(
           let receivedFinish = false;
 
           for await (const chunk of result.fullStream) {
-            streamHasStarted = true;
             if (chunk.type === "text-delta" && chunk.text) {
+              streamHasStarted = true;
               yield { type: "text-delta", text: chunk.text };
+            } else if (chunk.type === "reasoning-delta" && chunk.text) {
+              streamHasStarted = true;
+              yield { type: "reasoning-delta", reasoning: chunk.text };
             } else if (chunk.type === "tool-input-start") {
+              streamHasStarted = true;
               activeToolCalls.set(chunk.id, chunk.toolName);
               yield {
                 type: "tool-call-delta",
@@ -170,6 +174,7 @@ export function createVercelAILLMClient(
                 },
               };
             } else if (chunk.type === "tool-input-delta") {
+              streamHasStarted = true;
               const name = activeToolCalls.get(chunk.id) || "unknown";
               yield {
                 type: "tool-call-delta",

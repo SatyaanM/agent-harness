@@ -25,6 +25,17 @@ describe("chat stream boundary", () => {
     expect(() => parseChatStreamEvent('{"type":"text-delta","text":42}')).toThrow(
       BoundaryValidationError,
     );
+    expect(
+      parseChatStreamEvent(
+        '{"type":"tool-call-delta","toolCall":{"id":"call-1","name":"read","argumentsDelta":"{\\"path\\":"}}',
+      ),
+    ).toEqual({
+      type: "tool-call-delta",
+      toolCall: { id: "call-1", name: "read", argumentsDelta: '{"path":' },
+    });
+    expect(() =>
+      parseChatStreamEvent(JSON.stringify({ type: "text-delta", text: "😀".repeat(20_000) })),
+    ).toThrow(BoundaryValidationError);
   });
 });
 

@@ -1,6 +1,15 @@
 import type { CapabilityRegistry } from "../capability/registry.js";
 import { describeError } from "../contracts/errors.js";
 import { createLogger, type Logger } from "../contracts/logging.js";
+import {
+  MAX_STREAM_DELTA_BYTES,
+  MAX_STREAM_REASONING_CHARS,
+  MAX_STREAM_TEXT_CHARS,
+  MAX_STREAM_TOOL_ARGUMENT_CHARS,
+  MAX_STREAM_TOOL_CALL_ID_BYTES,
+  MAX_STREAM_TOOL_NAME_BYTES,
+  MAX_STREAM_TOTAL_DELTA_BYTES,
+} from "../contracts/streaming.js";
 import { getTracer, SpanKind, SpanStatusCode } from "../contracts/tracing.js";
 import {
   type LLMClient,
@@ -211,7 +220,9 @@ export class Agent {
             const rawResponse = await tracer.withSpan(llmSpan, async () => {
               if (matrix.streaming && this.llmClient.chatStream) {
                 let text = "";
+                let reasoning = "";
                 const toolCallsMap = new Map<string, { name: string; argsText: string }>();
+                let totalDeltaBytes = 0;
                 let finishReason: LLMFinishReason | undefined;
                 let usage: LLMUsage | undefined;
                 const streamStartedAt = Date.now();
@@ -223,15 +234,61 @@ export class Agent {
                 try {
                   for await (const chunk of this.llmClient.chatStream(chatParams)) {
                     if (chunk.type === "text-delta") {
+                      totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.text);
+                      if (text.length + chunk.text.length > MAX_STREAM_TEXT_CHARS) {
+                        throw new Error(
+                          `Provider streamed text limit exceeded (${MAX_STREAM_TEXT_CHARS} characters)`,
+                        );
+                      }
                       firstTokenAt ??= Date.now();
                       text += chunk.text;
                       this.onEvent?.(chunk);
+                    } else if (chunk.type === "reasoning-delta") {
+                      totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.reasoning);
+                      if (reasoning.length + chunk.reasoning.length > MAX_STREAM_REASONING_CHARS) {
+                        throw new Error(
+                          `Provider streamed reasoning limit exceeded (${MAX_STREAM_REASONING_CHARS} characters)`,
+                        );
+                      }
+                      reasoning += chunk.reasoning;
                     } else if (chunk.type === "tool-call-delta") {
                       if (chunk.toolCall) {
+                        ensureBoundedStreamField(
+                          chunk.toolCall.id,
+                          MAX_STREAM_TOOL_CALL_ID_BYTES,
+                          "tool call id",
+                        );
+                        ensureBoundedStreamField(
+                          chunk.toolCall.name,
+                          MAX_STREAM_TOOL_NAME_BYTES,
+                          "tool name",
+                        );
+                        totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.toolCall.id);
+                        totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.toolCall.name);
+                        totalDeltaBytes = addStreamDeltaBytes(
+                          totalDeltaBytes,
+                          chunk.toolCall.argumentsDelta,
+                        );
                         const existing = toolCallsMap.get(chunk.toolCall.id) || {
                           name: chunk.toolCall.name,
                           argsText: "",
                         };
+                        if (
+                          !toolCallsMap.has(chunk.toolCall.id) &&
+                          toolCallsMap.size >= maxToolCalls
+                        ) {
+                          throw new Error(
+                            `Provider streamed tool-call count limit exceeded (${maxToolCalls})`,
+                          );
+                        }
+                        if (
+                          existing.argsText.length + chunk.toolCall.argumentsDelta.length >
+                          MAX_STREAM_TOOL_ARGUMENT_CHARS
+                        ) {
+                          throw new Error(
+                            `Provider streamed tool argument limit exceeded (${MAX_STREAM_TOOL_ARGUMENT_CHARS} characters)`,
+                          );
+                        }
                         existing.argsText += chunk.toolCall.argumentsDelta;
                         toolCallsMap.set(chunk.toolCall.id, existing);
                         this.onEvent?.(chunk);
@@ -294,6 +351,7 @@ export class Agent {
                   message: {
                     role: "assistant",
                     content: text,
+                    ...(reasoning ? { reasoning } : {}),
                     ...(toolCalls.length > 0 ? { toolCalls } : {}),
                   },
                   finishReason,
@@ -564,6 +622,27 @@ export class Agent {
       summary,
       messages: [...this.messages],
     };
+  }
+}
+
+function addStreamDeltaBytes(totalBytes: number, delta: string): number {
+  const deltaBytes = new TextEncoder().encode(delta).byteLength;
+  if (deltaBytes > MAX_STREAM_DELTA_BYTES) {
+    throw new Error(`Provider stream delta byte limit exceeded (${MAX_STREAM_DELTA_BYTES} bytes)`);
+  }
+  const nextTotal = totalBytes + deltaBytes;
+  if (nextTotal > MAX_STREAM_TOTAL_DELTA_BYTES) {
+    throw new Error(
+      `Provider stream total delta byte limit exceeded (${MAX_STREAM_TOTAL_DELTA_BYTES} bytes)`,
+    );
+  }
+  return nextTotal;
+}
+
+function ensureBoundedStreamField(value: string, maxBytes: number, label: string): void {
+  const encodedBytes = new TextEncoder().encode(value).byteLength;
+  if (value.length > maxBytes || encodedBytes > maxBytes) {
+    throw new Error(`Provider streamed ${label} limit exceeded (${maxBytes} bytes)`);
   }
 }
 

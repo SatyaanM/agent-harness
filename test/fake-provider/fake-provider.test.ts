@@ -1,4 +1,4 @@
-import { type Config, createVercelAILLMClient } from "@agent-harness/core";
+import { type Config, createVercelAILLMClient, MAX_STREAM_DELTA_BYTES } from "@agent-harness/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createFakeProviderServer, type FakeServerInstance } from "./index.js";
@@ -184,6 +184,13 @@ describe("Fake LLM Provider Service", () => {
         .map((chunk) => chunk.text)
         .join(""),
     ).toBe("This is a deterministic streaming response from the fake LLM test provider.");
+    const textDeltas = chunks.filter((chunk) => chunk.type === "text-delta");
+    expect(textDeltas.length).toBeGreaterThan(0);
+    expect(
+      textDeltas.every(
+        (chunk) => new TextEncoder().encode(chunk.text).byteLength <= MAX_STREAM_DELTA_BYTES,
+      ),
+    ).toBe(true);
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({ type: "finish", finishReason: "stop" }),
     );

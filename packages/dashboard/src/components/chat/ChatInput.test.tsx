@@ -65,6 +65,13 @@ describe("ChatInput", () => {
   });
 
   it("offers retry when the SSE stream reports an error", async () => {
+    let finishCancellation: (() => void) | undefined;
+    const cancel = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCancellation = resolve;
+        }),
+    );
     mockedSendMessage.mockResolvedValueOnce(
       new ReadableStream({
         start(controller) {
@@ -73,8 +80,8 @@ describe("ChatInput", () => {
               `data: ${JSON.stringify({ type: "error", error: "provider unavailable" })}\n\n`,
             ),
           );
-          controller.close();
         },
+        cancel,
       }),
     );
     render(<ChatInput />);
@@ -84,7 +91,37 @@ describe("ChatInput", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
+    await waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("button", { name: "Retry message" })).not.toBeInTheDocument();
+    finishCancellation?.();
     expect(await screen.findByRole("alert")).toHaveTextContent("provider unavailable");
     expect(screen.getByRole("button", { name: "Retry message" })).toBeInTheDocument();
+  });
+
+  it("validates and safely ignores tool-call deltas", async () => {
+    mockedSendMessage.mockResolvedValueOnce(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify({ type: "tool-call-delta", toolCall: { id: "call-1", name: "read", argumentsDelta: "{}" } })}\n\ndata: ${JSON.stringify({ type: "text-delta", text: "Done" })}\n\ndata: ${JSON.stringify({ type: "done" })}\n\n`,
+            ),
+          );
+          controller.close();
+        },
+      }),
+    );
+    render(<ChatInput />);
+    fireEvent.change(screen.getByPlaceholderText("Type a message..."), {
+      target: { value: "Hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(useSessionStore.getState().sessions[0].messages).toEqual(
+        expect.arrayContaining([expect.objectContaining({ role: "assistant", content: "Done" })]),
+      ),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

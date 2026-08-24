@@ -513,6 +513,66 @@ describe("Vercel AI adapter", () => {
     }
   });
 
+  it("falls back after an internal start part followed by a transient failure", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const client = createVercelAILLMClient(multiProviderConfig());
+      const unavailable = Object.assign(new Error("Unavailable"), { statusCode: 503 });
+      mocks.streamText
+        .mockReturnValueOnce({
+          fullStream: (async function* () {
+            yield { type: "start" };
+            throw unavailable;
+          })(),
+        })
+        .mockReturnValueOnce({
+          fullStream: (async function* () {
+            yield { type: "text-delta", text: "recovered" };
+            yield { type: "finish", finishReason: "stop" };
+          })(),
+        });
+
+      const completion = (async () => {
+        const chunks = [];
+        if (!client.chatStream) throw new Error("missing stream support");
+        for await (const chunk of client.chatStream({
+          messages: [{ role: "user", content: "hello" }],
+          model: "test-model",
+        }))
+          chunks.push(chunk);
+        return chunks;
+      })();
+      await vi.runAllTimersAsync();
+
+      await expect(completion).resolves.toContainEqual({ type: "text-delta", text: "recovered" });
+      expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries reasoning deltas without exposing them as text", async () => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "reasoning-delta", text: "private thought" };
+        yield { type: "text-delta", text: "answer" };
+        yield { type: "finish", finishReason: "stop" };
+      })(),
+    });
+    const client = createVercelAILLMClient(config);
+    const chunks = [];
+    if (!client.chatStream) throw new Error("missing stream support");
+    for await (const chunk of client.chatStream({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+    }))
+      chunks.push(chunk);
+
+    expect(chunks).toContainEqual({ type: "reasoning-delta", reasoning: "private thought" });
+    expect(chunks).not.toContainEqual({ type: "text-delta", text: "private thought" });
+  });
+
   it("falls back after a 5xx provider failure", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
