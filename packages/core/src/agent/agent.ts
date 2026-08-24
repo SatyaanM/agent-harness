@@ -38,6 +38,7 @@ const DEFAULT_MAX_TOOL_RESULT_CHARS = 100_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
 const DEFAULT_MAX_TOTAL_TOKENS = 100_000;
 const DEFAULT_RUN_TIMEOUT_MS = 300_000;
+const STREAM_ITERATOR_CLEANUP_TIMEOUT_MS = 100;
 
 export type AgentEventCallback = (
   event:
@@ -315,7 +316,7 @@ export class Agent {
                   streamFailure = error;
                   finishedAt = Date.now();
                 } finally {
-                  await streamIterator.return?.();
+                  await closeStreamIterator(streamIterator);
                 }
 
                 finishedAt ??= Date.now();
@@ -679,6 +680,31 @@ function nextStreamChunk<T>(
       (error: unknown) => finish(() => reject(error)),
     );
   });
+}
+
+async function closeStreamIterator<T>(iterator: AsyncIterator<T>): Promise<void> {
+  if (!iterator.return) return;
+
+  let cleanup: Promise<IteratorResult<T>>;
+  try {
+    cleanup = Promise.resolve(iterator.return());
+  } catch {
+    return;
+  }
+
+  // Attach both handlers immediately. If cleanup remains queued behind an
+  // uncooperative `next()`, a later rejection is still observed and cannot
+  // become an unhandled rejection after the bounded wait has elapsed.
+  const handledCleanup = cleanup.then(
+    () => undefined,
+    () => undefined,
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const cleanupDeadline = new Promise<void>((resolve) => {
+    timeout = setTimeout(resolve, STREAM_ITERATOR_CLEANUP_TIMEOUT_MS);
+  });
+  await Promise.race([handledCleanup, cleanupDeadline]);
+  if (timeout !== undefined) clearTimeout(timeout);
 }
 
 function waitForAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {

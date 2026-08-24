@@ -945,6 +945,76 @@ describe("Agent streaming", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("settles cancellation when a real async generator queues return behind unresolved next", async () => {
+    const controller = new AbortController();
+    const entered = vi.fn();
+    async function* stuckProvider() {
+      entered();
+      await new Promise<void>(() => undefined);
+      yield { type: "finish" as const, finishReason: "stop" as const };
+    }
+    const agent = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        chatStream: stuckProvider,
+      },
+      streamingCapabilities(),
+    );
+
+    const run = agent.run("go", [], controller.signal);
+    await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(run).rejects.toBeInstanceOf(AgentCancelledError);
+  });
+
+  it("preserves the primary stream error and handles a late cleanup rejection", async () => {
+    const primary = new Error("primary provider failure");
+    let rejectCleanup: ((reason: unknown) => void) | undefined;
+    const cleanup = new Promise<IteratorResult<never>>((_resolve, reject) => {
+      rejectCleanup = reject;
+    });
+    const close = vi.fn(() => cleanup);
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const agent = new Agent(
+        { ...config, tools: [], maxSteps: 1 },
+        new ToolRegistry(),
+        {
+          async chat() {
+            throw new Error("blocking pathway must not run");
+          },
+          chatStream() {
+            return {
+              [Symbol.asyncIterator]() {
+                return {
+                  next: async () => {
+                    throw primary;
+                  },
+                  return: close,
+                };
+              },
+            };
+          },
+        },
+        streamingCapabilities(),
+      );
+
+      await expect(agent.run("go")).rejects.toBe(primary);
+      expect(close).toHaveBeenCalledOnce();
+      rejectCleanup?.(new Error("late cleanup failure"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
   it.each([
     ["text delta", { type: "text-delta" as const, text: "late" }],
     [
