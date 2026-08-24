@@ -6,11 +6,12 @@ read_when:
 
 # Live Token Streaming Tasks
 
-- [ ] Add `LLMStreamDelta` and `chatStream` interface to `packages/core/src/llm/client.ts`.
-- [ ] Implement `chatStream` using `streamText` in `packages/core/src/llm/vercel-ai.ts`.
-- [ ] Modify `Agent.run()` in `packages/core/src/agent/agent.ts` to consume the stream.
-- [ ] Implement tool-call-delta buffering and final execution logic.
-- [ ] Add Time to First Token (TTFT) and Tokens Per Second (TPS) metric calculation.
-- [ ] Plumb partial tool streams and text streams out of the runtime via callback/iterator.
-- [ ] Update `packages/server/src/routes/chat.ts` to pipe the true stream to SSE and remove fake chunking.
-- [ ] Write tests ensuring identical database transcripts between streaming and non-streaming modes.
+- [x] Add `LLMStreamDelta` and `chatStream` interface to `packages/core/src/llm/client.ts`.
+- [x] Implement `chatStream` using `streamText` in `packages/core/src/llm/vercel-ai.ts`.
+- [x] Modify `Agent.run()` in `packages/core/src/agent/agent.ts` to consume the stream.
+- [x] Implement tool-call-delta buffering and final execution logic.
+- [x] Add Time to First Token (TTFT) and Tokens Per Second (TPS) metric calculation.
+- [x] Plumb partial tool streams and text streams out of the runtime via callback/iterator.
+- [x] Update `packages/server/src/routes/chat.ts` to pipe the true stream to SSE and retain chunked fallback only for non-streaming agents.
+- [x] Write tests ensuring identical database transcripts between streaming and non-streaming modes.
+- [x] Verify SDK error/abort parts, missing terminal finish, malformed tool deltas, client cancellation, mid-stream disconnect, SSE error delivery, and non-streaming fallback.

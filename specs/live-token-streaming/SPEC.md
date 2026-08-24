@@ -6,7 +6,7 @@ read_when:
 ---
 
 # Live Token Streaming Specification
-Status: Draft
+Status: Implemented
 
 ## Problem and evidence
 
@@ -94,6 +94,8 @@ In `packages/server/src/routes/chat.ts`, remove the fake chunking mechanism (`ch
 5. **Cancellation**: Emitting an abort signal via `AbortController` stops the LLM stream immediately, aborts mid-stream gracefully, and does not hang the process.
 6. **Error Handling**: A mid-stream network or provider error results in a clean error event over SSE, not a hung connection.
 
-## Open questions and decisions
+## Decisions
 
-- **Callback vs AsyncIterable for Runtime Plumbing:** Should `Agent.run()` return an `AsyncIterable` itself, or should it take a callback for emitting deltas? (To be decided during implementation based on ease of integration with the recursive step loop).
+- Runtime plumbing uses correlated callbacks from `Agent` through `SessionRuntime`. This preserves the existing serialized `AgentResult` and persistence path while allowing the HTTP adapter to forward deltas immediately.
+- Streaming performance is recorded per model step in the durable run row's `token_usage.streaming.steps` metadata and on the active `gen_ai.chat` span. Each record contains TTFT, output-token throughput, output-token count, and total stream duration.
+- A stream is successful only after an explicit terminal `finish` part. SDK `error` and `abort` parts, transport EOF, malformed tool arguments, and disconnects are failures and never synthesize a successful stop.

@@ -1,4 +1,4 @@
-export type { AgentEventCallback } from "./agent/agent.js";
+export type { AgentEventCallback, StreamPerformanceMetrics } from "./agent/agent.js";
 export { Agent } from "./agent/agent.js";
 export type { DelegationDeps } from "./agent/delegation.js";
 export { createDelegateTool, createReadSessionTool } from "./agent/delegation.js";

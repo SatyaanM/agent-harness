@@ -37,8 +37,16 @@ export type AgentEventCallback = (
     | { type: "step"; messages: Message[] }
     | { type: "capability-mismatch"; detail: string }
     | { type: "text-delta"; text: string }
-    | { type: "tool-call-delta"; toolCall: { id: string; name: string; argumentsDelta: string } },
+    | { type: "tool-call-delta"; toolCall: { id: string; name: string; argumentsDelta: string } }
+    | { type: "stream-metrics"; metrics: StreamPerformanceMetrics },
 ) => void;
+
+export interface StreamPerformanceMetrics {
+  ttftMs: number | null;
+  tokensPerSecond: number | null;
+  outputTokens: number;
+  durationMs: number;
+}
 
 export class Agent {
   private messages: Message[] = [];
@@ -204,27 +212,71 @@ export class Agent {
               if (matrix.streaming && this.llmClient.chatStream) {
                 let text = "";
                 const toolCallsMap = new Map<string, { name: string; argsText: string }>();
-                let finishReason: LLMFinishReason = "stop";
+                let finishReason: LLMFinishReason | undefined;
                 let usage: LLMUsage | undefined;
+                const streamStartedAt = Date.now();
+                let firstTokenAt: number | undefined;
+                let finishedAt: number | undefined;
+                let streamFailed = false;
+                let streamFailure: unknown;
 
-                for await (const chunk of this.llmClient.chatStream(chatParams)) {
-                  if (chunk.type === "text-delta") {
-                    text += chunk.text;
-                    this.onEvent?.(chunk);
-                  } else if (chunk.type === "tool-call-delta") {
-                    if (chunk.toolCall) {
-                      const existing = toolCallsMap.get(chunk.toolCall.id) || {
-                        name: chunk.toolCall.name,
-                        argsText: "",
-                      };
-                      existing.argsText += chunk.toolCall.argumentsDelta;
-                      toolCallsMap.set(chunk.toolCall.id, existing);
+                try {
+                  for await (const chunk of this.llmClient.chatStream(chatParams)) {
+                    if (chunk.type === "text-delta") {
+                      firstTokenAt ??= Date.now();
+                      text += chunk.text;
                       this.onEvent?.(chunk);
+                    } else if (chunk.type === "tool-call-delta") {
+                      if (chunk.toolCall) {
+                        const existing = toolCallsMap.get(chunk.toolCall.id) || {
+                          name: chunk.toolCall.name,
+                          argsText: "",
+                        };
+                        existing.argsText += chunk.toolCall.argumentsDelta;
+                        toolCallsMap.set(chunk.toolCall.id, existing);
+                        this.onEvent?.(chunk);
+                      }
+                    } else if (chunk.type === "finish") {
+                      finishReason = chunk.finishReason;
+                      usage = chunk.usage;
+                      finishedAt = Date.now();
                     }
-                  } else if (chunk.type === "finish") {
-                    finishReason = chunk.finishReason;
-                    usage = chunk.usage;
                   }
+                } catch (error) {
+                  streamFailed = true;
+                  streamFailure = error;
+                  finishedAt = Date.now();
+                }
+
+                finishedAt ??= Date.now();
+                const outputTokens = usage?.outputTokens ?? Math.ceil(text.length / 4);
+                const durationMs = Math.max(0, finishedAt - streamStartedAt);
+                const generationMs =
+                  firstTokenAt === undefined ? 0 : Math.max(0, finishedAt - firstTokenAt);
+                const metrics: StreamPerformanceMetrics = {
+                  ttftMs: firstTokenAt === undefined ? null : firstTokenAt - streamStartedAt,
+                  tokensPerSecond:
+                    firstTokenAt === undefined || outputTokens === 0
+                      ? null
+                      : outputTokens / Math.max(generationMs / 1_000, 0.001),
+                  outputTokens,
+                  durationMs,
+                };
+                llmSpan.setAttributes({
+                  ...(metrics.ttftMs === null
+                    ? {}
+                    : { "gen_ai.performance.time_to_first_token_ms": metrics.ttftMs }),
+                  ...(metrics.tokensPerSecond === null
+                    ? {}
+                    : {
+                        "gen_ai.performance.output_tokens_per_second": metrics.tokensPerSecond,
+                      }),
+                });
+                this.onEvent?.({ type: "stream-metrics", metrics });
+
+                if (streamFailed) throw streamFailure;
+                if (!finishReason) {
+                  throw new Error("Provider stream ended without a terminal finish event");
                 }
 
                 const toolCalls = Array.from(toolCallsMap.entries()).map(([id, tc]) => {

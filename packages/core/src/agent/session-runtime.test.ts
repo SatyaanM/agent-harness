@@ -11,6 +11,7 @@ import {
   createDatabaseConnection,
   MailboxRepository,
   MessageRepository,
+  RunRepository,
   SessionRepository,
   SqliteMigrator,
   TaskRepository,
@@ -77,6 +78,65 @@ afterEach(async () => {
 });
 
 describe("SessionRuntime delivery invariants", () => {
+  it("persists TTFT and token throughput in durable run metadata", async () => {
+    vi.useFakeTimers();
+    const db = createDatabaseConnection(":memory:");
+    try {
+      new SqliteMigrator(db).up();
+      new SessionRepository(db).create({
+        id: "stream-metrics",
+        agentName: "orchestrator",
+        prompt: "",
+      });
+      const capabilities = new CapabilityRegistry({ workspaceRoot: tmpdir() });
+      vi.spyOn(capabilities, "lookup").mockResolvedValue({
+        chat: true,
+        tools: true,
+        vision: true,
+        streaming: true,
+        structuredOutputs: true,
+        promptCaching: false,
+        reasoning: false,
+        maxTokens: 0,
+      });
+      vi.setSystemTime(new Date("2026-08-23T00:00:00.000Z"));
+      const runtime = new SessionRuntime({
+        sessionId: "stream-metrics",
+        db,
+        resolveConfig: () => config(),
+        toolRegistry: new ToolRegistry(),
+        llmClient: {
+          async chat() {
+            throw new Error("blocking pathway must not run");
+          },
+          async *chatStream() {
+            vi.setSystemTime(new Date("2026-08-23T00:00:00.120Z"));
+            yield { type: "text-delta" as const, text: "streamed" };
+            vi.setSystemTime(new Date("2026-08-23T00:00:01.120Z"));
+            yield {
+              type: "finish" as const,
+              finishReason: "stop" as const,
+              usage: { inputTokens: 4, outputTokens: 10, totalTokens: 14 },
+            };
+          },
+        },
+        capabilityRegistry: capabilities,
+      });
+
+      await runtime.deliver("go");
+
+      const runs = new RunRepository(db).listBySession("stream-metrics");
+      expect(JSON.parse(runs[0]?.token_usage ?? "null")).toEqual({
+        streaming: {
+          steps: [{ ttftMs: 120, tokensPerSecond: 10, outputTokens: 10, durationMs: 1120 }],
+        },
+      });
+    } finally {
+      db.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("serializes concurrent deliveries for one session", async () => {
     const sessionsDir = await makeDirectory();
     const firstResponse = deferred<LLMResponse>();
@@ -85,13 +145,24 @@ describe("SessionRuntime delivery invariants", () => {
       return stop("second complete");
     });
     const llmClient: LLMClient = { chat };
+    const capabilities = new CapabilityRegistry({ workspaceRoot: sessionsDir });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: false,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
     const runtime = new SessionRuntime({
       sessionId: "serialized",
       sessionsDir,
       resolveConfig: () => config(),
       toolRegistry: new ToolRegistry(),
       llmClient,
-      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+      capabilityRegistry: capabilities,
     });
 
     const first = runtime.deliver("first");

@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     toolCalls: [],
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   })),
+  streamText: vi.fn(),
   model: { modelId: "test-model" },
   openAIChat: vi.fn(() => ({ modelId: "openai-model" })),
   createOpenAI: vi.fn(() => ({ chat: mocks.openAIChat })),
@@ -30,6 +31,7 @@ vi.mock("ai", async (importOriginal) => {
   return {
     ...actual,
     generateText: mocks.generateText,
+    streamText: mocks.streamText,
     tool: (definition: unknown) => definition,
   };
 });
@@ -62,6 +64,7 @@ beforeEach(() => {
     toolCalls: [],
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   });
+  mocks.streamText.mockReset();
 });
 
 describe("Vercel AI adapter", () => {
@@ -167,6 +170,54 @@ describe("Vercel AI adapter", () => {
     ).rejects.toThrow("rate limit");
     expect(mocks.generateText).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    [{ type: "error", error: new Error("stream exploded") }, "stream exploded"],
+    [{ type: "abort" }, "aborted"],
+  ])("rejects an SDK %s part instead of completing successfully", async (part, expected) => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "text-delta", text: "partial" };
+        yield part;
+      })(),
+    });
+    const client = createVercelAILLMClient(config);
+
+    const consume = async () => {
+      const chunks = [];
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+      })) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    };
+
+    await expect(consume()).rejects.toThrow(expected);
+  });
+
+  it("rejects a stream that reaches EOF without a terminal finish part", async () => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {
+        yield { type: "text-delta", text: "partial" };
+      })(),
+    });
+    const client = createVercelAILLMClient(config);
+
+    const consume = async () => {
+      if (!client.chatStream) throw new Error("missing stream support");
+      for await (const _chunk of client.chatStream({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+      })) {
+        // Consume the entire stream.
+      }
+    };
+
+    await expect(consume()).rejects.toThrow("without a terminal finish");
+  });
+
   it("passes cancellation through the AI SDK abortSignal option", async () => {
     const controller = new AbortController();
     const client = createVercelAILLMClient(config);

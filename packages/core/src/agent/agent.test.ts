@@ -538,6 +538,128 @@ describe("Agent tool boundary", () => {
   });
 });
 
+describe("Agent streaming", () => {
+  function streamingCapabilities(): CapabilityRegistry {
+    const capabilities = new CapabilityRegistry({ workspaceRoot: process.cwd() });
+    vi.spyOn(capabilities, "lookup").mockResolvedValue({
+      chat: true,
+      tools: true,
+      vision: true,
+      streaming: true,
+      structuredOutputs: true,
+      promptCaching: false,
+      reasoning: false,
+      maxTokens: 0,
+    });
+    return capabilities;
+  }
+
+  it("assembles the same transcript as the blocking pathway", async () => {
+    const streamed = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield { type: "text-delta" as const, text: "byte-" };
+          yield { type: "text-delta" as const, text: "exact" };
+          yield {
+            type: "finish" as const,
+            finishReason: "stop" as const,
+            usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+          };
+        },
+      },
+      streamingCapabilities(),
+    );
+    const blocking = new Agent(
+      { ...config, tools: [], maxSteps: 1 },
+      new ToolRegistry(),
+      {
+        async chat() {
+          return {
+            finishReason: "stop" as const,
+            message: { role: "assistant" as const, content: "byte-exact" },
+            usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+          };
+        },
+      },
+      (() => {
+        const capabilities = streamingCapabilities();
+        vi.mocked(capabilities.lookup).mockResolvedValueOnce({
+          chat: true,
+          tools: true,
+          vision: true,
+          streaming: false,
+          structuredOutputs: true,
+          promptCaching: false,
+          reasoning: false,
+          maxTokens: 0,
+        });
+        return capabilities;
+      })(),
+    );
+
+    const [streamedResult, blockingResult] = await Promise.all([
+      streamed.run("go"),
+      blocking.run("go"),
+    ]);
+
+    expect(streamedResult.messages).toEqual(blockingResult.messages);
+  });
+
+  it("rejects malformed streamed tool JSON before executing the tool", async () => {
+    const execute = vi.fn(async () => "should not execute");
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "count",
+      description: "Count",
+      parameters: z.object({ count: z.number() }),
+      execute,
+    });
+    const agent = new Agent(
+      config,
+      tools,
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield {
+            type: "tool-call-delta" as const,
+            toolCall: { id: "call-1", name: "count", argumentsDelta: "{bad" },
+          };
+          yield { type: "finish" as const, finishReason: "tool-calls" as const };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("Failed to parse tool call arguments");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("requires a terminal finish event from every streaming client", async () => {
+    const agent = new Agent(
+      { ...config, tools: [] },
+      new ToolRegistry(),
+      {
+        async chat() {
+          throw new Error("blocking pathway must not run");
+        },
+        async *chatStream() {
+          yield { type: "text-delta" as const, text: "partial" };
+        },
+      },
+      streamingCapabilities(),
+    );
+
+    await expect(agent.run("go")).rejects.toThrow("without a terminal finish");
+  });
+});
+
 describe("Agent Capability Enforcement", () => {
   it("accepts one pre-resolved matrix and skips a duplicate lookup", async () => {
     const chat = vi.fn<LLMClient["chat"]>(async () => ({

@@ -153,6 +153,7 @@ export function createVercelAILLMClient(
           });
 
           const activeToolCalls = new Map<string, string>();
+          let receivedFinish = false;
 
           for await (const chunk of result.fullStream) {
             streamHasStarted = true;
@@ -179,6 +180,7 @@ export function createVercelAILLMClient(
                 },
               };
             } else if (chunk.type === "finish") {
+              receivedFinish = true;
               yield {
                 type: "finish",
                 finishReason: mapFinishReason(chunk.finishReason),
@@ -190,7 +192,17 @@ export function createVercelAILLMClient(
                     }
                   : undefined,
               };
+            } else if (chunk.type === "error") {
+              throw chunk.error instanceof Error
+                ? chunk.error
+                : new Error(`Provider stream failed: ${String(chunk.error)}`);
+            } else if (chunk.type === "abort") {
+              throw new DOMException("Provider stream aborted", "AbortError");
             }
+          }
+
+          if (!receivedFinish) {
+            throw new Error("Provider stream ended without a terminal finish event");
           }
 
           providerRuntime.closeCircuit(provider.id);

@@ -16,7 +16,7 @@ import type { ISqliteDatabase } from "../persistence/sqlite/types.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
 import { isRecord, parseJsonBoundary } from "../validation.js";
-import { Agent } from "./agent.js";
+import { Agent, type StreamPerformanceMetrics } from "./agent.js";
 import {
   AgentBudgetExceededError,
   AgentCancelledError,
@@ -508,6 +508,7 @@ export class SessionRuntime {
           : agentConfig.tools.filter((t) => t !== "delegate");
         const runConfig = { ...agentConfig, tools: runTools };
         let latestRunMessages: Message[] | undefined;
+        const streamMetrics: StreamPerformanceMetrics[] = [];
         const agent = new Agent(
           runConfig,
           this.options.toolRegistry,
@@ -561,6 +562,10 @@ export class SessionRuntime {
                 runId,
                 ...(requestId ? { requestId } : {}),
               });
+              return;
+            }
+            if (e.type === "stream-metrics") {
+              streamMetrics.push(e.metrics);
             }
           },
           logger,
@@ -600,6 +605,7 @@ export class SessionRuntime {
             correlation,
             agentConfig.name,
             errorCode,
+            streamMetrics,
           );
 
           this.emit({
@@ -634,6 +640,8 @@ export class SessionRuntime {
           result.summary,
           correlation,
           agentConfig.name,
+          undefined,
+          streamMetrics,
         );
 
         if (this.isAvailable()) {
@@ -666,6 +674,7 @@ export class SessionRuntime {
     correlation: RunCorrelation,
     agentName: string,
     errorCode?: string,
+    streamMetrics: StreamPerformanceMetrics[] = [],
   ): Promise<void> {
     session.messages.push(...messagesToPersist);
     session.result = { status: sessionResultStatus, summary };
@@ -694,6 +703,8 @@ export class SessionRuntime {
         }
         runRepo.update(runId, {
           status: runStatus,
+          tokenUsage:
+            streamMetrics.length > 0 ? { streaming: { steps: streamMetrics } } : undefined,
           errorCode: errorCode ?? null,
           errorMessage: runStatus === "failed" ? summary : null,
           completedAt: Date.now(),

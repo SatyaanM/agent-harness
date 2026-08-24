@@ -1,10 +1,11 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resetConfig, SessionRuntime } from "@agent-harness/core";
+import { parseJsonBoundary, resetConfig, SessionRuntime } from "@agent-harness/core";
 import express, { type Express } from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { createApp } from "./app.js";
 import { sessionManager } from "./session-manager.js";
 
@@ -12,6 +13,7 @@ const ORIGINAL_GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ORIGINAL_OPENCODE_API_KEY = process.env.OPENCODE_API_KEY;
 const ORIGINAL_ROOT = process.env.ROOT;
 const tempDirs: string[] = [];
+const SseEventSchema = z.object({ type: z.string(), text: z.string().optional() });
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -224,6 +226,94 @@ describe("upstream trust boundaries", () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain("Agent request failed");
     expect(res.text).not.toContain("provider-secret");
+  });
+
+  it("forwards real provider deltas without re-chunking the completed summary", async () => {
+    let listener: Parameters<SessionRuntime["on"]>[0] | undefined;
+    vi.spyOn(SessionRuntime.prototype, "on").mockImplementation((callback) => {
+      listener = callback;
+    });
+    vi.spyOn(SessionRuntime.prototype, "off").mockImplementation(() => undefined);
+    vi.spyOn(SessionRuntime.prototype, "deliver").mockImplementation(
+      async (_message, _agentName, _signal, requestId) => {
+        listener?.({
+          type: "agent:text-delta",
+          sessionId: "stream-session",
+          agentName: "orchestrator",
+          text: "provider-token",
+          runId: "run-1",
+          ...(requestId ? { requestId } : {}),
+        });
+        return {
+          status: "success",
+          summary: "provider-token",
+          messages: [{ role: "assistant", content: "provider-token" }],
+        };
+      },
+    );
+
+    const res = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "stream-session", message: "hello" });
+
+    expect(res.text.match(/provider-token/g)).toHaveLength(1);
+    expect(res.text).toContain('"type":"done"');
+  });
+
+  it("preserves chunked SSE fallback for agents that opt out of streaming", async () => {
+    const summary = "non-streaming-".repeat(12);
+    vi.spyOn(SessionRuntime.prototype, "deliver").mockResolvedValue({
+      status: "success",
+      summary,
+      messages: [{ role: "assistant", content: summary }],
+    });
+
+    const res = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "blocking-session", message: "hello" });
+    const text = res.text
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) =>
+        parseJsonBoundary(SseEventSchema, line.slice("data: ".length), "test SSE event"),
+      )
+      .filter((event) => event.type === "text-delta")
+      .map((event) => event.text)
+      .join("");
+
+    expect(text).toBe(summary);
+    expect(res.text).toContain('"type":"done"');
+  });
+
+  it("emits an SSE error after a mid-stream provider failure and never emits done", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let listener: Parameters<SessionRuntime["on"]>[0] | undefined;
+    vi.spyOn(SessionRuntime.prototype, "on").mockImplementation((callback) => {
+      listener = callback;
+    });
+    vi.spyOn(SessionRuntime.prototype, "off").mockImplementation(() => undefined);
+    vi.spyOn(SessionRuntime.prototype, "deliver").mockImplementation(
+      async (_message, _agentName, _signal, requestId) => {
+        listener?.({
+          type: "agent:text-delta",
+          sessionId: "failed-stream-session",
+          agentName: "orchestrator",
+          text: "partial",
+          runId: "run-2",
+          ...(requestId ? { requestId } : {}),
+        });
+        throw new Error("provider-secret-disconnect");
+      },
+    );
+
+    const res = await request(createApp())
+      .post("/api/chat")
+      .send({ sessionId: "failed-stream-session", message: "hello" });
+
+    expect(res.text).toContain('"type":"text-delta","text":"partial"');
+    expect(res.text).toContain('"type":"error","error":"Agent request failed"');
+    expect(res.text).not.toContain('"type":"done"');
+    expect(res.text).not.toContain("provider-secret-disconnect");
   });
 
   it("routes an explicit chat retry through replay delivery", async () => {
