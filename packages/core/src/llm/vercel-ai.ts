@@ -210,10 +210,7 @@ function estimateAdmissionTokens(params: LLMChatParams): number {
   const characters =
     (params.system?.length ?? 0) +
     JSON.stringify(params.messages).length +
-    (params.tools?.reduce(
-      (total, entry) => total + entry.name.length + entry.description.length,
-      0,
-    ) ?? 0);
+    (params.tools?.reduce((total, entry) => total + JSON.stringify(entry).length, 0) ?? 0);
   return Math.max(1, Math.ceil(characters / 4)) + (params.maxOutputTokens ?? 4096);
 }
 

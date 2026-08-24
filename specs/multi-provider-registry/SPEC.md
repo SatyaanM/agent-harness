@@ -85,7 +85,7 @@ Modify the LLM client execution flow to handle fallbacks. If the primary provide
 - Retrieve the next eligible provider from the `ProviderRegistry`.
 - Re-initialize the client and retry.
 - Log failures with structured logging, ensuring telemetry tools can alert on provider degradation.
-- Share circuit state across loaded sessions. Before each attempt, atomically reserve the configured request and conservative token estimate; a denied reservation behaves as a local 429 and may fall back without waiting.
+- Share circuit state across loaded sessions. Before each attempt, atomically reserve the configured request and conservative token estimate, including serialized tool definitions and parameter schemas; a denied reservation behaves as a local 429 and may fall back without waiting.
 
 ### 6. Capability Registry Integration
 Update `CapabilityRegistry` calls to use the dynamically resolved provider ID rather than assuming a single provider context.
@@ -103,8 +103,8 @@ If no `providers` array is defined in `.harness/settings.json`, automatically co
 6. **Agent routing overrides:** Defining `model: "custom-model"` and/or `provider: "custom-id"` in an agent's frontmatter overrides the default global model and provider selection.
 7. **Model aggregation:** `GET /api/settings/models` successfully fetches and deduplicates models from all enabled providers.
 8. **Protocol-realistic discovery:** OpenAI uses bearer authentication and OpenAI list envelopes; Anthropic uses `x-api-key` plus `anthropic-version` and Anthropic model metadata. Both normalize to the public response.
-9. **Live reconfiguration:** A successful settings write aborts active parent/worker work, unloads loaded runtimes, and resets provider runtime state before another delivery.
-10. **Enforced limits:** Configured RPM/TPM limits are enforced across session clients without an unbounded wait queue.
+9. **Live reconfiguration:** A successful settings write aborts active parent/worker work, waits for worker terminal cleanup after cancellation, unloads loaded runtimes, and resets provider runtime state before another delivery.
+10. **Enforced limits:** Configured RPM/TPM limits are enforced across session clients without an unbounded wait queue, and token admission accounts for serialized tool parameter schemas.
 
 ## Deferred presentation question
 

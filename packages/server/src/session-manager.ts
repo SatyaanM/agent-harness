@@ -365,8 +365,6 @@ export class SessionManager {
     const worker = this.workerControllers.get(taskId);
     if (!worker) return false;
     worker.controller.abort();
-    this.workerControllers.delete(taskId);
-    this.notifyLifecycleWaiters();
     return true;
   }
 

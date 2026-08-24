@@ -61,6 +61,46 @@ beforeEach(() => {
 });
 
 describe("Vercel AI adapter", () => {
+  it("includes serialized tool parameter schemas in token admission", async () => {
+    const limitedConfig: Config = {
+      ...config,
+      PROVIDERS: [
+        {
+          id: "schema-limited",
+          displayName: "Schema Limited",
+          protocol: "openai",
+          baseUrl: "https://limited.example/v1",
+          apiKeyEnv: "TEST_API_KEY",
+          rateLimit: { tokensPerMinute: 100 },
+          enabled: true,
+          priority: 0,
+        },
+      ],
+    };
+    const client = createVercelAILLMClient(limitedConfig);
+
+    await expect(
+      client.chat({
+        messages: [{ role: "user", content: "use the tool" }],
+        model: "test-model",
+        maxOutputTokens: 1,
+        tools: [
+          {
+            name: "largeSchema",
+            description: "A tool",
+            parameters: {
+              type: "object",
+              properties: {
+                input: { type: "string", description: "x".repeat(2_000) },
+              },
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("token");
+    expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+
   it("preserves configured slash-containing model IDs and shares rate admission", async () => {
     const limitedConfig: Config = {
       ...config,
