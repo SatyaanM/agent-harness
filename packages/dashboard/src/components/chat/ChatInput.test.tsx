@@ -62,7 +62,13 @@ describe("ChatInput", () => {
 
     await waitFor(() => expect(mockedSendMessage).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    const deliveryId = mockedSendMessage.mock.calls[0]?.[3]?.deliveryId;
+    expect(deliveryId).toEqual(expect.any(String));
+    expect(mockedSendMessage).toHaveBeenNthCalledWith(1, "session-a", "Hello", "orchestrator", {
+      deliveryId,
+    });
     expect(mockedSendMessage).toHaveBeenLastCalledWith("session-a", "Hello", "orchestrator", {
+      deliveryId,
       retry: true,
     });
     expect(useSessionStore.getState().sessions[0].messages).toEqual(

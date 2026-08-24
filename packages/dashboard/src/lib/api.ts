@@ -268,7 +268,7 @@ export async function sendMessage(
   sessionId: string,
   content: string,
   agentName?: string,
-  options?: { retry?: true },
+  options?: { retry?: true; deliveryId?: string },
 ): Promise<ReadableStream<Uint8Array> | null> {
   const res = await fetch(`${BASE_URL}/api/chat`, {
     method: "POST",

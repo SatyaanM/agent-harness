@@ -187,8 +187,11 @@ export class SessionRuntime {
     agentName?: string,
     signal?: AbortSignal,
     requestId?: string,
+    deliveryId?: string,
   ): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName, signal, false, requestId));
+    const run = this.queue.then(() =>
+      this.runOnce(message, agentName, signal, false, requestId, deliveryId),
+    );
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -199,8 +202,11 @@ export class SessionRuntime {
     agentName?: string,
     signal?: AbortSignal,
     requestId?: string,
+    deliveryId?: string,
   ): Promise<AgentResult> {
-    const run = this.queue.then(() => this.runOnce(message, agentName, signal, true, requestId));
+    const run = this.queue.then(() =>
+      this.runOnce(message, agentName, signal, true, requestId, deliveryId),
+    );
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -229,6 +235,7 @@ export class SessionRuntime {
     signal?: AbortSignal,
     replayExistingUser = false,
     requestId?: string,
+    deliveryId?: string,
   ): Promise<AgentResult> {
     if (!this.isAvailable()) {
       return {
@@ -280,10 +287,23 @@ export class SessionRuntime {
 
         const persistedHistory = [...session.messages];
         let replayedUserIndex = -1;
-        if (replayExistingUser) {
-          // Reconcile only against the latest durable user turn. Reaching past a
-          // newer user would mistake repeated text from an older turn for this
-          // request's unknown-delivery retry.
+        if (deliveryId) {
+          for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
+            const candidate = persistedHistory[index];
+            if (candidate?.role === "user" && candidate.deliveryId === deliveryId) {
+              if (candidate.content !== message) {
+                throw new Error("Delivery identity does not match the durable user message");
+              }
+              if (!replayExistingUser) {
+                throw new Error("Delivery identity is already durable; retry is required");
+              }
+              replayedUserIndex = index;
+              break;
+            }
+          }
+        } else if (replayExistingUser) {
+          // Compatibility for legacy clients that predate delivery identity.
+          // Only the latest durable user can be replayed by content.
           for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
             const candidate = persistedHistory[index];
             if (candidate?.role !== "user") continue;
@@ -396,14 +416,29 @@ export class SessionRuntime {
 
               // 4. Insert user message into SQLite messages table if present and not replayed
               if (message && !isReplayingUser) {
-                const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
-                messageRepo.create({
-                  sessionId: this.options.sessionId,
-                  role: "user",
-                  content: message,
-                  sequenceNum: nextSeq,
-                  createdAt: Date.now(),
-                });
+                const existingDelivery = deliveryId ? messageRepo.get(deliveryId) : undefined;
+                if (existingDelivery) {
+                  if (
+                    existingDelivery.session_id !== this.options.sessionId ||
+                    existingDelivery.role !== "user" ||
+                    existingDelivery.content !== message
+                  ) {
+                    throw new Error("Delivery identity conflicts with an existing durable message");
+                  }
+                  if (!replayExistingUser) {
+                    throw new Error("Delivery identity is already durable; retry is required");
+                  }
+                } else {
+                  const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
+                  messageRepo.create({
+                    ...(deliveryId ? { id: deliveryId } : {}),
+                    sessionId: this.options.sessionId,
+                    role: "user",
+                    content: message,
+                    sequenceNum: nextSeq,
+                    createdAt: Date.now(),
+                  });
+                }
               }
 
               // 5. Create run record in SQLite
@@ -461,7 +496,14 @@ export class SessionRuntime {
           ...persistedHistory,
           ...deliveredSystem,
           ...(message && !isReplayingUser
-            ? [{ role: "user" as const, content: message, createdAt: now }]
+            ? [
+                {
+                  ...(deliveryId ? { deliveryId } : {}),
+                  role: "user" as const,
+                  content: message,
+                  createdAt: now,
+                },
+              ]
             : []),
         ];
         session.mailbox = pending;

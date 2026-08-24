@@ -319,6 +319,7 @@ export class LegacyMigrator {
             : createdAtMs + i * 1000;
 
           this.messageRepo.create({
+            ...(msg.role === "user" && msg.deliveryId ? { id: msg.deliveryId } : {}),
             sessionId: session.sessionId,
             role: msg.role,
             content: msg.content,

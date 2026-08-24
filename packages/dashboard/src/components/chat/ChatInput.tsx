@@ -69,12 +69,10 @@ export default function ChatInput() {
     updateMessage(request.sessionId, request.assistantMessageId, "");
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
-      const stream = await sendMessage(
-        request.sessionId,
-        request.content,
-        request.agentName,
-        retryExisting ? { retry: true } : undefined,
-      );
+      const stream = await sendMessage(request.sessionId, request.content, request.agentName, {
+        deliveryId: request.userMessageId,
+        ...(retryExisting ? { retry: true } : {}),
+      });
       if (!stream) throw new Error("The server returned no response stream.");
 
       reader = stream.getReader();

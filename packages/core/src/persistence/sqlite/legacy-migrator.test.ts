@@ -57,7 +57,12 @@ describe("LegacyMigrator Pipeline & Quarantine", () => {
       prompt: "Legacy prompt 1",
       agentName: "orchestrator",
       messages: [
-        { role: "user", content: "User legacy msg", createdAt: "2026-08-10T00:00:00.000Z" },
+        {
+          role: "user",
+          content: "User legacy msg",
+          deliveryId: "11111111-1111-4111-8111-111111111111",
+          createdAt: "2026-08-10T00:00:00.000Z",
+        },
         {
           role: "assistant",
           content: "Assistant legacy msg",
@@ -117,6 +122,7 @@ describe("LegacyMigrator Pipeline & Quarantine", () => {
 
     const msgs = messageRepo.listBySession("sess-legacy-1");
     expect(msgs).toHaveLength(2);
+    expect(msgs[0]?.id).toBe("11111111-1111-4111-8111-111111111111");
     expect(msgs[0]?.content).toBe("User legacy msg");
     expect(msgs[1]?.content).toBe("Assistant legacy msg");
 

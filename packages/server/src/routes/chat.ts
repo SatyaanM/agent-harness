@@ -25,6 +25,7 @@ const ChatRequestSchema = z
     message: z.string().min(1).max(1_000_000),
     agentName: IdentifierSchema.optional(),
     retry: z.literal(true).optional(),
+    deliveryId: z.string().uuid().optional(),
   })
   .strict();
 
@@ -33,7 +34,7 @@ chatRouter.post(
   asyncHandler(async (req, res) => {
     const request = validateRequest(ChatRequestSchema, req.body, res);
     if (!request) return;
-    const { sessionId, message, agentName, retry } = request;
+    const { sessionId, message, agentName, retry, deliveryId } = request;
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -92,8 +93,8 @@ chatRouter.post(
         runtime.on(handleEvent);
         try {
           const result = retry
-            ? await runtime.retry(message, agentName, controller.signal, requestId)
-            : await runtime.deliver(message, agentName, controller.signal, requestId);
+            ? await runtime.retry(message, agentName, controller.signal, requestId, deliveryId)
+            : await runtime.deliver(message, agentName, controller.signal, requestId, deliveryId);
           if (!streamed && result.summary) {
             for (const chunk of chunkSummary(result.summary)) {
               writeChatEvent(res, { type: "text-delta", text: chunk });

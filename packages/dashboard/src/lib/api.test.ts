@@ -8,6 +8,7 @@ import {
   fetchSession,
   fetchSessions,
   parseChatStreamEvent,
+  sendMessage,
   updateAgent,
   updateAgentSource,
 } from "./api";
@@ -40,6 +41,34 @@ describe("chat stream boundary", () => {
 });
 
 describe("dashboard API boundary", () => {
+  it("sends the stable delivery identity on initial and retry chat requests", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const deliveryId = "11111111-1111-4111-8111-111111111111";
+
+    await sendMessage("session-a", "same prompt", "orchestrator", { deliveryId });
+    await sendMessage("session-a", "same prompt", "orchestrator", { deliveryId, retry: true });
+
+    expect(fetchMock.mock.calls.map(([, init]) => init?.body)).toEqual([
+      JSON.stringify({
+        sessionId: "session-a",
+        message: "same prompt",
+        agentName: "orchestrator",
+        deliveryId,
+      }),
+      JSON.stringify({
+        sessionId: "session-a",
+        message: "same prompt",
+        agentName: "orchestrator",
+        deliveryId,
+        retry: true,
+      }),
+    ]);
+  });
+
   it("forwards cancellation to session requests", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json(

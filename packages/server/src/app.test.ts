@@ -69,6 +69,19 @@ describe("request boundary validation", () => {
     });
   });
 
+  it("rejects a malformed chat delivery identity", async () => {
+    const res = await request(createApp()).post("/api/chat").send({
+      sessionId: "safe-session",
+      message: "hi",
+      deliveryId: "not-a-uuid",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toEqual(
+      expect.objectContaining({ code: "invalid_request", message: "Request validation failed" }),
+    );
+  });
+
   it("rejects path-like agent identifiers before filesystem access", async () => {
     const res = await request(createApp()).get("/api/agents/%5C..%5Csecret");
 
@@ -341,9 +354,12 @@ describe("upstream trust boundaries", () => {
     });
     const deliver = vi.spyOn(SessionRuntime.prototype, "deliver");
 
-    const res = await request(createApp())
-      .post("/api/chat")
-      .send({ sessionId: "retry-session", message: "hello", retry: true });
+    const res = await request(createApp()).post("/api/chat").send({
+      sessionId: "retry-session",
+      message: "hello",
+      retry: true,
+      deliveryId: "11111111-1111-4111-8111-111111111111",
+    });
 
     expect(res.status).toBe(200);
     expect(retry).toHaveBeenCalledWith(
@@ -351,11 +367,12 @@ describe("upstream trust boundaries", () => {
       undefined,
       expect.any(AbortSignal),
       expect.any(String),
+      "11111111-1111-4111-8111-111111111111",
     );
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("persists an explicit retry as a fresh delivery when no durable user exists", async () => {
+  it("persists absent delivery identities and rejects mismatched identity reuse", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "agent-harness-chat-retry-"));
     tempDirs.push(root);
     const sessionsDir = path.join(root, "sessions");
@@ -391,16 +408,47 @@ describe("upstream trust boundaries", () => {
     });
     vi.spyOn(sessionManager, "getOrCreate").mockReturnValue(runtime);
 
-    const res = await request(createApp())
-      .post("/api/chat")
-      .send({ sessionId: "retry-without-user", message: "unknown delivery", retry: true });
+    const res = await request(createApp()).post("/api/chat").send({
+      sessionId: "retry-without-user",
+      message: "unknown delivery",
+      retry: true,
+      deliveryId: "11111111-1111-4111-8111-111111111111",
+    });
 
     expect(res.text).toContain('"type":"done"');
+    const repeated = await request(createApp()).post("/api/chat").send({
+      sessionId: "retry-without-user",
+      message: "unknown delivery",
+      retry: true,
+      deliveryId: "22222222-2222-4222-8222-222222222222",
+    });
+    expect(repeated.text).toContain('"type":"done"');
+
     const saved = await new SessionStore(sessionsDir).load("retry-without-user");
-    expect(saved?.messages.map((message) => [message.role, message.content])).toEqual([
-      ["user", "unknown delivery"],
-      ["assistant", "delivered"],
+    expect(
+      saved?.messages.map((message) => [
+        message.role === "user" ? message.deliveryId : undefined,
+        message.role,
+        message.content,
+      ]),
+    ).toEqual([
+      ["11111111-1111-4111-8111-111111111111", "user", "unknown delivery"],
+      [undefined, "assistant", "delivered"],
+      ["22222222-2222-4222-8222-222222222222", "user", "unknown delivery"],
+      [undefined, "assistant", "delivered"],
     ]);
+
+    const mismatch = await request(createApp()).post("/api/chat").send({
+      sessionId: "retry-without-user",
+      message: "changed delivery",
+      retry: true,
+      deliveryId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(mismatch.text).toContain('"type":"error","error":"Agent request failed"');
+    expect(mismatch.text).not.toContain('"type":"done"');
+    expect((await new SessionStore(sessionsDir).load("retry-without-user"))?.messages).toHaveLength(
+      4,
+    );
   });
 
   it("does not expose voice-provider failures", async () => {

@@ -63,6 +63,9 @@ function stop(content: string): LLMResponse {
   };
 }
 
+const DELIVERY_A = "11111111-1111-4111-8111-111111111111";
+const DELIVERY_B = "22222222-2222-4222-8222-222222222222";
+
 beforeEach(() => {
   resetModelsDevCache();
   vi.stubGlobal(
@@ -284,16 +287,105 @@ describe("SessionRuntime delivery invariants", () => {
       capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
     });
 
-    await expect(runtime.deliver("original prompt")).rejects.toThrow("provider unavailable");
-    await expect(runtime.retry("original prompt")).resolves.toEqual(
-      expect.objectContaining({ status: "success" }),
-    );
+    await expect(
+      runtime.deliver("original prompt", undefined, undefined, undefined, DELIVERY_A),
+    ).rejects.toThrow("provider unavailable");
+    await expect(
+      runtime.retry("original prompt", undefined, undefined, undefined, DELIVERY_A),
+    ).resolves.toEqual(expect.objectContaining({ status: "success" }));
 
     const saved = await new SessionStore(sessionsDir).load("retry");
-    expect(saved?.messages.map((message) => [message.role, message.content])).toEqual([
-      ["user", "original prompt"],
-      ["assistant", "recovered"],
+    expect(
+      saved?.messages.map((message) => [
+        message.role === "user" ? message.deliveryId : undefined,
+        message.role,
+        message.content,
+      ]),
+    ).toEqual([
+      [DELIVERY_A, "user", "original prompt"],
+      [undefined, "assistant", "recovered"],
     ]);
+  });
+
+  it("persists consecutive identical prompts when the retry identity is absent", async () => {
+    const sessionsDir = await makeDirectory();
+    const chat = vi
+      .fn<(params: LLMChatParams) => Promise<LLMResponse>>()
+      .mockResolvedValueOnce(stop("first answer"))
+      .mockResolvedValueOnce(stop("second answer"));
+    const runtime = new SessionRuntime({
+      sessionId: "distinct-identical-deliveries",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await runtime.deliver("same prompt", undefined, undefined, undefined, DELIVERY_A);
+    await runtime.retry("same prompt", undefined, undefined, undefined, DELIVERY_B);
+
+    const saved = await new SessionStore(sessionsDir).load("distinct-identical-deliveries");
+    expect(
+      saved?.messages.map((message) => [
+        message.role === "user" ? message.deliveryId : undefined,
+        message.role,
+        message.content,
+      ]),
+    ).toEqual([
+      [DELIVERY_A, "user", "same prompt"],
+      [undefined, "assistant", "first answer"],
+      [DELIVERY_B, "user", "same prompt"],
+      [undefined, "assistant", "second answer"],
+    ]);
+  });
+
+  it("rejects an exact delivery identity when its durable content differs", async () => {
+    const sessionsDir = await makeDirectory();
+    const chat = vi.fn<(params: LLMChatParams) => Promise<LLMResponse>>(async () => stop("answer"));
+    const runtime = new SessionRuntime({
+      sessionId: "delivery-content-mismatch",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await runtime.deliver("original content", undefined, undefined, undefined, DELIVERY_A);
+    await expect(
+      runtime.retry("changed content", undefined, undefined, undefined, DELIVERY_A),
+    ).rejects.toThrow("Delivery identity does not match the durable user message");
+
+    const saved = await new SessionStore(sessionsDir).load("delivery-content-mismatch");
+    expect(saved?.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "original content"],
+      ["assistant", "answer"],
+    ]);
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a duplicate delivery identity on a non-retry request", async () => {
+    const sessionsDir = await makeDirectory();
+    const chat = vi.fn<(params: LLMChatParams) => Promise<LLMResponse>>(async () => stop("answer"));
+    const runtime = new SessionRuntime({
+      sessionId: "duplicate-fresh-delivery",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await runtime.deliver("same content", undefined, undefined, undefined, DELIVERY_A);
+    await expect(
+      runtime.deliver("same content", undefined, undefined, undefined, DELIVERY_A),
+    ).rejects.toThrow("Delivery identity is already durable; retry is required");
+
+    expect(
+      (await new SessionStore(sessionsDir).load("duplicate-fresh-delivery"))?.messages,
+    ).toHaveLength(2);
+    expect(chat).toHaveBeenCalledTimes(1);
   });
 
   it("treats a retry with no matching durable user as a fresh delivery", async () => {
@@ -315,6 +407,32 @@ describe("SessionRuntime delivery invariants", () => {
     expect(saved?.messages.map((message) => [message.role, message.content])).toEqual([
       ["user", "unknown delivery"],
       ["assistant", "delivered"],
+    ]);
+  });
+
+  it("preserves latest-content replay for a legacy retry without an identity", async () => {
+    const sessionsDir = await makeDirectory();
+    const chat = vi
+      .fn<(params: LLMChatParams) => Promise<LLMResponse>>()
+      .mockResolvedValueOnce(stop("first answer"))
+      .mockResolvedValueOnce(stop("second answer"));
+    const runtime = new SessionRuntime({
+      sessionId: "legacy-identical-retry",
+      sessionsDir,
+      resolveConfig: () => config(),
+      toolRegistry: new ToolRegistry(),
+      llmClient: { chat },
+      capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
+    });
+
+    await runtime.deliver("same prompt");
+    await runtime.retry("same prompt");
+
+    const saved = await new SessionStore(sessionsDir).load("legacy-identical-retry");
+    expect(saved?.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "same prompt"],
+      ["assistant", "first answer"],
+      ["assistant", "second answer"],
     ]);
   });
 
@@ -367,9 +485,9 @@ describe("SessionRuntime delivery invariants", () => {
       capabilityRegistry: new CapabilityRegistry({ workspaceRoot: sessionsDir }),
     });
 
-    const original = runtime.deliver("same prompt");
+    const original = runtime.deliver("same prompt", undefined, undefined, undefined, DELIVERY_A);
     await vi.waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
-    const retry = runtime.retry("same prompt");
+    const retry = runtime.retry("same prompt", undefined, undefined, undefined, DELIVERY_A);
     originalResponse.resolve(stop("original complete"));
 
     await expect(original).resolves.toEqual(expect.objectContaining({ status: "success" }));
@@ -377,7 +495,7 @@ describe("SessionRuntime delivery invariants", () => {
 
     const saved = await new SessionStore(sessionsDir).load("queued-retry");
     expect(saved?.messages.filter((message) => message.role === "user")).toEqual([
-      expect.objectContaining({ content: "same prompt" }),
+      expect.objectContaining({ deliveryId: DELIVERY_A, content: "same prompt" }),
     ]);
     expect(saved?.messages.map((message) => message.content)).toEqual([
       "same prompt",
@@ -801,7 +919,13 @@ describe("SessionRuntime delivery invariants", () => {
       capabilityRegistry: new CapabilityRegistry({ workspaceRoot: tmpdir() }),
     });
 
-    const result = await runtime.deliver("new user prompt");
+    const result = await runtime.deliver(
+      "new user prompt",
+      undefined,
+      undefined,
+      undefined,
+      DELIVERY_A,
+    );
     expect(result.status).toBe("success");
 
     // Verify mailbox event was acknowledged
@@ -813,6 +937,7 @@ describe("SessionRuntime delivery invariants", () => {
     expect(messages[0]?.role).toBe("system");
     expect(messages[0]?.content).toContain("worker 1 completed successfully");
     expect(messages[1]?.role).toBe("user");
+    expect(messages[1]?.id).toBe(DELIVERY_A);
     expect(messages[1]?.content).toBe("new user prompt");
     expect(messages[2]?.role).toBe("assistant");
     expect(messages[2]?.content).toBe("Handled SQLite completion.");

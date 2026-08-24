@@ -83,6 +83,7 @@ export const UserMessageSchema = z
   .object({
     role: z.literal("user"),
     content: NonToolMessageContentSchema,
+    deliveryId: z.string().uuid().optional(),
     reasoning: ForbiddenReasoningSchema,
     toolCalls: ForbiddenToolCallsSchema,
     toolCallId: ForbiddenToolCallIdSchema,
