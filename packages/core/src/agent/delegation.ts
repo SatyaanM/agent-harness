@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { CapabilityRegistry } from "../capability/registry.js";
 import { describeError } from "../contracts/errors.js";
 import { createLogger } from "../contracts/logging.js";
+import { MAX_WORKERS_PER_SESSION } from "../contracts/session.js";
 import { getTracer, W3CTraceContext } from "../contracts/tracing.js";
 
 import type { LLMClient } from "../llm/client.js";
@@ -53,6 +54,19 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
       logger.error("Background error observer failed", { ...describeError(reportingError) });
     }
   };
+  const commitTerminalSettlement = (commit: () => void) => {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        commit();
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  };
 
   const parameters = z.object({
     task: z.string().describe("The task description to delegate to a worker agent"),
@@ -86,21 +100,16 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
           : undefined,
       };
 
-      const createdAt = new Date().toISOString();
-      await store.save({
-        sessionId,
-        taskId,
-        agentName: workerConfig.name,
-        prompt: task,
-        messages: [],
-        mailbox: [],
-        createdAt,
-      });
-
       if (deps.db) {
         const taskRepo = new TaskRepository(deps.db);
         const sessionRepo = new SessionRepository(deps.db);
         deps.db.immediateTransaction(() => {
+          const activeDelegations = taskRepo.countActiveByParent(deps.sessionId);
+          if (activeDelegations >= MAX_WORKERS_PER_SESSION) {
+            throw new Error(
+              `Cannot delegate: active delegation limit of ${MAX_WORKERS_PER_SESSION} reached for session ${deps.sessionId}`,
+            );
+          }
           const existingWorkerSession = sessionRepo.get(sessionId);
           if (!existingWorkerSession) {
             sessionRepo.create({
@@ -119,6 +128,29 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
             createdAt: Date.now(),
           });
         })();
+      }
+
+      const createdAt = new Date().toISOString();
+      try {
+        await store.save({
+          sessionId,
+          taskId,
+          agentName: workerConfig.name,
+          prompt: task,
+          messages: [],
+          mailbox: [],
+          createdAt,
+        });
+      } catch (persistenceError) {
+        if (deps.db) {
+          const taskRepo = new TaskRepository(deps.db);
+          const sessionRepo = new SessionRepository(deps.db);
+          deps.db.immediateTransaction(() => {
+            taskRepo.delete(taskId);
+            sessionRepo.delete(sessionId);
+          })();
+        }
+        throw persistenceError;
       }
 
       let controller: AbortController;
@@ -184,8 +216,9 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
       }
 
       const finishWorker = async () => {
+        let result: Awaited<ReturnType<typeof worker.run>>;
         try {
-          const result = await worker.run(task, traceCarrier);
+          result = await worker.run(task, traceCarrier);
           const existing = await store.load(sessionId);
 
           await store.save({
@@ -202,59 +235,7 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
             createdAt: existing?.createdAt ?? createdAt,
             completedAt: new Date().toISOString(),
           });
-
-          if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) return;
-          const delegating = await store.load(deps.sessionId);
-          if (!delegating) return;
-          const pending: PendingMessage = {
-            taskId,
-            from: sessionId,
-            agentName: workerConfig.name,
-            status:
-              result.status === "done"
-                ? "done"
-                : result.status === "cancelled"
-                  ? "cancelled"
-                  : "error",
-            summary: result.summary,
-            receivedAt: new Date().toISOString(),
-          };
-
-          if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
-            return;
-          }
-
-          if (deps.db) {
-            const taskRepo = new TaskRepository(deps.db);
-            const mailboxRepo = new MailboxRepository(deps.db);
-            taskRepo.update(taskId, {
-              status:
-                result.status === "done"
-                  ? "completed"
-                  : result.status === "cancelled"
-                    ? "cancelled"
-                    : "failed",
-              errorMessage:
-                result.status !== "done" && result.status !== "cancelled" ? result.summary : null,
-              completedAt: Date.now(),
-            });
-            mailboxRepo.enqueue({
-              parentSessionId: deps.sessionId,
-              taskId,
-              payload: pending,
-            });
-          }
-
-          await store.appendMailbox(deps.sessionId, pending);
-          if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
-            await store.acknowledgeMailbox(deps.sessionId, [pending.taskId]);
-            return;
-          }
-          deps.onWorkerCompleted?.(deps.sessionId, pending);
         } catch (workerError) {
-          if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
-            return;
-          }
           const errorMsg = describeError(workerError).message;
           const pending: PendingMessage = {
             taskId,
@@ -269,16 +250,18 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
             try {
               const taskRepo = new TaskRepository(deps.db);
               const mailboxRepo = new MailboxRepository(deps.db);
-              taskRepo.update(taskId, {
-                status: "failed",
-                errorMessage: errorMsg,
-                completedAt: Date.now(),
-              });
-              mailboxRepo.enqueue({
-                parentSessionId: deps.sessionId,
-                taskId,
-                payload: pending,
-              });
+              deps.db.immediateTransaction(() => {
+                taskRepo.update(taskId, {
+                  status: "failed",
+                  errorMessage: errorMsg,
+                  completedAt: Date.now(),
+                });
+                mailboxRepo.enqueue({
+                  parentSessionId: deps.sessionId,
+                  taskId,
+                  payload: pending,
+                });
+              })();
             } catch {
               // best-effort error record
             }
@@ -287,6 +270,68 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
           deps.onWorkerCompleted?.(deps.sessionId, pending);
           throw workerError;
         }
+
+        const pending: PendingMessage = {
+          taskId,
+          from: sessionId,
+          agentName: workerConfig.name,
+          status:
+            result.status === "done"
+              ? "done"
+              : result.status === "cancelled"
+                ? "cancelled"
+                : "error",
+          summary: result.summary,
+          receivedAt: new Date().toISOString(),
+        };
+
+        // The DB transition and mailbox enqueue are the canonical atomic
+        // settlement. If this transaction rolls back, leave the task running
+        // so startup reconciliation can recover it instead of manufacturing a
+        // contradictory failure after the worker already completed.
+        if (deps.db) {
+          const db = deps.db;
+          const taskRepo = new TaskRepository(db);
+          const mailboxRepo = new MailboxRepository(db);
+          commitTerminalSettlement(() => {
+            db.immediateTransaction(() => {
+              taskRepo.update(taskId, {
+                status:
+                  result.status === "done"
+                    ? "completed"
+                    : result.status === "cancelled"
+                      ? "cancelled"
+                      : "failed",
+                errorMessage:
+                  result.status !== "done" && result.status !== "cancelled" ? result.summary : null,
+                completedAt: Date.now(),
+              });
+              mailboxRepo.enqueue({
+                parentSessionId: deps.sessionId,
+                taskId,
+                payload: pending,
+              });
+            })();
+          });
+        }
+
+        // JSON session mailboxes are retained only for compatibility. Once the
+        // canonical transaction commits, a legacy write failure must not
+        // rewrite durable truth or suppress the completion notification.
+        try {
+          await store.appendMailbox(deps.sessionId, pending);
+        } catch (error) {
+          reportBackgroundError(error);
+        }
+        if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
+          try {
+            await store.acknowledgeMailbox(deps.sessionId, [pending.taskId]);
+          } catch (error) {
+            reportBackgroundError(error);
+          }
+          return;
+        }
+        deps.onWorkerCompleted?.(deps.sessionId, pending);
       };
 
       void finishWorker()

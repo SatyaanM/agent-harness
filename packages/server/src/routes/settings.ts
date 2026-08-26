@@ -11,10 +11,10 @@ import {
   getConfigRoot,
   ProviderEntrySchema,
   ProviderRegistry,
-  parseBoundary,
   resetConfig,
   stringifyJsonBounded,
 } from "@agent-harness/core";
+import { parseBoundary } from "@agent-harness/core/contracts";
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";

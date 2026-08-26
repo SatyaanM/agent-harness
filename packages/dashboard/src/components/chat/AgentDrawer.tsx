@@ -45,11 +45,11 @@ function StatusDot({ status }: { status: string }) {
   const color =
     status === "running"
       ? "bg-green-500 animate-pulse"
-      : status === "error"
+      : status === "failed" || status === "abandoned"
         ? "bg-red-500"
-        : status === "cancelled"
+        : status === "cancelled" || status === "paused"
           ? "bg-amber-500"
-          : status === "done"
+          : status === "completed"
             ? "bg-emerald-500"
             : "bg-zinc-400";
   return (
@@ -351,9 +351,9 @@ export default function AgentDrawer({
                         className={`h-2 w-2 shrink-0 rounded-full ${
                           w.status === "running"
                             ? "animate-pulse bg-green-500"
-                            : w.status === "error"
+                            : w.status === "failed" || w.status === "abandoned"
                               ? "bg-red-500"
-                              : w.status === "cancelled"
+                              : w.status === "cancelled" || w.status === "paused"
                                 ? "bg-amber-500"
                                 : "bg-emerald-500"
                         }`}

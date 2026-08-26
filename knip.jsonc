@@ -2,9 +2,9 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.{mjs,mts}", "test/**/*.{ts,js}"],
-      "project": ["scripts/**/*.{mjs,mts}", "test/**/*.{ts,js}", "*.{ts,js,mjs,json,jsonc}"],
-      "ignoreDependencies": ["@commitlint/cli", "k6", "@agent-harness/core", "socket.io"]
+      "entry": ["scripts/*.{mjs,mts}", "test/**/*.{ts,mts,js}"],
+      "project": ["scripts/**/*.{mjs,mts}", "test/**/*.{ts,mts,js}", "*.{ts,js,mjs,json,jsonc}"],
+      "ignoreDependencies": ["@commitlint/cli", "k6"]
     },
     "packages/core": {
       "entry": ["src/**/*.test.ts"],

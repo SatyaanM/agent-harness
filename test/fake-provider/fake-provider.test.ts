@@ -148,6 +148,25 @@ describe("Fake LLM Provider Service", () => {
     expect(firstChoice?.message.tool_calls?.[0]?.function.name).toBe("glob");
   });
 
+  it("emits the delegate tool's required task argument", async () => {
+    const res = await fetch(`${fakeServer.url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: "E2E_SCENARIO:delegate-worker" }],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = OpenAIChatResponseSchema.parse(await res.json());
+    const call = data.choices[0]?.message.tool_calls?.[0];
+    expect(call?.function.name).toBe("delegate");
+    expect(JSON.parse(call?.function.arguments ?? "{}")).toEqual({
+      task: "Perform background research on SQLite WAL benchmarks",
+    });
+  });
+
   it("handles OpenAI streaming completions", async () => {
     const res = await fetch(`${fakeServer.url}/v1/chat/completions`, {
       method: "POST",

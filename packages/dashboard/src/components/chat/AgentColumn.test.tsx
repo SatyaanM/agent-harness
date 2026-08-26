@@ -27,7 +27,7 @@ beforeEach(() => {
           name: "worker-123456",
           taskId: "task-1",
           task: "Check the interface",
-          status: "done",
+          status: "completed",
         },
       ],
     },
@@ -43,10 +43,11 @@ describe("AgentColumn", () => {
       name: "Primary agent orchestrator, status idle",
     });
     const worker = screen.getByRole("button", {
-      name: "Worker agent worker-123456, status done",
+      name: "Worker agent worker-123456, status completed",
     });
 
     expect(primary).toHaveClass("shrink-0", "focus-visible:ring-2");
+    expect(worker).toHaveAttribute("title", "worker-123456 (completed)");
     expect(worker).toHaveClass("shrink-0", "focus-visible:ring-2");
     expect(worker.querySelector("span")).toHaveAttribute("aria-hidden", "true");
   });

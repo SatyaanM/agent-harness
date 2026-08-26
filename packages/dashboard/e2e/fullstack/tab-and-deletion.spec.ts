@@ -1,6 +1,6 @@
 import { parseJsonBoundary } from "@agent-harness/core";
-import { expect, test } from "@playwright/test";
 import { z } from "zod";
+import { expect, test } from "./fixtures.js";
 
 const SessionIdSchema = z.object({
   sessionId: z.string(),

@@ -73,6 +73,15 @@ export function getSessionIndex(sessionsDir: string): IndexHandle {
   return handle;
 }
 
+/** Flush and release the derived index after all session writers have quiesced. */
+export async function releaseSessionIndex(sessionsDir: string): Promise<void> {
+  const filePath = path.join(sessionsDir, ".index.json");
+  const handle = indexHandles.get(filePath);
+  if (!handle) return;
+  await handle.drain();
+  if (indexHandles.get(filePath) === handle) indexHandles.delete(filePath);
+}
+
 export class IndexHandle {
   private state: SessionIndexFile | null = null;
   private loading: Promise<SessionIndexFile> | null = null;
@@ -207,6 +216,13 @@ export class IndexHandle {
     } catch (err) {
       await fs.remove(tmpPath).catch(() => undefined);
       throw err;
+    }
+  }
+
+  async drain(): Promise<void> {
+    if (this.loading) await this.loading;
+    while (this.building || this.pendingFlush) {
+      await Promise.all([this.building, this.pendingFlush].filter(Boolean));
     }
   }
 }

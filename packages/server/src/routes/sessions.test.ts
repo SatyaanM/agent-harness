@@ -10,6 +10,7 @@ import {
   SessionRuntime,
   SessionStore,
   SqliteMigrator,
+  TaskRepository,
 } from "@agent-harness/core";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -243,6 +244,10 @@ describe("session collection and durable diagnostics", () => {
     const getMissing = await request(app).get("/api/sessions/missing-id");
     expect(getMissing.status).toBe(404);
 
+    const missingWorkers = await request(app).get("/api/sessions/missing-id/workers");
+    expect(missingWorkers.status).toBe(404);
+    expect(missingWorkers.body).toEqual({ error: "Session not found" });
+
     // PATCH /api/sessions/:id (renaming)
     const patchRes = await request(app)
       .patch(`/api/sessions/${sessionId}`)
@@ -383,5 +388,89 @@ describe("session collection and durable diagnostics", () => {
       "/api/sessions/compacted-session/messages?startSequence=2&endSequence=1",
     );
     expect(invalidRange.status).toBe(400);
+  });
+
+  it("returns worker summaries for a session with correct status mapping", async () => {
+    const { app, root } = await fixture();
+    const dbPath = path.join(root, "harness.db");
+    const db = createDatabaseConnection(dbPath);
+    new SqliteMigrator(db).up();
+
+    sessionManager.initialize(db);
+
+    try {
+      const sessionRepo = new SessionRepository(db);
+      sessionRepo.create({
+        id: "test-parent-session",
+        agentName: "orchestrator",
+        prompt: "Parent prompt",
+      });
+      sessionRepo.create({
+        id: "test-worker-session",
+        agentName: "sub-worker",
+        prompt: "Worker prompt",
+      });
+
+      const taskRepo = new TaskRepository(db);
+      taskRepo.create({
+        taskId: "task-hydrate-1",
+        parentSessionId: "test-parent-session",
+        workerSessionId: "test-worker-session",
+        description: "Hydrate test worker",
+        status: "running",
+      });
+
+      const res = await request(app).get("/api/sessions/test-parent-session/workers");
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0]).toMatchObject({
+        taskId: "task-hydrate-1",
+        workerSessionId: "test-worker-session",
+        agentName: "sub-worker",
+        description: "Hydrate test worker",
+        status: "running",
+      });
+
+      const missing = await request(app).get("/api/sessions/missing-parent/workers");
+      expect(missing.status).toBe(404);
+      expect(missing.body).toEqual({ error: "Session not found" });
+    } finally {
+      sessionManager.close();
+    }
+  });
+
+  it("hydrates all 64 active workers for one parent session", async () => {
+    const { app, root } = await fixture();
+    const db = createDatabaseConnection(path.join(root, "harness.db"));
+    new SqliteMigrator(db).up();
+    sessionManager.initialize(db);
+
+    try {
+      const sessionRepo = new SessionRepository(db);
+      sessionRepo.create({
+        id: "many-active-parent",
+        agentName: "orchestrator",
+        prompt: "Parent prompt",
+      });
+      const taskRepo = new TaskRepository(db);
+      for (let index = 0; index < 64; index += 1) {
+        taskRepo.create({
+          taskId: `many-active-${index}`,
+          parentSessionId: "many-active-parent",
+          description: `Active worker ${index}`,
+          status: "running",
+          createdAt: index + 1,
+          updatedAt: index + 1,
+        });
+      }
+
+      const res = await request(app).get("/api/sessions/many-active-parent/workers");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(64);
+      expect(new Set(res.body.map((worker: { taskId: string }) => worker.taskId)).size).toBe(64);
+    } finally {
+      sessionManager.close();
+    }
   });
 });

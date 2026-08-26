@@ -1,6 +1,6 @@
-import { parseJsonBoundary } from "@agent-harness/core";
-import { expect, test } from "@playwright/test";
+import { parseJsonBoundary, WorkerSummaryListSchema } from "@agent-harness/core";
 import { z } from "zod";
+import { expect, test } from "./fixtures.js";
 
 const SessionCreatedSchema = z.object({
   sessionId: z.string(),
@@ -43,16 +43,34 @@ test.describe("Full-Stack Worker Delegation & Mailbox Delivery", () => {
     const body = await chatRes.text();
     expect(body).toContain("text-delta");
 
-    // 3. Inspect parent session history
-    const sessionRes = await request.get(`/api/sessions/${sessionId}`);
-    expect(sessionRes.ok()).toBeTruthy();
-    const sessionData = parseJsonBoundary(
-      SessionDetailSchema,
-      await sessionRes.text(),
-      "session detail response",
-    );
+    // 3. Wait for the durable worker roster to reach a terminal state.
+    await expect
+      .poll(async () => {
+        const workersRes = await request.get(`/api/sessions/${sessionId}/workers`);
+        if (!workersRes.ok()) return false;
+        const workers = parseJsonBoundary(
+          WorkerSummaryListSchema,
+          await workersRes.text(),
+          "worker roster response",
+        );
+        return workers.length > 0 && workers.every((worker) => worker.status === "completed");
+      })
+      .toBe(true);
 
-    expect(sessionData.messages.length).toBeGreaterThanOrEqual(2);
-    expect(sessionData.messages[0]?.role).toBe("user");
+    // 4. Verify mailbox delivery was materialized in the parent transcript.
+    await expect
+      .poll(async () => {
+        const sessionRes = await request.get(`/api/sessions/${sessionId}`);
+        if (!sessionRes.ok()) return false;
+        const sessionData = parseJsonBoundary(
+          SessionDetailSchema,
+          await sessionRes.text(),
+          "session detail response",
+        );
+        return sessionData.messages.some((message) =>
+          message.content.includes("background delegated execution materialized"),
+        );
+      })
+      .toBe(true);
   });
 });

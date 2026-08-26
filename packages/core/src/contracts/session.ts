@@ -29,6 +29,33 @@ export const CompactionRangeSchema = z
   .strict();
 export type CompactionRange = z.infer<typeof CompactionRangeSchema>;
 
+export const WorkerStatusSchema = z.enum([
+  "queued",
+  "running",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+  "abandoned",
+]);
+export type WorkerStatus = z.infer<typeof WorkerStatusSchema>;
+
+export const WorkerSummarySchema = z
+  .object({
+    taskId: TaskIdSchema,
+    workerSessionId: SessionIdSchema.nullable(),
+    agentName: z.string().min(1).max(128),
+    description: z.string().max(10_000),
+    status: WorkerStatusSchema,
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    completedAt: z.string().datetime().optional(),
+  })
+  .strict();
+export type WorkerSummary = z.infer<typeof WorkerSummarySchema>;
+export const MAX_WORKERS_PER_SESSION = 100;
+export const WorkerSummaryListSchema = z.array(WorkerSummarySchema).max(MAX_WORKERS_PER_SESSION);
+
 export const SessionDataSchema = z
   .object({
     sessionId: SessionIdSchema,

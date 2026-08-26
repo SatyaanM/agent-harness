@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { SessionData } from "@agent-harness/core";
 import {
   getConfig,
+  MAX_WORKERS_PER_SESSION,
   MailboxRepository,
   MessageRepository,
   OpenSessionsRepository,
   SessionRepository,
   SessionStore,
+  TaskRepository,
+  WorkerSummaryListSchema,
 } from "@agent-harness/core";
 import { Router } from "express";
 import { z } from "zod";
@@ -291,6 +294,53 @@ sessionsRouter.get(
         }))
       : [];
     res.json({ ...session, compactions });
+  }),
+);
+
+sessionsRouter.get(
+  "/:id/workers",
+  asyncHandler(async (req, res) => {
+    const params = validateRequest(SessionParamsSchema, req.params, res);
+    if (!params) return;
+    const sessionId = params.id;
+
+    const db = sessionManager.getDb();
+    if (!db) {
+      const session = await getSessionStore().load(sessionId);
+      if (!session) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+      res.json([]);
+      return;
+    }
+
+    const sessionRepo = new SessionRepository(db);
+    if (!sessionRepo.get(sessionId)) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    const taskRepo = new TaskRepository(db);
+    const summaries = taskRepo.listWorkerSummaries(sessionId, {
+      limit: MAX_WORKERS_PER_SESSION,
+      maxAgeMs: 30 * 60 * 1000,
+    });
+
+    const mapped = WorkerSummaryListSchema.parse(
+      summaries.map((s) => ({
+        taskId: s.taskId,
+        workerSessionId: s.workerSessionId,
+        agentName: s.agentName ?? "unknown",
+        description: s.description,
+        status: s.status,
+        createdAt: new Date(s.createdAt).toISOString(),
+        updatedAt: new Date(s.updatedAt).toISOString(),
+        completedAt: s.completedAt !== null ? new Date(s.completedAt).toISOString() : undefined,
+      })),
+    );
+
+    res.json(mapped);
   }),
 );
 

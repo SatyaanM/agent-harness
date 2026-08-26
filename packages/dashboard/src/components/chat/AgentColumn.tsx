@@ -104,11 +104,11 @@ export default function AgentColumn() {
             className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-background ${
               entry.status === "running"
                 ? "animate-pulse bg-green-500"
-                : entry.status === "error"
+                : entry.status === "failed" || entry.status === "abandoned"
                   ? "bg-red-500"
-                  : entry.status === "cancelled"
+                  : entry.status === "cancelled" || entry.status === "paused"
                     ? "bg-amber-500"
-                    : entry.status === "done"
+                    : entry.status === "completed"
                       ? "bg-emerald-500"
                       : "bg-zinc-400"
             }`}

@@ -44,7 +44,7 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 - [`W3CTraceContext`](../../packages/core/src/contracts/tracing.ts) provides W3C Trace Context parsing, serialization, and validation with `W3CTraceParentSchema` rejecting all-zero trace and span identifiers.
 - [`ITracer`](../../packages/core/src/telemetry/spans.ts) defines framework-neutral distributed tracing contracts with `NoopTracer` fallback.
 - [`LegacyMigrator`](../../packages/core/src/persistence/sqlite/legacy-migrator.ts) imports legacy JSON transcripts, mailbox JSONL, and open-sessions state into SQLite with pre-migration backups and corrupted file quarantine (`.invalid-*`).
-- [`createDelegateTool`](../../packages/core/src/agent/delegation.ts) creates a task ID, tracks worker tasks in `tasks` table, launches a `Worker` without awaiting it, and enqueues completion events to `mailbox_events`.
+- [`createDelegateTool`](../../packages/core/src/agent/delegation.ts) creates a task ID, atomically reserves one of 100 per-parent active delegation slots in the SQLite immediate transaction, tracks worker tasks in `tasks`, launches a `Worker` without awaiting it, and commits each terminal task transition together with its `mailbox_events` completion enqueue. A capacity rejection occurs before worker task/session/transcript state is created; an enqueue failure rolls the terminal transition back so the active slot is not released prematurely.
 - [`Worker.run`](../../packages/core/src/agent/worker.ts) wraps an `Agent` invocation, retains each progressive step, and maps cancellation/errors to a `WorkerResult`. Terminal delivery and cleanup are owned by the delegate/server lifecycle rather than duplicated into a process-local result queue.
 - [`SessionStore`](../../packages/core/src/persistence/session.ts) provides file-I/O backward compatibility for transcripts and mailboxes.
 - [`ToolRegistry`](../../packages/core/src/tool/registry.ts), file/shell/web tools, [`InboxManager`](../../packages/core/src/presentation/inbox.ts), agent-config loading, settings, capability discovery, plugin schemas, collaboration primitives, and TTS are reusable library surfaces.
@@ -76,7 +76,7 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 | Open/active tabs | `OpenSessionsRepository` (`open_sessions`) | Relational table + JSON snapshot | Browser is writer; closing unloads runtime after before-close hooks pass. |
 | Loaded runtime | `SessionManager.runtimes` | Process memory | Boot reconciliation transitions orphaned tasks cleanly. |
 | Plugin enabled state | Server `PluginRegistry` | JSON snapshot | Registry has no filesystem watcher or plugin-change event. |
-| Dashboard runtime/roster state | Zustand stores | Browser memory | History sync does not rebuild the running-worker roster. |
+| Dashboard runtime/roster state | SQLite task summaries projected through `GET /api/sessions/:id/workers`, cached in Zustand | Durable source with browser cache | The shared 100-entry capacity matches the enforced per-parent active cap. Hydration orders every active task first, fills remaining slots with recent terminals, and intentionally ages out older terminal cards. |
 
 ## Implemented, partial, and intent-only claims
 
@@ -104,7 +104,7 @@ The live path is `chatRouter` → `SessionManager.getOrCreate()` → `SessionRun
 | Max concurrent agents | Implemented | A process-wide FIFO `ExecutionLimiter` bounds parent and worker model executions, removes canceled waiters without consuming capacity, rejects work beyond a bounded wait queue, updates from `MAX_CONCURRENT_AGENTS`, and exposes active/queued counts through `/api/metrics`. |
 | Recursive delegation | Deliberately disabled | Workers no longer inherit the parent-bound `delegate` tool. Proper recursive delegation remains a future session-scoped design rather than misattributing nested work. |
 | Live streaming | Implemented | Streaming-capable agents forward provider text and tool-input deltas through correlated runtime events to `/api/chat` SSE; tool calls execute only after complete validated arguments. Opted-out/unsupported agents retain the blocking fallback. Explicit finish, abort, error, disconnect, transcript-fidelity, and durable TTFT/TPS paths are covered by focused tests. |
-| Worker history after reconnect | Partial | Worker transcripts persist, but the browser roster is live-event-only and is not rebuilt on hydration. |
+| Worker history after reconnect | Implemented | `TaskRepository.listWorkerSummaries`, the shared 100-worker API/dashboard contract, the transactional 100-active-delegation cap, and `RuntimeSync` rebuild the active session roster on tab changes and reconnect. Authoritative snapshots retain every admitted active worker, prune aged-out terminal cards, and preserve newer socket events that raced the request. |
 | Councils and supervision | Library/UI remnants only | Core primitives and dashboard card types exist, but the server runtime does not create councils or emit council events. |
 | Skills, prompt templates, branching, context-file loading | Intent only | No product runtime implementation or public contract exists. `.agents/skills` is development tooling only. |
 
@@ -119,6 +119,7 @@ The root Vitest project matrix includes core, server, dashboard, repository-tool
 - dashboard HTTP, chat-stream, and WebSocket payload validation.
 - per-session delivery serialization, ordered atomic mailbox drain, wake-run delegation suppression, worker completion, provider/tool/client-disconnect cancellation, and post-run completion timestamps;
 - context-threshold compaction ordering, opt-out, transcript preservation, active summary substitution, independent usage tracking, migration rollback/reapply, range integrity/non-overlap, context reconstruction beyond 10,000 messages, and bounded original-range retrieval;
+- per-parent delegation capacity, including concurrent 100th-slot reservation, pre-persistence rejection of a 101st active task, and hydration of more than the former 50-worker boundary;
 - process-wide concurrency and abortable queue limits, tool-call, provider-context tool-result, provider-output, reported-or-estimated total-token, and wall-time budgets while durable tool results remain verbatim;
 - bounded provider/browser response parsing, workspace file/search limits, time-bounded regex execution, symlink-aware path containment, subprocess environment minimization, public-only pinned outbound connections, redirect revalidation, loopback binding, CORS, and stable malformed/oversized/internal error envelopes;
 - dependency-audit package/advisory exceptions and their expiry behavior;
@@ -136,7 +137,7 @@ Privileged operations are default-off or application-bounded: shell and network 
 
 1. The overloaded `SessionData`/`taskId` vocabulary makes future persistence changes ambiguous and migration-prone.
 2. Mailbox acknowledgement and transcript materialization remain separate writes. Task-based replay is lossless for current worker completions, but there is no schema-versioned delivery-event identity for future event types.
-3. Durable delivery is stronger than worker execution recovery after append: an in-flight worker disappears on restart with no terminal reconciliation.
+3. Worker execution is not resumed after process loss; startup reconciliation instead marks orphaned active tasks `abandoned` and durably enqueues a diagnostic completion for the parent.
 4. Boot hydration repairs missing open sessions, but it restores ordinary tabs as history only; a pending mailbox is woken only through the explicit open endpoint or a later message.
 5. Provider routing uses the registry and capability enforcement bounds each run, but capability requirements do not yet participate in provider eligibility.
 6. CORS and loopback binding are not authentication or process isolation; deliberately exposed deployments need an authenticating reverse proxy and OS/network containment.

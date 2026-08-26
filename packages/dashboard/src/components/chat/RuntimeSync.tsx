@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   fetchOpenSessions,
   fetchSession,
+  fetchWorkers,
   type OpenSessionsState,
   updateOpenSessions,
 } from "@/lib/api";
@@ -41,10 +42,14 @@ export default function RuntimeSync() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const hydrated = useRef(false);
   const hydrating = useRef(false);
+  const pendingHydration = useRef<{ signal?: { cancelled: boolean } } | null>(null);
   const pendingSync = useRef(false);
 
   const hydrateOpenSessions = useCallback(async (signal?: { cancelled: boolean }) => {
-    if (hydrating.current) return;
+    if (hydrating.current) {
+      pendingHydration.current = { signal };
+      return;
+    }
     hydrating.current = true;
     try {
       const open = await fetchOpenSessions();
@@ -86,6 +91,9 @@ export default function RuntimeSync() {
       // and will recover naturally.
     } finally {
       hydrating.current = false;
+      const pending = pendingHydration.current;
+      pendingHydration.current = null;
+      if (pending) void hydrateOpenSessions(pending.signal);
     }
   }, []);
 
@@ -180,8 +188,12 @@ export default function RuntimeSync() {
 
     const onWorkerCompleted = validatedEventHandler(
       WorkerCompletedEventSchema,
-      "worker:completed event",
-      (data) => useRosterStore.getState().setWorkerStatus(data.sessionId, data.taskId, data.status),
+      "worker completion event",
+      (data) => {
+        const mappedStatus =
+          data.status === "done" ? "completed" : data.status === "error" ? "failed" : "cancelled";
+        useRosterStore.getState().setWorkerStatus(data.sessionId, data.taskId, mappedStatus);
+      },
     );
 
     socket.on("connect", onConnect);
@@ -204,6 +216,30 @@ export default function RuntimeSync() {
       socket.off("worker:completed", onWorkerCompleted);
     };
   }, [hydrateOpenSessions]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+
+    const fetchAndHydrateWorkers = async () => {
+      const requestSequence = useRosterStore.getState().beginHydration(activeSessionId);
+      try {
+        const workers = await fetchWorkers(activeSessionId);
+        useRosterStore.getState().hydrate(activeSessionId, workers, requestSequence);
+      } catch (err) {
+        logger.error("failed to hydrate workers", { ...describeError(err) });
+      }
+    };
+
+    void fetchAndHydrateWorkers();
+
+    const socket = connectSocket();
+    socket.on("connect", fetchAndHydrateWorkers);
+
+    return () => {
+      useRosterStore.getState().cancelHydration(activeSessionId);
+      socket.off("connect", fetchAndHydrateWorkers);
+    };
+  }, [activeSessionId]);
 
   return null;
 }
