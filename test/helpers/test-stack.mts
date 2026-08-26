@@ -1,12 +1,43 @@
 import fs from "node:fs";
 import http from "node:http";
+// IMPORTANT: the server/core modules are loaded through createRequire (CJS
+// interop) instead of static ESM imports. Playwright's test runner breaks when
+// a worker mixes its CJS-interop transform of `@agent-harness/core` (used by
+// statically-importing spec files) with a true ESM load of the same package —
+// producing "exports is not defined in ES module scope" or "does not provide
+// an export named ..." errors. Loading everything here through require keeps
+// a single module identity for the entire server graph.
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { createDatabaseConnection, type ISqliteDatabase, resetConfig } from "@agent-harness/core";
 import { Server as SocketIOServer } from "socket.io";
-import { createApp } from "../../packages/server/src/app.js";
-import { sessionManager } from "../../packages/server/src/session-manager.js";
-import { initWebSocket } from "../../packages/server/src/ws/events.js";
+
+const require_ = createRequire(import.meta.url);
+
+// Type-only imports used solely to derive the shapes returned by require().
+type CoreModule = typeof import("@agent-harness/core");
+type AppModule = typeof import("../../packages/server/dist/app.js");
+type SessionManagerModule = typeof import("../../packages/server/dist/session-manager.js");
+type WsEventsModule = typeof import("../../packages/server/dist/ws/events.js");
+
+function requireTyped<T extends object>(spec: string): T {
+  // createRequire returns `any`; assigning directly to the typed parameter
+  // avoids type assertions (forbidden by the quality policy) while keeping
+  // the intended module shape.
+  const typed: T = require_(spec);
+  if (typeof typed !== "object" || typed === null) {
+    throw new Error(`Expected module object from ${spec}`);
+  }
+  return typed;
+}
+
+const core = requireTyped<CoreModule>("@agent-harness/core");
+const { createDatabaseConnection, resetConfig } = core;
+const serverDist = "../../packages/server/dist/";
+const { createApp } = requireTyped<AppModule>(`${serverDist}app.js`);
+const { sessionManager } = requireTyped<SessionManagerModule>(`${serverDist}session-manager.js`);
+const { initWebSocket } = requireTyped<WsEventsModule>(`${serverDist}ws/events.js`);
+
 import { createFakeProviderServer, type FakeServerInstance } from "../fake-provider/index.js";
 
 export interface EphemeralTestStackOptions {
