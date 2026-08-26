@@ -30,19 +30,21 @@ const modeChecks = {
   ],
   fast: [[corepack, [pkgManager, "test"]]],
   ci: [
+    // Build first: the vitest suites load packages/server/dist through
+    // test/helpers/test-stack.mts, so the compiled output must exist.
+    [corepack, [pkgManager, "run", "build"]],
     [corepack, [pkgManager, "run", "test:coverage"]],
     [corepack, [pkgManager, "run", "test:chaos"]],
     [corepack, [pkgManager, "run", "test:security"]],
     [corepack, [pkgManager, "run", "test:load"]],
-    [corepack, [pkgManager, "run", "build"]],
     [corepack, [pkgManager, "run", "security:audit"]],
   ],
   nightly: [
+    [corepack, [pkgManager, "run", "build"]],
     [corepack, [pkgManager, "run", "test:coverage"]],
     [corepack, [pkgManager, "run", "test:chaos"]],
     [corepack, [pkgManager, "run", "test:security"]],
     [corepack, [pkgManager, "run", "test:load"]],
-    [corepack, [pkgManager, "run", "build"]],
     [corepack, [pkgManager, "run", "security:audit"]],
     [corepack, [pkgManager, "run", "perf:report"]],
   ],
