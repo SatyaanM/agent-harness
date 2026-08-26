@@ -42,5 +42,6 @@ jobs:
           cache: pnpm
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm --filter @agent-harness/core run build
+      - run: corepack pnpm --filter @agent-harness/server run build
       - run: corepack pnpm exec playwright install --with-deps chromium firefox webkit
       - run: corepack pnpm run test:fullstack
