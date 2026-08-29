@@ -33,7 +33,7 @@ Repository workflows define checks, but GitHub branch protection must require th
 
 - `Required repository gates (ubuntu-latest)` (workflow: `CI`)
 - `Required repository gates (windows-latest)` (workflow: `CI`)
-- `Required full-stack gate` (workflow: `CI`)
+- `Required full-stack gate` (workflow: `Full-stack E2E`)
 - `Required CodeQL High/Critical gate` (workflow: `CodeQL Analysis`)
 
 The CodeQL gate evaluates SARIF produced by the current workflow run; it does not query or close historical alerts already stored by GitHub. An in-source suppression is accepted only when CodeQL emits it with a non-empty justification, so suppressions still require review. ZAP is scheduled and manually dispatchable rather than a pull-request check; maintainers must monitor its failing runs and triage generated issues, or separately choose to add an appropriate pull-request trigger before making it a protected-branch requirement.

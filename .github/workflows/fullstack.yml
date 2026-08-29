@@ -1,36 +1,32 @@
-name: CI
+name: Full-stack E2E
 
 on:
   pull_request:
   push:
     branches: [main, development]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: fullstack-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Required repository gates (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  fullstack:
+    name: Required full-stack gate
+    runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0 (Node 24)
-        with:
-          fetch-depth: 0
       - run: corepack enable
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0 (Node 24)
         with:
           node-version: 22
           cache: pnpm
       - run: corepack pnpm install --frozen-lockfile
-      - run: corepack pnpm run check:ci
+      - run: corepack pnpm --filter @agent-harness/core run build
+      - run: corepack pnpm --filter @agent-harness/server run build
+      - run: corepack pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: corepack pnpm run test:fullstack
