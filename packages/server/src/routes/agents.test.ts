@@ -109,21 +109,33 @@ describe("agent configuration routes", () => {
       .send({
         name: "researcher",
         model: "test-model",
+        provider: "test-provider",
         tools: [],
         maxSteps: 10,
         instructions: "Research carefully.",
         description: "Research specialist",
         capabilities: { chat: true },
         modelIdMapping: "mapped-test-model",
+        maxToolCalls: 12,
+        maxToolResultChars: 20_000,
+        maxOutputTokens: 2_048,
+        maxTotalTokens: 50_000,
+        runTimeoutMs: 30_000,
       });
 
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({
       name: "researcher",
       tools: [],
+      provider: "test-provider",
       description: "Research specialist",
       capabilities: { chat: true },
       modelIdMapping: "mapped-test-model",
+      maxToolCalls: 12,
+      maxToolResultChars: 20_000,
+      maxOutputTokens: 2_048,
+      maxTotalTokens: 50_000,
+      runTimeoutMs: 30_000,
     });
     const listed = await request(app).get("/api/agents");
     expect(listed.status).toBe(200);
@@ -290,6 +302,16 @@ Updated instructions.
       404,
     );
     expect((await request(app).delete("/api/agents/nonexistent")).status).toBe(404);
+  });
+
+  it("returns 404 when an agent source path is not a file", async () => {
+    const { app, root } = await appFixture();
+    await mkdir(path.join(root, "agents", "not-a-file.md"), { recursive: true });
+
+    const response = await request(app).get("/api/agents/not-a-file/source");
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: "Agent not found" });
   });
 
   it("returns 409 when creating an agent that already exists", async () => {
