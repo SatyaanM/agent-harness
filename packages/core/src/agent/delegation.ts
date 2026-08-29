@@ -215,124 +215,20 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
         W3CTraceContext.inject(currentCtx, traceCarrier);
       }
 
-      const finishWorker = async () => {
-        let result: Awaited<ReturnType<typeof worker.run>>;
-        try {
-          result = await worker.run(task, traceCarrier);
-          const existing = await store.load(sessionId);
-
-          await store.save({
-            sessionId,
-            taskId,
-            agentName: workerConfig.name,
-            prompt: task,
-            messages: result.messages.map((entry) => ({
-              ...entry,
-              createdAt: entry.createdAt ?? new Date().toISOString(),
-            })),
-            mailbox: existing?.mailbox ?? [],
-            result: { status: result.status, summary: result.summary },
-            createdAt: existing?.createdAt ?? createdAt,
-            completedAt: new Date().toISOString(),
-          });
-        } catch (workerError) {
-          const errorMsg = describeError(workerError).message;
-          const pending: PendingMessage = {
-            taskId,
-            from: sessionId,
-            agentName: workerConfig.name,
-            status: "error",
-            summary: `Worker failed: ${errorMsg}`,
-            receivedAt: new Date().toISOString(),
-          };
-
-          if (deps.db) {
-            try {
-              const taskRepo = new TaskRepository(deps.db);
-              const mailboxRepo = new MailboxRepository(deps.db);
-              deps.db.immediateTransaction(() => {
-                taskRepo.update(taskId, {
-                  status: "failed",
-                  errorMessage: errorMsg,
-                  completedAt: Date.now(),
-                });
-                mailboxRepo.enqueue({
-                  parentSessionId: deps.sessionId,
-                  taskId,
-                  payload: pending,
-                });
-              })();
-            } catch {
-              // best-effort error record
-            }
-          }
-
-          deps.onWorkerCompleted?.(deps.sessionId, pending);
-          throw workerError;
-        }
-
-        const pending: PendingMessage = {
+      const finishWorker = () =>
+        finishWorkerRun({
+          worker,
+          task,
           taskId,
-          from: sessionId,
-          agentName: workerConfig.name,
-          status:
-            result.status === "done"
-              ? "done"
-              : result.status === "cancelled"
-                ? "cancelled"
-                : "error",
-          summary: result.summary,
-          receivedAt: new Date().toISOString(),
-        };
-
-        // The DB transition and mailbox enqueue are the canonical atomic
-        // settlement. If this transaction rolls back, leave the task running
-        // so startup reconciliation can recover it instead of manufacturing a
-        // contradictory failure after the worker already completed.
-        if (deps.db) {
-          const db = deps.db;
-          const taskRepo = new TaskRepository(db);
-          const mailboxRepo = new MailboxRepository(db);
-          commitTerminalSettlement(() => {
-            db.immediateTransaction(() => {
-              taskRepo.update(taskId, {
-                status:
-                  result.status === "done"
-                    ? "completed"
-                    : result.status === "cancelled"
-                      ? "cancelled"
-                      : "failed",
-                errorMessage:
-                  result.status !== "done" && result.status !== "cancelled" ? result.summary : null,
-                completedAt: Date.now(),
-              });
-              mailboxRepo.enqueue({
-                parentSessionId: deps.sessionId,
-                taskId,
-                payload: pending,
-              });
-            })();
-          });
-        }
-
-        // JSON session mailboxes are retained only for compatibility. Once the
-        // canonical transaction commits, a legacy write failure must not
-        // rewrite durable truth or suppress the completion notification.
-        try {
-          await store.appendMailbox(deps.sessionId, pending);
-        } catch (error) {
-          reportBackgroundError(error);
-        }
-        if (deps.isSessionAvailable && !deps.isSessionAvailable(deps.sessionId)) {
-          try {
-            await store.acknowledgeMailbox(deps.sessionId, [pending.taskId]);
-          } catch (error) {
-            reportBackgroundError(error);
-          }
-          return;
-        }
-        deps.onWorkerCompleted?.(deps.sessionId, pending);
-      };
+          sessionId,
+          workerConfig,
+          createdAt,
+          traceCarrier,
+          store,
+          deps,
+          reportBackgroundError,
+          commitTerminalSettlement,
+        });
 
       void finishWorker()
         .catch(reportBackgroundError)
@@ -347,6 +243,179 @@ export function createDelegateTool(deps: DelegationDeps): Tool {
       return JSON.stringify({ taskId, sessionId, status: "delegated" });
     },
   };
+}
+
+type WorkerRunResult = Awaited<ReturnType<Worker["run"]>>;
+
+interface FinishWorkerOptions {
+  worker: Worker;
+  task: string;
+  taskId: TaskId;
+  sessionId: string;
+  workerConfig: AgentConfig;
+  createdAt: string;
+  traceCarrier: Record<string, string>;
+  store: SessionStore;
+  deps: DelegationDeps;
+  reportBackgroundError: (error: unknown) => void;
+  commitTerminalSettlement: (commit: () => void) => void;
+}
+
+async function finishWorkerRun(options: FinishWorkerOptions): Promise<void> {
+  let result: WorkerRunResult;
+  try {
+    result = await options.worker.run(options.task, options.traceCarrier);
+    await persistCompletedWorker(options, result);
+  } catch (workerError) {
+    const pending = createWorkerFailureMessage(options, workerError);
+    recordWorkerFailure(options, pending, describeError(workerError).message);
+    options.deps.onWorkerCompleted?.(options.deps.sessionId, pending);
+    throw workerError;
+  }
+
+  const pending = createWorkerCompletionMessage(options, result);
+  settleCompletedWorker(options, result, pending);
+  await appendLegacyCompletion(options, pending);
+  await notifyWorkerCompletion(options, pending);
+}
+
+async function persistCompletedWorker(
+  options: FinishWorkerOptions,
+  result: WorkerRunResult,
+): Promise<void> {
+  const existing = await options.store.load(options.sessionId);
+  await options.store.save({
+    sessionId: options.sessionId,
+    taskId: options.taskId,
+    agentName: options.workerConfig.name,
+    prompt: options.task,
+    messages: result.messages.map((entry) => ({
+      ...entry,
+      createdAt: entry.createdAt ?? new Date().toISOString(),
+    })),
+    mailbox: existing?.mailbox ?? [],
+    result: { status: result.status, summary: result.summary },
+    createdAt: existing?.createdAt ?? options.createdAt,
+    completedAt: new Date().toISOString(),
+  });
+}
+
+function createWorkerFailureMessage(options: FinishWorkerOptions, error: unknown): PendingMessage {
+  const errorMsg = describeError(error).message;
+  return {
+    taskId: options.taskId,
+    from: options.sessionId,
+    agentName: options.workerConfig.name,
+    status: "error",
+    summary: `Worker failed: ${errorMsg}`,
+    receivedAt: new Date().toISOString(),
+  };
+}
+
+function recordWorkerFailure(
+  options: FinishWorkerOptions,
+  pending: PendingMessage,
+  errorMsg: string,
+): void {
+  if (!options.deps.db) return;
+  try {
+    const taskRepo = new TaskRepository(options.deps.db);
+    const mailboxRepo = new MailboxRepository(options.deps.db);
+    options.deps.db.immediateTransaction(() => {
+      taskRepo.update(options.taskId, {
+        status: "failed",
+        errorMessage: errorMsg,
+        completedAt: Date.now(),
+      });
+      mailboxRepo.enqueue({
+        parentSessionId: options.deps.sessionId,
+        taskId: options.taskId,
+        payload: pending,
+      });
+    })();
+  } catch {
+    // best-effort error record
+  }
+}
+
+function createWorkerCompletionMessage(
+  options: FinishWorkerOptions,
+  result: WorkerRunResult,
+): PendingMessage {
+  return {
+    taskId: options.taskId,
+    from: options.sessionId,
+    agentName: options.workerConfig.name,
+    status: workerCompletionStatus(result),
+    summary: result.summary,
+    receivedAt: new Date().toISOString(),
+  };
+}
+
+function workerCompletionStatus(result: WorkerRunResult): PendingMessage["status"] {
+  if (result.status === "done") return "done";
+  return result.status === "cancelled" ? "cancelled" : "error";
+}
+
+function settleCompletedWorker(
+  options: FinishWorkerOptions,
+  result: WorkerRunResult,
+  pending: PendingMessage,
+): void {
+  if (!options.deps.db) return;
+
+  const db = options.deps.db;
+  const taskRepo = new TaskRepository(db);
+  const mailboxRepo = new MailboxRepository(db);
+  options.commitTerminalSettlement(() => {
+    db.immediateTransaction(() => {
+      taskRepo.update(options.taskId, {
+        status: workerTaskStatus(result),
+        errorMessage: workerTaskError(result),
+        completedAt: Date.now(),
+      });
+      mailboxRepo.enqueue({
+        parentSessionId: options.deps.sessionId,
+        taskId: options.taskId,
+        payload: pending,
+      });
+    })();
+  });
+}
+
+function workerTaskStatus(result: WorkerRunResult): "completed" | "cancelled" | "failed" {
+  if (result.status === "done") return "completed";
+  return result.status === "cancelled" ? "cancelled" : "failed";
+}
+
+function workerTaskError(result: WorkerRunResult): string | null {
+  return result.status === "done" || result.status === "cancelled" ? null : result.summary;
+}
+
+async function appendLegacyCompletion(
+  options: FinishWorkerOptions,
+  pending: PendingMessage,
+): Promise<void> {
+  try {
+    await options.store.appendMailbox(options.deps.sessionId, pending);
+  } catch (error) {
+    options.reportBackgroundError(error);
+  }
+}
+
+async function notifyWorkerCompletion(
+  options: FinishWorkerOptions,
+  pending: PendingMessage,
+): Promise<void> {
+  if (options.deps.isSessionAvailable?.(options.deps.sessionId) === false) {
+    try {
+      await options.store.acknowledgeMailbox(options.deps.sessionId, [pending.taskId]);
+    } catch (error) {
+      options.reportBackgroundError(error);
+    }
+    return;
+  }
+  options.deps.onWorkerCompleted?.(options.deps.sessionId, pending);
 }
 
 export function createReadSessionTool(sessionsDir: string): Tool {

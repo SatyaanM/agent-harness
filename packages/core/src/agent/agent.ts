@@ -10,17 +10,19 @@ import {
   MAX_STREAM_TOOL_NAME_BYTES,
   MAX_STREAM_TOTAL_DELTA_BYTES,
 } from "../contracts/streaming.js";
-import { getTracer, SpanKind, SpanStatusCode } from "../contracts/tracing.js";
+import { getTracer, type ISpan, SpanKind, SpanStatusCode } from "../contracts/tracing.js";
 import {
+  type LLMChatParams,
   type LLMClient,
   type LLMFinishReason,
   type LLMResponse,
   LLMResponseSchema,
+  type LLMStreamDelta,
   type LLMToolDefinition,
   type LLMUsage,
 } from "../llm/client.js";
 
-import type { ToolRegistry } from "../tool/types.js";
+import type { Tool, ToolRegistry } from "../tool/types.js";
 import { parseBoundary } from "../validation.js";
 
 import {
@@ -39,6 +41,45 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
 const DEFAULT_MAX_TOTAL_TOKENS = 100_000;
 const DEFAULT_RUN_TIMEOUT_MS = 300_000;
 const STREAM_ITERATOR_CLEANUP_TIMEOUT_MS = 100;
+
+interface AgentBudgetState {
+  toolCallsUsed: number;
+  totalTokensUsed: number;
+}
+
+interface AgentStepOptions {
+  stepSpan: ISpan;
+  matrix: CapabilityMatrix;
+  llmTools: LLMToolDefinition[] | undefined;
+  eligibleToolMap: Map<string, Tool>;
+  maxToolCalls: number;
+  maxToolResultChars: number;
+  maxOutputTokens: number;
+  maxTotalTokens: number;
+  signal: AbortSignal;
+  budget: AgentBudgetState;
+}
+
+interface StreamAccumulator {
+  text: string;
+  reasoning: string;
+  toolCalls: Map<string, { name: string; argsText: string }>;
+  totalDeltaBytes: number;
+  finishReason: LLMFinishReason | undefined;
+  usage: LLMUsage | undefined;
+  streamStartedAt: number;
+  firstTokenAt: number | undefined;
+  finishedAt: number | undefined;
+  streamFailed: boolean;
+  streamFailure: unknown;
+}
+
+type ProviderToolCall = NonNullable<LLMResponse["toolCalls"]>[number];
+
+interface ToolSelection {
+  responseToolCalls: ProviderToolCall[];
+  toolDenial: string | undefined;
+}
 
 export type AgentEventCallback = (
   event:
@@ -165,8 +206,7 @@ export class Agent {
       matrix.maxTokens && matrix.maxTokens > 0 ? Math.min(configMax, matrix.maxTokens) : configMax;
 
     const maxTotalTokens = this.config.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
-    let toolCallsUsed = 0;
-    let totalTokensUsed = 0;
+    const budget: AgentBudgetState = { toolCallsUsed: 0, totalTokensUsed: 0 };
 
     for (let step = 0; step < this.config.maxSteps; step++) {
       if (signal.aborted) throw new AgentCancelledError();
@@ -179,410 +219,20 @@ export class Agent {
       });
 
       try {
-        const stepResult = await tracer.withSpan(stepSpan, async () => {
-          const llmSpan = tracer.startSpan("gen_ai.chat", {
-            kind: SpanKind.CLIENT,
-            attributes: {
-              "gen_ai.request.model": this.config.model,
-              "gen_ai.request.max_tokens": maxOutputTokens,
-            },
-          });
-
-          let finalSystem = this.config.instructions;
-          if (!matrix.structuredOutputs && llmTools && llmTools.length > 0) {
-            finalSystem +=
-              "\n\nYou must strictly adhere to the provided JSON schemas for any tools you invoke.";
-          }
-
-          let finalMessages = projectToolResultsForModel(this.messages, maxToolResultChars);
-          if (!matrix.vision) {
-            finalMessages = finalMessages.map((msg) => ({
-              ...msg,
-              content: msg.content.replace(
-                /!\[.*?\]\(.*?\)/g,
-                "[Image omitted due to model capability]",
-              ),
-            }));
-          }
-
-          let response: LLMResponse;
-          try {
-            const chatParams = {
-              messages: finalMessages,
-              system: finalSystem,
-              model: this.config.model,
-              ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
-              ...(llmTools ? { tools: llmTools } : {}),
-              maxOutputTokens,
-              promptCaching: matrix.promptCaching,
-              signal,
-            };
-
-            const rawResponse = await tracer.withSpan(llmSpan, async () => {
-              if (matrix.streaming && this.llmClient.chatStream) {
-                let text = "";
-                let reasoning = "";
-                const toolCallsMap = new Map<string, { name: string; argsText: string }>();
-                let totalDeltaBytes = 0;
-                let finishReason: LLMFinishReason | undefined;
-                let usage: LLMUsage | undefined;
-                const streamStartedAt = Date.now();
-                let firstTokenAt: number | undefined;
-                let finishedAt: number | undefined;
-                let streamFailed = false;
-                let streamFailure: unknown;
-                const streamIterator = this.llmClient
-                  .chatStream(chatParams)
-                  [Symbol.asyncIterator]();
-
-                try {
-                  while (true) {
-                    const next = await nextStreamChunk(streamIterator, signal);
-                    if (next.done) break;
-                    const chunk = next.value;
-                    if (finishReason !== undefined) {
-                      throw new Error(
-                        `Provider stream emitted ${chunk.type} after terminal finish event`,
-                      );
-                    }
-                    if (chunk.type === "text-delta") {
-                      totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.text);
-                      if (text.length + chunk.text.length > MAX_STREAM_TEXT_CHARS) {
-                        throw new Error(
-                          `Provider streamed text limit exceeded (${MAX_STREAM_TEXT_CHARS} characters)`,
-                        );
-                      }
-                      firstTokenAt ??= Date.now();
-                      text += chunk.text;
-                      this.onEvent?.(chunk);
-                    } else if (chunk.type === "reasoning-delta") {
-                      totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.reasoning);
-                      if (reasoning.length + chunk.reasoning.length > MAX_STREAM_REASONING_CHARS) {
-                        throw new Error(
-                          `Provider streamed reasoning limit exceeded (${MAX_STREAM_REASONING_CHARS} characters)`,
-                        );
-                      }
-                      reasoning += chunk.reasoning;
-                    } else if (chunk.type === "tool-call-delta") {
-                      if (chunk.toolCall) {
-                        ensureBoundedStreamField(
-                          chunk.toolCall.id,
-                          MAX_STREAM_TOOL_CALL_ID_BYTES,
-                          "tool call id",
-                        );
-                        ensureBoundedStreamField(
-                          chunk.toolCall.name,
-                          MAX_STREAM_TOOL_NAME_BYTES,
-                          "tool name",
-                        );
-                        totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.toolCall.id);
-                        totalDeltaBytes = addStreamDeltaBytes(totalDeltaBytes, chunk.toolCall.name);
-                        totalDeltaBytes = addStreamDeltaBytes(
-                          totalDeltaBytes,
-                          chunk.toolCall.argumentsDelta,
-                        );
-                        const existing = toolCallsMap.get(chunk.toolCall.id) || {
-                          name: chunk.toolCall.name,
-                          argsText: "",
-                        };
-                        if (
-                          !toolCallsMap.has(chunk.toolCall.id) &&
-                          toolCallsMap.size >= maxToolCalls
-                        ) {
-                          throw new Error(
-                            `Provider streamed tool-call count limit exceeded (${maxToolCalls})`,
-                          );
-                        }
-                        if (
-                          existing.argsText.length + chunk.toolCall.argumentsDelta.length >
-                          MAX_STREAM_TOOL_ARGUMENT_CHARS
-                        ) {
-                          throw new Error(
-                            `Provider streamed tool argument limit exceeded (${MAX_STREAM_TOOL_ARGUMENT_CHARS} characters)`,
-                          );
-                        }
-                        existing.argsText += chunk.toolCall.argumentsDelta;
-                        toolCallsMap.set(chunk.toolCall.id, existing);
-                        this.onEvent?.(chunk);
-                      }
-                    } else if (chunk.type === "finish") {
-                      finishReason = chunk.finishReason;
-                      usage = chunk.usage;
-                      finishedAt = Date.now();
-                    }
-                  }
-                } catch (error) {
-                  streamFailed = true;
-                  streamFailure = error;
-                  finishedAt = Date.now();
-                } finally {
-                  await closeStreamIterator(streamIterator);
-                }
-
-                finishedAt ??= Date.now();
-                const outputTokens = usage?.outputTokens ?? Math.ceil(text.length / 4);
-                const durationMs = Math.max(0, finishedAt - streamStartedAt);
-                const generationMs =
-                  firstTokenAt === undefined ? 0 : Math.max(0, finishedAt - firstTokenAt);
-                const metrics: StreamPerformanceMetrics = {
-                  ttftMs: firstTokenAt === undefined ? null : firstTokenAt - streamStartedAt,
-                  tokensPerSecond:
-                    firstTokenAt === undefined || outputTokens === 0
-                      ? null
-                      : outputTokens / Math.max(generationMs / 1_000, 0.001),
-                  outputTokens,
-                  durationMs,
-                };
-                llmSpan.setAttributes({
-                  ...(metrics.ttftMs === null
-                    ? {}
-                    : { "gen_ai.performance.time_to_first_token_ms": metrics.ttftMs }),
-                  ...(metrics.tokensPerSecond === null
-                    ? {}
-                    : {
-                        "gen_ai.performance.output_tokens_per_second": metrics.tokensPerSecond,
-                      }),
-                });
-                this.onEvent?.({ type: "stream-metrics", metrics });
-
-                if (streamFailed) throw streamFailure;
-                if (!finishReason) {
-                  throw new Error("Provider stream ended without a terminal finish event");
-                }
-
-                const toolCalls = Array.from(toolCallsMap.entries()).map(([id, tc]) => {
-                  try {
-                    return { toolCallId: id, toolName: tc.name, args: JSON.parse(tc.argsText) };
-                  } catch (err) {
-                    throw new Error(
-                      `Failed to parse tool call arguments for ${tc.name} (${id}): ${err instanceof Error ? err.message : String(err)}`,
-                      { cause: err },
-                    );
-                  }
-                });
-
-                return {
-                  message: {
-                    role: "assistant",
-                    content: text,
-                    ...(reasoning ? { reasoning } : {}),
-                    ...(toolCalls.length > 0 ? { toolCalls } : {}),
-                  },
-                  finishReason,
-                  ...(toolCalls.length > 0 ? { toolCalls } : {}),
-                  ...(usage ? { usage } : {}),
-                };
-              } else {
-                return await this.llmClient.chat(chatParams);
-              }
-            });
-
-            const parsed = parseBoundary(LLMResponseSchema, rawResponse, "provider response");
-            llmSpan.setAttributes({
-              "gen_ai.response.model": this.config.model,
-              "gen_ai.response.finish_reasons": [parsed.finishReason],
-            });
-
-            if (parsed.usage) {
-              llmSpan.setAttributes({
-                "gen_ai.usage.input_tokens": parsed.usage.inputTokens,
-                "gen_ai.usage.output_tokens": parsed.usage.outputTokens,
-                "gen_ai.usage.total_tokens": parsed.usage.totalTokens,
-              });
-            }
-            llmSpan.setStatus({ code: SpanStatusCode.OK });
-            response = parsed;
-          } catch (llmError) {
-            llmSpan.recordException(llmError);
-            llmSpan.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: llmError instanceof Error ? llmError.message : String(llmError),
-            });
-            throw llmError;
-          } finally {
-            llmSpan.end();
-          }
-
-          if (signal.aborted) {
-            throw new AgentCancelledError();
-          }
-
-          const providerToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
-          const deniedToolCalls = providerToolCalls.filter(
-            (toolCall) => !eligibleToolMap.has(toolCall.toolName),
-          );
-          const responseToolCalls = providerToolCalls.filter((toolCall) =>
-            eligibleToolMap.has(toolCall.toolName),
-          );
-          let toolDenial: string | undefined;
-          if (deniedToolCalls.length > 0) {
-            const detail = !matrix.tools
-              ? `Model returned ${deniedToolCalls.length} tool call(s) but tools capability is disabled`
-              : `Model returned tool call(s) outside the eligible tool map: ${deniedToolCalls.map((call) => call.toolName).join(", ")}`;
-            this.onEvent?.({
-              type: "capability-mismatch",
-              detail,
-            });
-            this.logger.warn("Capability mismatch", {
-              capability: "tools",
-              model: this.config.model,
-              toolCallCount: deniedToolCalls.length,
-              toolNames: deniedToolCalls.map((call) => call.toolName),
-            });
-            toolDenial = matrix.tools
-              ? "One or more requested tools are not eligible for this agent run. Do not call unavailable, unconfigured, delegated, or approval-required tools; continue using only the provided tools or answer with text."
-              : "Tool calls are disabled for this model. Do not call tools; answer using text only.";
-          }
-
-          const responseMessage = responseToolCalls.length
-            ? { ...response.message, toolCalls: responseToolCalls }
-            : stripToolCalls(response.message);
-          this.messages.push(responseMessage);
-          if (toolDenial && responseToolCalls.length === 0) {
-            this.messages.push({
-              role: "system",
-              content: toolDenial,
-            });
-          }
-          this.onEvent?.({ type: "step", messages: [...this.messages] });
-
-          totalTokensUsed += tokenCharge(
-            response,
-            projectToolResultsForModel(this.messages, maxToolResultChars),
-            this.config.instructions,
-          );
-          if (totalTokensUsed > maxTotalTokens) {
-            if (responseToolCalls.length) {
-              this.messages.push(
-                ...responseToolCalls.map((toolCall) => ({
-                  role: "tool" as const,
-                  content: `Error: Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}); tool was not executed.`,
-                  toolCallId: toolCall.toolCallId,
-                })),
-              );
-            }
-            stepSpan.setStatus({ code: SpanStatusCode.ERROR });
-            return this.budgetExceeded(
-              `Agent token budget exceeded (${totalTokensUsed}/${maxTotalTokens}).`,
-            );
-          }
-
-          if (response.finishReason === "stop") {
-            stepSpan.setStatus({ code: SpanStatusCode.OK });
-            return {
-              status: "success" as const,
-              summary: response.message.content,
-              messages: [...this.messages],
-            };
-          }
-
-          if (response.finishReason !== "tool-calls") {
-            stepSpan.setStatus({ code: SpanStatusCode.ERROR });
-            return {
-              status: "error" as const,
-              summary: `Provider stopped with finish reason ${response.finishReason}.`,
-              messages: [...this.messages],
-            };
-          }
-
-          if (responseToolCalls.length) {
-            for (const [toolCallIndex, toolCall] of responseToolCalls.entries()) {
-              if (signal.aborted) {
-                throw new AgentCancelledError();
-              }
-              if (toolCallsUsed >= maxToolCalls) {
-                this.messages.push(
-                  ...responseToolCalls.slice(toolCallIndex).map((skipped) => ({
-                    role: "tool" as const,
-                    content: `Error: Agent tool-call budget exceeded (${maxToolCalls}).`,
-                    toolCallId: skipped.toolCallId,
-                  })),
-                );
-                stepSpan.setStatus({ code: SpanStatusCode.ERROR });
-                return this.budgetExceeded(`Agent tool-call budget exceeded (${maxToolCalls}).`);
-              }
-              toolCallsUsed += 1;
-
-              const tool = eligibleToolMap.get(toolCall.toolName);
-
-              if (!tool) {
-                this.messages.push({
-                  role: "tool",
-                  content: `Error: Tool "${toolCall.toolName}" not found`,
-                  toolCallId: toolCall.toolCallId,
-                });
-                continue;
-              }
-
-              this.onEvent?.({
-                type: "tool:called",
-                toolName: toolCall.toolName,
-                args: toolCall.args,
-              });
-
-              const toolSpan = tracer.startSpan(`tool.execute: ${toolCall.toolName}`, {
-                kind: SpanKind.INTERNAL,
-                attributes: {
-                  "agent.tool.name": toolCall.toolName,
-                  "agent.tool.call_id": toolCall.toolCallId,
-                },
-              });
-
-              try {
-                await tracer.withSpan(toolSpan, async () => {
-                  const args = parseBoundary(
-                    tool.parameters,
-                    toolCall.args,
-                    `tool ${toolCall.toolName} arguments`,
-                  );
-                  const result = await waitForAbort(tool.execute(args, { signal }), signal);
-                  if (signal.aborted) {
-                    throw new AgentCancelledError();
-                  }
-                  toolSpan.setStatus({ code: SpanStatusCode.OK });
-
-                  this.onEvent?.({
-                    type: "tool:completed",
-                    toolName: toolCall.toolName,
-                    result: boundToolResult(result, maxToolResultChars),
-                  });
-                  this.messages.push({
-                    role: "tool",
-                    content: result,
-                    toolCallId: toolCall.toolCallId,
-                  });
-                });
-              } catch (error) {
-                toolSpan.recordException(error);
-                toolSpan.setStatus({
-                  code: SpanStatusCode.ERROR,
-                  message: error instanceof Error ? error.message : String(error),
-                });
-                if (signal.aborted) {
-                  throw new AgentCancelledError();
-                }
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                this.logger.error(`Tool "${toolCall.toolName}" failed`, {
-                  toolName: toolCall.toolName,
-                  ...describeError(error),
-                });
-                this.messages.push({
-                  role: "tool",
-                  content: `Error: ${errorMessage}`,
-                  toolCallId: toolCall.toolCallId,
-                });
-              } finally {
-                toolSpan.end();
-              }
-            }
-            if (toolDenial) {
-              this.messages.push({ role: "system", content: toolDenial });
-            }
-            this.onEvent?.({ type: "step", messages: [...this.messages] });
-          }
-
-          return undefined;
-        });
+        const stepResult = await tracer.withSpan(stepSpan, () =>
+          this.runStep({
+            stepSpan,
+            matrix,
+            llmTools,
+            eligibleToolMap,
+            maxToolCalls,
+            maxToolResultChars,
+            maxOutputTokens,
+            maxTotalTokens,
+            signal,
+            budget,
+          }),
+        );
 
         if (stepResult) {
           return stepResult;
@@ -601,6 +251,458 @@ export class Agent {
           : (finalMessage?.content ?? ""),
       messages: [...this.messages],
     };
+  }
+
+  private async runStep(options: AgentStepOptions): Promise<AgentResult | undefined> {
+    const response = await this.requestResponse(options);
+    if (options.signal.aborted) {
+      throw new AgentCancelledError();
+    }
+
+    const selection = this.selectToolCalls(response, options);
+    this.appendResponse(response, selection);
+    options.budget.totalTokensUsed += tokenCharge(
+      response,
+      projectToolResultsForModel(this.messages, options.maxToolResultChars),
+      this.config.instructions,
+    );
+
+    const budgetResult = this.checkTokenBudget(selection.responseToolCalls, options);
+    if (budgetResult) return budgetResult;
+
+    if (response.finishReason === "stop") {
+      options.stepSpan.setStatus({ code: SpanStatusCode.OK });
+      return {
+        status: "success",
+        summary: response.message.content,
+        messages: [...this.messages],
+      };
+    }
+
+    if (response.finishReason !== "tool-calls") {
+      options.stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+      return {
+        status: "error",
+        summary: `Provider stopped with finish reason ${response.finishReason}.`,
+        messages: [...this.messages],
+      };
+    }
+
+    if (selection.responseToolCalls.length > 0) {
+      return this.executeToolCalls(selection, options);
+    }
+    return undefined;
+  }
+
+  private async requestResponse(options: AgentStepOptions): Promise<LLMResponse> {
+    const tracer = getTracer();
+    const llmSpan = tracer.startSpan("gen_ai.chat", {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        "gen_ai.request.model": this.config.model,
+        "gen_ai.request.max_tokens": options.maxOutputTokens,
+      },
+    });
+    const finalSystem = buildAgentSystem(
+      this.config.instructions,
+      options.matrix,
+      options.llmTools,
+    );
+    const finalMessages = buildAgentMessages(
+      this.messages,
+      options.maxToolResultChars,
+      options.matrix.vision,
+    );
+    const chatParams: LLMChatParams = {
+      messages: finalMessages,
+      system: finalSystem,
+      model: this.config.model,
+      ...(this.config.provider ? { preferredProviderId: this.config.provider } : {}),
+      ...(options.llmTools ? { tools: options.llmTools } : {}),
+      maxOutputTokens: options.maxOutputTokens,
+      promptCaching: options.matrix.promptCaching,
+      signal: options.signal,
+    };
+
+    try {
+      const rawResponse = await tracer.withSpan(llmSpan, () =>
+        this.requestRawResponse(chatParams, options, llmSpan),
+      );
+      const parsed = parseBoundary(LLMResponseSchema, rawResponse, "provider response");
+      llmSpan.setAttributes({
+        "gen_ai.response.model": this.config.model,
+        "gen_ai.response.finish_reasons": [parsed.finishReason],
+      });
+      if (parsed.usage) {
+        llmSpan.setAttributes({
+          "gen_ai.usage.input_tokens": parsed.usage.inputTokens,
+          "gen_ai.usage.output_tokens": parsed.usage.outputTokens,
+          "gen_ai.usage.total_tokens": parsed.usage.totalTokens,
+        });
+      }
+      llmSpan.setStatus({ code: SpanStatusCode.OK });
+      return parsed;
+    } catch (llmError) {
+      llmSpan.recordException(llmError);
+      llmSpan.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: llmError instanceof Error ? llmError.message : String(llmError),
+      });
+      throw llmError;
+    } finally {
+      llmSpan.end();
+    }
+  }
+
+  private requestRawResponse(
+    params: LLMChatParams,
+    options: AgentStepOptions,
+    llmSpan: ISpan,
+  ): Promise<LLMResponse> {
+    if (options.matrix.streaming && this.llmClient.chatStream) {
+      return this.streamResponse(params, options.maxToolCalls, options.signal, llmSpan);
+    }
+    return this.llmClient.chat(params);
+  }
+
+  private async streamResponse(
+    params: LLMChatParams,
+    maxToolCalls: number,
+    signal: AbortSignal,
+    llmSpan: ISpan,
+  ): Promise<LLMResponse> {
+    const chatStream = this.llmClient.chatStream;
+    if (!chatStream) {
+      return this.llmClient.chat(params);
+    }
+
+    const streamIterator = chatStream(params)[Symbol.asyncIterator]();
+    const state = createStreamAccumulator();
+    try {
+      await this.consumeStream(streamIterator, state, maxToolCalls, signal);
+    } catch (error) {
+      state.streamFailed = true;
+      state.streamFailure = error;
+      state.finishedAt = Date.now();
+    } finally {
+      await closeStreamIterator(streamIterator);
+    }
+
+    const metrics = buildStreamMetrics(state);
+    setStreamSpanAttributes(llmSpan, metrics);
+    this.onEvent?.({ type: "stream-metrics", metrics });
+
+    if (state.streamFailed) {
+      throw state.streamFailure;
+    }
+    if (!state.finishReason) {
+      throw new Error("Provider stream ended without a terminal finish event");
+    }
+    return buildStreamResponse(state, state.finishReason);
+  }
+
+  private async consumeStream(
+    iterator: AsyncIterator<LLMStreamDelta>,
+    state: StreamAccumulator,
+    maxToolCalls: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    while (true) {
+      const next = await nextStreamChunk(iterator, signal);
+      if (next.done) break;
+      this.processStreamChunk(next.value, state, maxToolCalls);
+    }
+  }
+
+  private processStreamChunk(
+    chunk: LLMStreamDelta,
+    state: StreamAccumulator,
+    maxToolCalls: number,
+  ): void {
+    if (state.finishReason !== undefined) {
+      throw new Error(`Provider stream emitted ${chunk.type} after terminal finish event`);
+    }
+
+    switch (chunk.type) {
+      case "text-delta":
+        this.appendTextDelta(state, chunk);
+        return;
+      case "reasoning-delta":
+        this.appendReasoningDelta(state, chunk);
+        return;
+      case "tool-call-delta":
+        this.appendToolCallDelta(state, chunk, maxToolCalls);
+        return;
+      case "finish":
+        state.finishReason = chunk.finishReason;
+        state.usage = chunk.usage;
+        state.finishedAt = Date.now();
+        return;
+    }
+  }
+
+  private appendTextDelta(
+    state: StreamAccumulator,
+    chunk: Extract<LLMStreamDelta, { type: "text-delta" }>,
+  ): void {
+    state.totalDeltaBytes = addStreamDeltaBytes(state.totalDeltaBytes, chunk.text);
+    if (state.text.length + chunk.text.length > MAX_STREAM_TEXT_CHARS) {
+      throw new Error(
+        `Provider streamed text limit exceeded (${MAX_STREAM_TEXT_CHARS} characters)`,
+      );
+    }
+    state.firstTokenAt ??= Date.now();
+    state.text += chunk.text;
+    this.onEvent?.(chunk);
+  }
+
+  private appendReasoningDelta(
+    state: StreamAccumulator,
+    chunk: Extract<LLMStreamDelta, { type: "reasoning-delta" }>,
+  ): void {
+    state.totalDeltaBytes = addStreamDeltaBytes(state.totalDeltaBytes, chunk.reasoning);
+    if (state.reasoning.length + chunk.reasoning.length > MAX_STREAM_REASONING_CHARS) {
+      throw new Error(
+        "Provider streamed reasoning limit exceeded (" +
+          MAX_STREAM_REASONING_CHARS +
+          " characters)",
+      );
+    }
+    state.reasoning += chunk.reasoning;
+  }
+
+  private appendToolCallDelta(
+    state: StreamAccumulator,
+    chunk: Extract<LLMStreamDelta, { type: "tool-call-delta" }>,
+    maxToolCalls: number,
+  ): void {
+    if (!chunk.toolCall) return;
+    ensureBoundedStreamField(chunk.toolCall.id, MAX_STREAM_TOOL_CALL_ID_BYTES, "tool call id");
+    ensureBoundedStreamField(chunk.toolCall.name, MAX_STREAM_TOOL_NAME_BYTES, "tool name");
+    state.totalDeltaBytes = addStreamDeltaBytes(state.totalDeltaBytes, chunk.toolCall.id);
+    state.totalDeltaBytes = addStreamDeltaBytes(state.totalDeltaBytes, chunk.toolCall.name);
+    state.totalDeltaBytes = addStreamDeltaBytes(
+      state.totalDeltaBytes,
+      chunk.toolCall.argumentsDelta,
+    );
+
+    const existing = state.toolCalls.get(chunk.toolCall.id) ?? {
+      name: chunk.toolCall.name,
+      argsText: "",
+    };
+    if (!state.toolCalls.has(chunk.toolCall.id) && state.toolCalls.size >= maxToolCalls) {
+      throw new Error(`Provider streamed tool-call count limit exceeded (${maxToolCalls})`);
+    }
+    if (
+      existing.argsText.length + chunk.toolCall.argumentsDelta.length >
+      MAX_STREAM_TOOL_ARGUMENT_CHARS
+    ) {
+      throw new Error(
+        "Provider streamed tool argument limit exceeded (" +
+          MAX_STREAM_TOOL_ARGUMENT_CHARS +
+          " characters)",
+      );
+    }
+    existing.argsText += chunk.toolCall.argumentsDelta;
+    state.toolCalls.set(chunk.toolCall.id, existing);
+    this.onEvent?.(chunk);
+  }
+
+  private selectToolCalls(response: LLMResponse, options: AgentStepOptions): ToolSelection {
+    const providerToolCalls = response.toolCalls ?? response.message.toolCalls ?? [];
+    const deniedToolCalls = providerToolCalls.filter(
+      (toolCall) => !options.eligibleToolMap.has(toolCall.toolName),
+    );
+    const responseToolCalls = providerToolCalls.filter((toolCall) =>
+      options.eligibleToolMap.has(toolCall.toolName),
+    );
+    if (deniedToolCalls.length === 0) {
+      return { responseToolCalls, toolDenial: undefined };
+    }
+
+    const detail = !options.matrix.tools
+      ? "Model returned " +
+        deniedToolCalls.length +
+        " tool call(s) but tools capability is disabled"
+      : "Model returned tool call(s) outside the eligible tool map: " +
+        deniedToolCalls.map((call) => call.toolName).join(", ");
+    this.onEvent?.({ type: "capability-mismatch", detail });
+    this.logger.warn("Capability mismatch", {
+      capability: "tools",
+      model: this.config.model,
+      toolCallCount: deniedToolCalls.length,
+      toolNames: deniedToolCalls.map((call) => call.toolName),
+    });
+    const toolDenial = options.matrix.tools
+      ? "One or more requested tools are not eligible for this agent run. Do not call unavailable, unconfigured, delegated, or approval-required tools; continue using only the provided tools or answer with text."
+      : "Tool calls are disabled for this model. Do not call tools; answer using text only.";
+    return { responseToolCalls, toolDenial };
+  }
+
+  private appendResponse(response: LLMResponse, selection: ToolSelection): void {
+    const responseMessage =
+      selection.responseToolCalls.length > 0
+        ? { ...response.message, toolCalls: selection.responseToolCalls }
+        : stripToolCalls(response.message);
+    this.messages.push(responseMessage);
+    if (selection.toolDenial && selection.responseToolCalls.length === 0) {
+      this.messages.push({ role: "system", content: selection.toolDenial });
+    }
+    this.onEvent?.({ type: "step", messages: [...this.messages] });
+  }
+
+  private checkTokenBudget(
+    responseToolCalls: ProviderToolCall[],
+    options: AgentStepOptions,
+  ): AgentResult | undefined {
+    if (options.budget.totalTokensUsed <= options.maxTotalTokens) return undefined;
+    if (responseToolCalls.length > 0) {
+      this.messages.push(
+        ...responseToolCalls.map((toolCall) => ({
+          role: "tool" as const,
+          content:
+            "Error: Agent token budget exceeded (" +
+            options.budget.totalTokensUsed +
+            "/" +
+            options.maxTotalTokens +
+            "); tool was not executed.",
+          toolCallId: toolCall.toolCallId,
+        })),
+      );
+    }
+    options.stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+    return this.budgetExceeded(
+      "Agent token budget exceeded (" +
+        options.budget.totalTokensUsed +
+        "/" +
+        options.maxTotalTokens +
+        ").",
+    );
+  }
+
+  private async executeToolCalls(
+    selection: ToolSelection,
+    options: AgentStepOptions,
+  ): Promise<AgentResult | undefined> {
+    for (const [toolCallIndex, toolCall] of selection.responseToolCalls.entries()) {
+      if (options.signal.aborted) {
+        throw new AgentCancelledError();
+      }
+      if (options.budget.toolCallsUsed >= options.maxToolCalls) {
+        this.messages.push(
+          ...selection.responseToolCalls.slice(toolCallIndex).map((skipped) => ({
+            role: "tool" as const,
+            content: `Error: Agent tool-call budget exceeded (${options.maxToolCalls}).`,
+            toolCallId: skipped.toolCallId,
+          })),
+        );
+        options.stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+        return this.budgetExceeded(`Agent tool-call budget exceeded (${options.maxToolCalls}).`);
+      }
+      options.budget.toolCallsUsed += 1;
+
+      const tool = options.eligibleToolMap.get(toolCall.toolName);
+      if (!tool) {
+        this.messages.push({
+          role: "tool",
+          content: `Error: Tool "${toolCall.toolName}" not found`,
+          toolCallId: toolCall.toolCallId,
+        });
+        continue;
+      }
+
+      await this.executeToolCall(tool, toolCall, options);
+    }
+    if (selection.toolDenial) {
+      this.messages.push({ role: "system", content: selection.toolDenial });
+    }
+    this.onEvent?.({ type: "step", messages: [...this.messages] });
+    return undefined;
+  }
+
+  private async executeToolCall(
+    tool: Tool,
+    toolCall: ProviderToolCall,
+    options: AgentStepOptions,
+  ): Promise<void> {
+    const tracer = getTracer();
+    this.onEvent?.({
+      type: "tool:called",
+      toolName: toolCall.toolName,
+      args: toolCall.args,
+    });
+    const toolSpan = tracer.startSpan(`tool.execute: ${toolCall.toolName}`, {
+      kind: SpanKind.INTERNAL,
+      attributes: {
+        "agent.tool.name": toolCall.toolName,
+        "agent.tool.call_id": toolCall.toolCallId,
+      },
+    });
+
+    try {
+      await tracer.withSpan(toolSpan, () =>
+        this.runTool(tool, toolCall, options.signal, options.maxToolResultChars, toolSpan),
+      );
+    } catch (error) {
+      this.recordToolFailure(error, toolCall, toolSpan, options.signal);
+    } finally {
+      toolSpan.end();
+    }
+  }
+
+  private async runTool(
+    tool: Tool,
+    toolCall: ProviderToolCall,
+    signal: AbortSignal,
+    maxToolResultChars: number,
+    toolSpan: ISpan,
+  ): Promise<void> {
+    const args = parseBoundary(
+      tool.parameters,
+      toolCall.args,
+      `tool ${toolCall.toolName} arguments`,
+    );
+    const result = await waitForAbort(tool.execute(args, { signal }), signal);
+    if (signal.aborted) {
+      throw new AgentCancelledError();
+    }
+    toolSpan.setStatus({ code: SpanStatusCode.OK });
+    this.onEvent?.({
+      type: "tool:completed",
+      toolName: toolCall.toolName,
+      result: boundToolResult(result, maxToolResultChars),
+    });
+    this.messages.push({
+      role: "tool",
+      content: result,
+      toolCallId: toolCall.toolCallId,
+    });
+  }
+
+  private recordToolFailure(
+    error: unknown,
+    toolCall: ProviderToolCall,
+    toolSpan: ISpan,
+    signal: AbortSignal,
+  ): void {
+    toolSpan.recordException(error);
+    toolSpan.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    if (signal.aborted) {
+      throw new AgentCancelledError();
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    this.logger.error(`Tool "${toolCall.toolName}" failed`, {
+      toolName: toolCall.toolName,
+      ...describeError(error),
+    });
+    this.messages.push({
+      role: "tool",
+      content: `Error: ${errorMessage}`,
+      toolCallId: toolCall.toolCallId,
+    });
   }
 
   async resolveCapabilities(): Promise<CapabilityMatrix> {
@@ -637,6 +739,112 @@ export class Agent {
       messages: [...this.messages],
     };
   }
+}
+
+function buildAgentSystem(
+  instructions: string,
+  matrix: CapabilityMatrix,
+  llmTools: LLMToolDefinition[] | undefined,
+): string {
+  if (matrix.structuredOutputs || !llmTools || llmTools.length === 0) {
+    return instructions;
+  }
+  return (
+    instructions +
+    "\n\nYou must strictly adhere to the provided JSON schemas for any tools you invoke."
+  );
+}
+
+function buildAgentMessages(
+  messages: Message[],
+  maxToolResultChars: number,
+  vision: boolean,
+): Message[] {
+  const projected = projectToolResultsForModel(messages, maxToolResultChars);
+  if (vision) return projected;
+  return projected.map((message) => ({
+    ...message,
+    content: message.content.replace(/!\[.*?\]\(.*?\)/g, "[Image omitted due to model capability]"),
+  }));
+}
+
+function createStreamAccumulator(): StreamAccumulator {
+  return {
+    text: "",
+    reasoning: "",
+    toolCalls: new Map(),
+    totalDeltaBytes: 0,
+    finishReason: undefined,
+    usage: undefined,
+    streamStartedAt: Date.now(),
+    firstTokenAt: undefined,
+    finishedAt: undefined,
+    streamFailed: false,
+    streamFailure: undefined,
+  };
+}
+
+function buildStreamMetrics(state: StreamAccumulator): StreamPerformanceMetrics {
+  state.finishedAt ??= Date.now();
+  const outputTokens = state.usage?.outputTokens ?? Math.ceil(state.text.length / 4);
+  const durationMs = Math.max(0, state.finishedAt - state.streamStartedAt);
+  const generationMs =
+    state.firstTokenAt === undefined ? 0 : Math.max(0, state.finishedAt - state.firstTokenAt);
+  return {
+    ttftMs: state.firstTokenAt === undefined ? null : state.firstTokenAt - state.streamStartedAt,
+    tokensPerSecond:
+      state.firstTokenAt === undefined || outputTokens === 0
+        ? null
+        : outputTokens / Math.max(generationMs / 1_000, 0.001),
+    outputTokens,
+    durationMs,
+  };
+}
+
+function setStreamSpanAttributes(span: ISpan, metrics: StreamPerformanceMetrics): void {
+  span.setAttributes({
+    ...(metrics.ttftMs === null
+      ? {}
+      : { "gen_ai.performance.time_to_first_token_ms": metrics.ttftMs }),
+    ...(metrics.tokensPerSecond === null
+      ? {}
+      : { "gen_ai.performance.output_tokens_per_second": metrics.tokensPerSecond }),
+  });
+}
+
+function buildStreamResponse(state: StreamAccumulator, finishReason: LLMFinishReason): LLMResponse {
+  const toolCalls = parseStreamToolCalls(state.toolCalls);
+  return {
+    message: {
+      role: "assistant",
+      content: state.text,
+      ...(state.reasoning ? { reasoning: state.reasoning } : {}),
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    },
+    finishReason,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    ...(state.usage ? { usage: state.usage } : {}),
+  };
+}
+
+function parseStreamToolCalls(
+  toolCallsMap: Map<string, { name: string; argsText: string }>,
+): NonNullable<LLMResponse["toolCalls"]> {
+  return Array.from(toolCallsMap.entries()).map(([id, toolCall]) => {
+    try {
+      return { toolCallId: id, toolName: toolCall.name, args: JSON.parse(toolCall.argsText) };
+    } catch (error) {
+      throw new Error(
+        "Failed to parse tool call arguments for " +
+          toolCall.name +
+          " (" +
+          id +
+          "): " +
+          (error instanceof Error ? error.message : String(error)),
+        { cause: error },
+      );
+    }
+  });
 }
 
 function addStreamDeltaBytes(totalBytes: number, delta: string): number {
