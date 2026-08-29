@@ -2,7 +2,7 @@
   "name": "agent-harness",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "npm@10.9.2",
+  "packageManager": "pnpm@11.24.0",
   "workspaces": [
     "packages/*"
   ],

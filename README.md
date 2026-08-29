@@ -23,7 +23,7 @@ These steps get a fresh copy of the app running on your machine.
 
 ### 1. Prerequisites
 
-- **Node.js 18.18+** (20.x or newer recommended) and **npm 10+**
+- **Node.js 22+** and **pnpm 11+** through Corepack
 - An API key for an LLM provider (see [Using any LLM provider](#using-any-llm-provider))
 
 ### 2. Clone and install
@@ -31,7 +31,7 @@ These steps get a fresh copy of the app running on your machine.
 ```bash
 git clone https://github.com/<you>/agent-harness.git
 cd agent-harness
-npm install
+corepack pnpm install
 ```
 
 This installs all three workspace packages (`core`, `server`, `dashboard`).
@@ -57,7 +57,7 @@ PROVIDER_ENDPOINT=https://api.openai.com/v1
 ### 4. Start in development mode
 
 ```bash
-npm run dev
+corepack pnpm run dev
 ```
 
 This starts everything in parallel:
@@ -118,11 +118,11 @@ PROVIDER_ENDPOINT=http://localhost:11434/v1
 ## Production
 
 ```bash
-npm run build
-npm start
+corepack pnpm run build
+corepack pnpm start
 ```
 
-`npm run build` compiles all packages; `npm start` runs the built server (port `3001`) and dashboard (port `3000`).
+`corepack pnpm run build` compiles all packages; `corepack pnpm start` runs the built server (port `3001`) and dashboard (port `3000`).
 
 > The dashboard expects the API at `http://localhost:3001`. For other setups, override `NEXT_PUBLIC_API_URL` when building the dashboard.
 

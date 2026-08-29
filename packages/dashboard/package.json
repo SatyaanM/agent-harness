@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@agent-harness/core": "*",
+    "@agent-harness/core": "workspace:*",
     "@excalidraw/excalidraw": "^0.18.1",
     "@monaco-editor/react": "^4.x",
     "@radix-ui/react-context-menu": "^2.3.7",
