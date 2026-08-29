@@ -11,6 +11,18 @@ import { settingsRouter } from "./routes/settings.js";
 import { ttsRouter } from "./routes/tts.js";
 import { pluginsRouter } from "./routes/plugins.js";
 
+export function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunction) {
+  if (res.headersSent) {
+    console.error("[Server] Unhandled error after headers sent:", err.stack ?? err.message);
+    if (!res.writableEnded) {
+      res.end();
+    }
+    return;
+  }
+  console.error("[Server] Unhandled error:", err.stack ?? err.message);
+  res.status(500).json({ error: err.message || "Internal server error" });
+}
+
 export function createApp() {
   const app = express();
 
@@ -31,10 +43,7 @@ export function createApp() {
     res.json({ status: "ok" });
   });
 
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("[Server] Unhandled error:", err.stack ?? err.message);
-    res.status(500).json({ error: err.message || "Internal server error" });
-  });
+  app.use(errorHandler);
 
   return app;
 }
