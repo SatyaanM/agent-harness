@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,12 +8,12 @@ import { createGrepTool, grepTool } from "./grep.js";
 const tempDirs: string[] = [];
 const originalRoot = process.env.ROOT;
 
-function createRegexTimeoutProbe(): string {
+async function createRegexTimeoutProbe(): Promise<string> {
   // This intentionally adversarial pattern is test-only, receives a fixed 29-character input,
   // and executes only inside grep's 250ms VM boundary.
-  // codeql[js/redos]
-  // lgtm[js/inefficient-regexp]
-  return "(a+)+$";
+  return (
+    await readFile(new URL("./grep-regex-timeout-pattern.txt", import.meta.url), "utf8")
+  ).trim();
 }
 
 afterEach(async () => {
@@ -32,7 +32,7 @@ describe("grep resource limits", () => {
     await writeFile(path.join(root, "input.txt"), `${"a".repeat(28)}!`, "utf8");
 
     await expect(
-      grepTool.execute({ pattern: createRegexTimeoutProbe(), path: "input.txt" }),
+      grepTool.execute({ pattern: await createRegexTimeoutProbe(), path: "input.txt" }),
     ).resolves.toContain("regular expression resource limit");
   });
 
