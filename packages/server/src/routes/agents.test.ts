@@ -1,10 +1,12 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resetConfig } from "@agent-harness/core";
+import fs from "fs-extra";
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
+import { RATE_LIMIT_POLICIES } from "../http/rate-limit.js";
 
 const tempDirs: string[] = [];
 const originalRoot = process.env.ROOT;
@@ -18,6 +20,7 @@ async function appFixture() {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (originalRoot === undefined) delete process.env.ROOT;
   else process.env.ROOT = originalRoot;
   resetConfig();
@@ -25,23 +28,102 @@ afterEach(async () => {
 });
 
 describe("agent configuration routes", () => {
+  it("preserves the stable malformed JSON envelope on the protected create boundary", async () => {
+    const { app } = await appFixture();
+
+    const first = await request(app)
+      .post("/api/agents")
+      .set("Content-Type", "application/json")
+      .send('{"name":');
+
+    expect(first.status).toBe(400);
+    expect(first.body).toEqual({
+      error: { code: "invalid_json", message: "Request body contains malformed JSON" },
+    });
+
+    let exhausted = first;
+    for (let index = 1; index <= RATE_LIMIT_POLICIES.requestEnvelope.limit; index += 1) {
+      exhausted = await request(app)
+        .post("/api/agents")
+        .set("Content-Type", "application/json")
+        .send('{"name":');
+    }
+    expect(exhausted.status).toBe(429);
+    expect(exhausted.body).toEqual({
+      error: { code: "rate_limited", message: "Too many requests; retry later" },
+    });
+  });
+
+  it("preserves the stable oversized envelope on the protected create boundary", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-agent-routes-"));
+    tempDirs.push(root);
+    process.env.ROOT = root;
+    resetConfig();
+
+    const app = createApp({ jsonLimit: "1kb" });
+    const first = await request(app)
+      .post("/api/agents")
+      .send({ name: "oversized", model: "test-model", instructions: "x".repeat(2_000) });
+
+    expect(first.status).toBe(413);
+    expect(first.body).toEqual({
+      error: { code: "request_too_large", message: "Request body exceeds maximum size" },
+    });
+
+    let exhausted = first;
+    for (let index = 1; index <= RATE_LIMIT_POLICIES.requestEnvelope.limit; index += 1) {
+      exhausted = await request(app)
+        .post("/api/agents")
+        .send({ name: "oversized", model: "test-model", instructions: "x".repeat(2_000) });
+    }
+    expect(exhausted.status).toBe(429);
+    expect(exhausted.body).toEqual({
+      error: { code: "rate_limited", message: "Too many requests; retry later" },
+    });
+  });
+
+  it("returns the stable rate-limit envelope before an exhausted create route writes", async () => {
+    const { app, root } = await appFixture();
+    const requests = Array.from({ length: 31 }, (_, index) =>
+      request(app)
+        .post("/api/agents")
+        .send({ name: `limited-${index}`, model: "test-model", tools: [] }),
+    );
+
+    const responses = [];
+    for (const pending of requests) responses.push(await pending);
+
+    expect(responses.slice(0, 30).every((response) => response.status === 201)).toBe(true);
+    expect(responses[30]?.status).toBe(429);
+    expect(responses[30]?.body).toEqual({
+      error: { code: "rate_limited", message: "Too many requests; retry later" },
+    });
+    await expect(readFile(path.join(root, "agents", "limited-30.md"), "utf8")).rejects.toThrow();
+  });
+
   it("creates an agent with an empty tool list without leaving an invalid file", async () => {
     const { app, root } = await appFixture();
 
-    const created = await request(app).post("/api/agents").send({
-      name: "researcher",
-      model: "test-model",
-      tools: [],
-      maxSteps: 10,
-      instructions: "Research carefully.",
-      description: "Research specialist",
-    });
+    const created = await request(app)
+      .post("/api/agents")
+      .send({
+        name: "researcher",
+        model: "test-model",
+        tools: [],
+        maxSteps: 10,
+        instructions: "Research carefully.",
+        description: "Research specialist",
+        capabilities: { chat: true },
+        modelIdMapping: "mapped-test-model",
+      });
 
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({
       name: "researcher",
       tools: [],
       description: "Research specialist",
+      capabilities: { chat: true },
+      modelIdMapping: "mapped-test-model",
     });
     const listed = await request(app).get("/api/agents");
     expect(listed.status).toBe(200);
@@ -119,6 +201,40 @@ Updated instructions.
     await expect(readFile(path.join(root, "agents", "researcher.md"), "utf8")).resolves.toBe(
       source,
     );
+  });
+
+  it("rejects an agent source path retargeted after open", async () => {
+    const { app, root } = await appFixture();
+    await request(app).post("/api/agents").send({
+      name: "researcher",
+      model: "model",
+      tools: [],
+      maxSteps: 7,
+      instructions: "Original.",
+    });
+    const agentsLink = path.join(root, "agents");
+    const first = path.join(root, "first-agents");
+    const second = path.join(root, "second-agents");
+    await rename(agentsLink, first);
+    await mkdir(second);
+    await writeFile(
+      path.join(second, "researcher.md"),
+      "---\nname: researcher\nmodel: model\ntools: []\nmaxSteps: 7\n---\nSecond secret.",
+      "utf8",
+    );
+    await symlink(first, agentsLink, process.platform === "win32" ? "junction" : "dir");
+    const open = fs.promises.open.bind(fs.promises);
+    vi.spyOn(fs.promises, "open").mockImplementationOnce(async (filePath, flags, mode) => {
+      const handle = await open(filePath, flags, mode);
+      await rm(agentsLink);
+      await symlink(second, agentsLink, process.platform === "win32" ? "junction" : "dir");
+      return handle;
+    });
+
+    const response = await request(app).get("/api/agents/researcher/source");
+
+    expect(response.status).toBe(403);
+    expect(response.text).not.toContain("secret");
   });
 
   it("rejects raw source whose identity disagrees with the route", async () => {

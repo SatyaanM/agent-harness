@@ -1,7 +1,34 @@
 import type { ChunkerConfig } from "./types.js";
 
 const SENTENCE_ENDINGS = /[.!?;](?:\s|$)|(?:\r?\n)+/g;
-const TAG_PATTERN = /\[([^\]]+)\]/g;
+
+function stripBracketTags(text: string): string {
+  const visibleParts: string[] = [];
+  let visibleStart = 0;
+  let tagStart = -1;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "[" && tagStart === -1) {
+      tagStart = index;
+      continue;
+    }
+    if (character !== "]" || tagStart === -1) continue;
+
+    if (index === tagStart + 1) {
+      // The previous expression required at least one character inside a tag.
+      tagStart = -1;
+      continue;
+    }
+
+    visibleParts.push(text.slice(visibleStart, tagStart));
+    visibleStart = index + 1;
+    tagStart = -1;
+  }
+
+  visibleParts.push(text.slice(visibleStart));
+  return visibleParts.join("");
+}
 
 export interface SpeechChunker {
   addToken(token: string): string[];
@@ -18,7 +45,7 @@ export function createSpeechChunker(config: ChunkerConfig): SpeechChunker {
   }
 
   function hasMinimumContent(text: string): boolean {
-    const strippedTags = text.replace(TAG_PATTERN, "").trim();
+    const strippedTags = stripBracketTags(text).trim();
     return strippedTags.length >= config.minChars || countSentences(text) >= config.minSentences;
   }
 

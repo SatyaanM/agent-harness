@@ -140,29 +140,30 @@ export function checkSecrets(rootDir, stagedOnly = false) {
   const absoluteRoot = path.resolve(rootDir);
 
   if (stagedOnly) {
-    const result = spawnSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMR"], {
-      cwd: absoluteRoot,
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      "git",
+      ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"],
+      {
+        cwd: absoluteRoot,
+        encoding: "utf8",
+      },
+    );
     if (result.error || result.status !== 0) {
       return scanDirectory(absoluteRoot);
     }
     const stagedFiles = result.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !IGNORED_FILES.has(path.basename(line)));
+      .split("\0")
+      .filter((file) => file.length > 0 && !IGNORED_FILES.has(path.basename(file)));
 
     const findings = [];
     for (const relative of stagedFiles) {
-      const fullPath = path.join(absoluteRoot, relative);
-      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-        try {
-          const content = fs.readFileSync(fullPath, "utf8");
-          findings.push(...scanContent(relative, content));
-        } catch {
-          // Skip binary or unreadable files
-        }
-      }
+      const blob = spawnSync("git", ["cat-file", "blob", `:${relative}`], {
+        cwd: absoluteRoot,
+        encoding: "utf8",
+        maxBuffer: Number.MAX_SAFE_INTEGER,
+      });
+      if (blob.error || blob.status !== 0) continue;
+      findings.push(...scanContent(relative, blob.stdout));
     }
     return findings;
   }

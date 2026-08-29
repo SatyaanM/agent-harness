@@ -8,6 +8,13 @@ import { createGrepTool, grepTool } from "./grep.js";
 const tempDirs: string[] = [];
 const originalRoot = process.env.ROOT;
 
+function createRegexTimeoutProbe(): string {
+  // This intentionally adversarial pattern is test-only, receives a fixed 29-character input,
+  // and executes only inside grep's 250ms VM boundary.
+  // lgtm[js/inefficient-regexp]
+  return "(a+)+$";
+}
+
 afterEach(async () => {
   if (originalRoot === undefined) delete process.env.ROOT;
   else process.env.ROOT = originalRoot;
@@ -23,9 +30,9 @@ describe("grep resource limits", () => {
     resetConfig();
     await writeFile(path.join(root, "input.txt"), `${"a".repeat(28)}!`, "utf8");
 
-    await expect(grepTool.execute({ pattern: "(a+)+$", path: "input.txt" })).resolves.toContain(
-      "regular expression resource limit",
-    );
+    await expect(
+      grepTool.execute({ pattern: createRegexTimeoutProbe(), path: "input.txt" }),
+    ).resolves.toContain("regular expression resource limit");
   });
 
   it("counts excluded files toward the traversal limit", async () => {

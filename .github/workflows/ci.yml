@@ -14,14 +14,19 @@ concurrency:
 
 jobs:
   verify:
+    name: Required repository gates (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
       - run: corepack enable
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -31,6 +36,7 @@ jobs:
       - run: corepack pnpm run check:ci
 
   fullstack:
+    name: Required full-stack gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

@@ -48,4 +48,7 @@ jobs:
           target: "http://localhost:3001"
           network_name: "host"
           issue_title: "OWASP ZAP Baseline Security Alert"
-          fail_action: false
+          # ZAP WARN results remain visible for issue-based triage. FAIL results
+          # (including High alerts) fail this check and cannot be silently accepted.
+          cmd_options: "-I"
+          fail_action: true
