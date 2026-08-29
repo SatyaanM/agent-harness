@@ -9,6 +9,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "doctor": "node scripts/doctor.mjs",
     "start": "turbo run start",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck"
