@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useSessionStore } from '@/stores/session-store';
 import { useRuntimeStore } from '@/stores/runtime-store';
 import { useRosterStore } from '@/stores/agent-roster-store';
@@ -48,43 +48,65 @@ export default function RuntimeSync() {
   const sessions = useSessionStore((s) => s.sessions);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const hydrated = useRef(false);
+  const hydrating = useRef(false);
+  const pendingSync = useRef(false);
+
+  const hydrateOpenSessions = useCallback(async (signal?: { cancelled: boolean }) => {
+    if (hydrating.current) return;
+    hydrating.current = true;
+    try {
+      const open = await fetchOpenSessions();
+      const restored = (
+        await Promise.all(
+          open.openSessionIds.map((id) => fetchSession(id).catch(() => null))
+        )
+      ).filter((s): s is NonNullable<typeof s> => s !== null);
+      if (signal?.cancelled) return;
+
+      useSessionStore.getState().hydrate(restored);
+      const openIds = new Set(open.openSessionIds);
+      const validActive =
+        open.activeSessionId !== null && openIds.has(open.activeSessionId);
+      const active = validActive
+        ? open.activeSessionId
+        : restored[0]?.sessionId ?? null;
+      if (active) useSessionStore.getState().setActiveSession(active);
+
+      hydrated.current = true;
+
+      // If the registry-sync effect ran while hydration was in flight, replay the latest snapshot now
+      if (pendingSync.current) {
+        pendingSync.current = false;
+        const current = useSessionStore.getState();
+        await updateOpenSessions({
+          activeSessionId: current.activeSessionId,
+          openSessionIds: current.sessions.map((s) => s.sessionId),
+        }).catch((err) => console.error('[RuntimeSync] registry sync failed:', err));
+      }
+    } catch (err) {
+      console.error('[RuntimeSync] hydration failed:', err);
+      // Keep hydrated.current = false so an error does not publish empty client state to server
+    } finally {
+      hydrating.current = false;
+    }
+  }, []);
 
   // Boot hydration: restore the recorded open set as tabs, history only
   // (ADR §12.3 — no runtime loads, no token spend).
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const open = await fetchOpenSessions();
-        const restored = (
-          await Promise.all(
-            open.openSessionIds.map((id) => fetchSession(id).catch(() => null))
-          )
-        ).filter((s): s is NonNullable<typeof s> => s !== null);
-        if (cancelled) return;
-
-        useSessionStore.getState().hydrate(restored);
-        const openIds = new Set(open.openSessionIds);
-        const validActive =
-          open.activeSessionId !== null && openIds.has(open.activeSessionId);
-        const active = validActive
-          ? open.activeSessionId
-          : restored[0]?.sessionId ?? null;
-        if (active) useSessionStore.getState().setActiveSession(active);
-      } catch (err) {
-        console.error('[RuntimeSync] hydration failed:', err);
-      } finally {
-        hydrated.current = true;
-      }
-    })();
+    const signal = { cancelled: false };
+    void hydrateOpenSessions(signal);
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
     };
-  }, []);
+  }, [hydrateOpenSessions]);
 
   // Registry sync: the dashboard is the single writer of the open set (ADR §12.1).
   useEffect(() => {
-    if (!hydrated.current) return;
+    if (!hydrated.current) {
+      pendingSync.current = true;
+      return;
+    }
     updateOpenSessions({
       activeSessionId,
       openSessionIds: sessions.map((s) => s.sessionId),
