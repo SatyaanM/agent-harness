@@ -78,6 +78,27 @@ async function authorizeCreatable(filePath: string, root: string, res: Response)
   }
 }
 
+async function resolveMoveDestination(
+  toDir: string,
+  rootResolved: string,
+  res: Response,
+): Promise<string | undefined> {
+  if (!toDir) return rootResolved;
+
+  const toPath = path.resolve(rootResolved, toDir);
+  if (toPath !== rootResolved && !toPath.startsWith(rootResolved + path.sep)) {
+    res.status(403).json({ error: "Invalid destination path" });
+    return undefined;
+  }
+  const toStat = await fs.stat(toPath).catch(() => null);
+  if (!toStat?.isDirectory()) {
+    res.status(400).json({ error: "Destination is not a directory" });
+    return undefined;
+  }
+  if (!(await authorizeExisting(toPath, rootResolved, res))) return undefined;
+  return toPath;
+}
+
 function rejectOversizedFile(size: number, res: Response): boolean {
   if (size <= MAX_INBOX_FILE_BYTES) return false;
   res.status(413).json({ error: "Inbox item exceeds maximum size (10 MB)" });
@@ -287,22 +308,8 @@ export function createInboxRouter(limiters: RouteLimiters = createRouteLimiters(
       }
       if (!(await authorizeExisting(fromPath, rootResolved, res))) return;
 
-      let toPath: string;
-      if (toDir) {
-        toPath = path.resolve(rootResolved, toDir);
-        if (toPath !== rootResolved && !toPath.startsWith(rootResolved + path.sep)) {
-          res.status(403).json({ error: "Invalid destination path" });
-          return;
-        }
-        const toStat = await fs.stat(toPath).catch(() => null);
-        if (!toStat?.isDirectory()) {
-          res.status(400).json({ error: "Destination is not a directory" });
-          return;
-        }
-        if (!(await authorizeExisting(toPath, rootResolved, res))) return;
-      } else {
-        toPath = rootResolved;
-      }
+      const toPath = await resolveMoveDestination(toDir, rootResolved, res);
+      if (!toPath) return;
 
       const base = path.basename(fromPath);
       const destPath = path.join(toPath, base);

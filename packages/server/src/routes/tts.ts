@@ -42,6 +42,58 @@ const ParaphraseResponseSchema = z.object({
     .optional(),
 });
 
+async function paraphraseText(
+  text: string,
+  providerApiKey: string | undefined,
+  config: ReturnType<typeof getConfig>,
+  promptOptions: {
+    persona: string;
+    emotiveTags: boolean;
+    tagStyle: string;
+    customTagInstructions: string;
+  },
+  signal: AbortSignal,
+): Promise<string> {
+  if (!providerApiKey) return text;
+
+  try {
+    const endpoint = `${config.PROVIDER_ENDPOINT.replace(/\/$/u, "")}/chat/completions`;
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${providerApiKey}`,
+      },
+      body: JSON.stringify({
+        model: "mimo-v2.5",
+        messages: [{ role: "user", content: buildParaphrasePrompt(text, promptOptions) }],
+        temperature: 0.7,
+      }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+    });
+
+    if (!response.ok) {
+      await response.body?.cancel();
+      return text;
+    }
+
+    const result = await parseJsonResponseBoundary(
+      response,
+      ParaphraseResponseSchema,
+      "TTS paraphrase response",
+      1_000_000,
+    );
+    const message = result.choices?.[0]?.message;
+    return message?.content || message?.reasoning || message?.reasoning_content || text;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    logger.warn("Optional paraphrase failed; using original text", {
+      ...describeError(error),
+    });
+    return text;
+  }
+}
+
 ttsRouter.post(
   "/",
   asyncHandler(async (req, res) => {
@@ -68,53 +120,18 @@ ttsRouter.post(
 
     try {
       // Step 1: Paraphrase with MiMo-V2.5
-      const paraphrasePrompt = buildParaphrasePrompt(text, {
-        persona: persona ?? "",
-        emotiveTags: emotiveTags ?? true,
-        tagStyle: tagStyle ?? "balanced",
-        customTagInstructions: customTagInstructions ?? "",
-      });
-
-      let paraphrasedText = text; // fallback to original
-
-      if (providerApiKey) {
-        try {
-          const endpoint = `${config.PROVIDER_ENDPOINT.replace(/\/$/u, "")}/chat/completions`;
-          const paraphraseResponse = await fetch(endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${providerApiKey}`,
-            },
-            body: JSON.stringify({
-              model: "mimo-v2.5",
-              messages: [{ role: "user", content: paraphrasePrompt }],
-              temperature: 0.7,
-            }),
-            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
-          });
-
-          if (paraphraseResponse.ok) {
-            const result = await parseJsonResponseBoundary(
-              paraphraseResponse,
-              ParaphraseResponseSchema,
-              "TTS paraphrase response",
-              1_000_000,
-            );
-            const message = result.choices?.[0]?.message;
-            const content =
-              message?.content || message?.reasoning || message?.reasoning_content || "";
-            if (content) paraphrasedText = content;
-          } else {
-            await paraphraseResponse.body?.cancel();
-          }
-        } catch (error) {
-          if (controller.signal.aborted) throw error;
-          logger.warn("Optional paraphrase failed; using original text", {
-            ...describeError(error),
-          });
-        }
-      }
+      const paraphrasedText = await paraphraseText(
+        text,
+        providerApiKey,
+        config,
+        {
+          persona: persona ?? "",
+          emotiveTags: emotiveTags ?? true,
+          tagStyle: tagStyle ?? "balanced",
+          customTagInstructions: customTagInstructions ?? "",
+        },
+        controller.signal,
+      );
 
       // Step 2: Synthesize with Gemini TTS
       const ttsConfig: TTSConfig = {

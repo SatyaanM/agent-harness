@@ -5,7 +5,7 @@ import { z } from "zod";
 import { getConfig } from "../config.js";
 import { readUtf8FileBounded } from "../filesystem/bounded-io.js";
 import { isRecord, parseBoundary } from "../validation.js";
-import type { Tool } from "./types.js";
+import type { Tool, ToolExecutionContext } from "./types.js";
 import {
   assertExistingPathWithinRoot,
   assertWithinRoot,
@@ -28,6 +28,8 @@ const GrepParams = z
     include: z.array(z.string().min(1).max(128)).max(128).optional(),
   })
   .strict();
+
+type GrepInput = z.infer<typeof GrepParams>;
 
 interface Match {
   file: string;
@@ -119,11 +121,91 @@ async function* walkDir(dir: string): AsyncGenerator<string> {
   }
 }
 
+async function* singleFile(filePath: string): AsyncGenerator<string> {
+  yield filePath;
+}
+
 function matchesInclude(filename: string, include: string[]): boolean {
   return include.some((ext) => {
     const pattern = ext.startsWith(".") ? ext : `.${ext}`;
     return filename.endsWith(pattern);
   });
+}
+
+interface GrepScanResult {
+  results: Match[];
+  bytesRead: number;
+  filesScanned: number;
+  truncated: boolean;
+}
+
+async function scanFiles(
+  files: AsyncGenerator<string>,
+  args: GrepInput,
+  context: ToolExecutionContext | undefined,
+  root: string,
+  maxFiles: number,
+): Promise<GrepScanResult | string> {
+  const results: Match[] = [];
+  let bytesRead = 0;
+  let filesScanned = 0;
+  let truncated = false;
+
+  for await (const file of files) {
+    if (context?.signal.aborted) return "[error] Search cancelled.";
+    if (filesScanned >= maxFiles || bytesRead >= MAX_GREP_TOTAL_BYTES) {
+      truncated = true;
+      break;
+    }
+    filesScanned += 1;
+    if (args.include && !matchesInclude(file, args.include)) continue;
+
+    let searched: Awaited<ReturnType<typeof searchFile>>;
+    try {
+      searched = await searchFile(
+        file,
+        args.pattern,
+        root,
+        MAX_GREP_RESULTS - results.length,
+        MAX_GREP_TOTAL_BYTES - bytesRead,
+      );
+    } catch (error) {
+      if (error instanceof GrepRegexResourceError) {
+        return `[error] Grep regular expression resource limit exceeded (${MAX_REGEX_FILE_MS}ms per file).`;
+      }
+      if (error instanceof SyntaxError) {
+        return `[error] Invalid regular expression: ${error.message}`;
+      }
+      throw error;
+    }
+    bytesRead += searched.bytesRead;
+    results.push(...searched.matches);
+    if (results.length >= MAX_GREP_RESULTS) {
+      truncated = true;
+      break;
+    }
+  }
+
+  return { results, bytesRead, filesScanned, truncated };
+}
+
+function formatGrepResults(scan: GrepScanResult, maxFiles: number): string {
+  if (scan.results.length === 0) {
+    return scan.truncated
+      ? "No matches found.\n[truncated: grep resource limit reached]"
+      : "No matches found.";
+  }
+
+  const output = scan.results.map((match) => `${match.file}:${match.line}: ${match.text}`);
+  if (
+    scan.results.length >= MAX_GREP_RESULTS ||
+    scan.truncated ||
+    scan.filesScanned >= maxFiles ||
+    scan.bytesRead >= MAX_GREP_TOTAL_BYTES
+  ) {
+    output.push("[truncated: grep resource limit reached]");
+  }
+  return output.join("\n");
 }
 
 export function createGrepTool(options?: { maxFiles?: number }): Tool<typeof GrepParams> {
@@ -139,18 +221,10 @@ export function createGrepTool(options?: { maxFiles?: number }): Tool<typeof Gre
       const searchPath = args.path ? path.resolve(root, args.path) : root;
       assertWithinRoot(searchPath, root);
 
-      try {
-        new RegExp(args.pattern, GREP_FLAGS);
-      } catch (error) {
-        return `[error] Invalid regular expression: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+      const invalidPattern = validatePattern(args.pattern);
+      if (invalidPattern) {
+        return invalidPattern;
       }
-
-      const results: Match[] = [];
-      let bytesRead = 0;
-      let filesScanned = 0;
-      let truncated = false;
 
       const stat = await fs.stat(searchPath).catch(() => null);
       if (!stat) {
@@ -159,62 +233,22 @@ export function createGrepTool(options?: { maxFiles?: number }): Tool<typeof Gre
       await assertExistingPathWithinRoot(searchPath, root);
 
       const files = stat.isDirectory() ? walkDir(searchPath) : singleFile(searchPath);
-      for await (const file of files) {
-        if (context?.signal.aborted) return "[error] Search cancelled.";
-        if (filesScanned >= maxFiles || bytesRead >= MAX_GREP_TOTAL_BYTES) {
-          truncated = true;
-          break;
-        }
-        filesScanned += 1;
-        if (args.include && !matchesInclude(file, args.include)) continue;
-        let searched: Awaited<ReturnType<typeof searchFile>>;
-        try {
-          searched = await searchFile(
-            file,
-            args.pattern,
-            root,
-            MAX_GREP_RESULTS - results.length,
-            MAX_GREP_TOTAL_BYTES - bytesRead,
-          );
-        } catch (error) {
-          if (error instanceof GrepRegexResourceError) {
-            return `[error] Grep regular expression resource limit exceeded (${MAX_REGEX_FILE_MS}ms per file).`;
-          }
-          if (error instanceof SyntaxError) {
-            return `[error] Invalid regular expression: ${error.message}`;
-          }
-          throw error;
-        }
-        bytesRead += searched.bytesRead;
-        results.push(...searched.matches);
-        if (results.length >= MAX_GREP_RESULTS) {
-          truncated = true;
-          break;
-        }
-      }
-
-      async function* singleFile(filePath: string): AsyncGenerator<string> {
-        yield filePath;
-      }
-
-      if (results.length === 0) {
-        return truncated
-          ? "No matches found.\n[truncated: grep resource limit reached]"
-          : "No matches found.";
-      }
-
-      const output = results.map((match) => `${match.file}:${match.line}: ${match.text}`);
-      if (
-        results.length >= MAX_GREP_RESULTS ||
-        truncated ||
-        filesScanned >= maxFiles ||
-        bytesRead >= MAX_GREP_TOTAL_BYTES
-      ) {
-        output.push("[truncated: grep resource limit reached]");
-      }
-      return output.join("\n");
+      const scan = await scanFiles(files, args, context, root, maxFiles);
+      if (typeof scan === "string") return scan;
+      return formatGrepResults(scan, maxFiles);
     },
   };
+}
+
+function validatePattern(pattern: string): string | undefined {
+  try {
+    new RegExp(pattern, GREP_FLAGS);
+    return undefined;
+  } catch (error) {
+    return `[error] Invalid regular expression: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+  }
 }
 
 export const grepTool = createGrepTool();
