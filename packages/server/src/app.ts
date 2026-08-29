@@ -8,9 +8,10 @@ import cors from "cors";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import helmet from "helmet";
-import { agentsRouter } from "./routes/agents.js";
+import { createRouteLimiters } from "./http/rate-limit.js";
+import { createAgentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
-import inboxRouter from "./routes/inbox.js";
+import { createInboxRouter } from "./routes/inbox.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { pluginsRouter } from "./routes/plugins.js";
 import { sessionsRouter } from "./routes/sessions.js";
@@ -27,6 +28,7 @@ export function createApp(options?: {
   inboxJsonLimit?: string | number;
 }): express.Express {
   const app = express();
+  const routeLimiters = createRouteLimiters();
   const allowedOrigins = new Set(options?.allowedOrigins ?? parseServerConfig().allowedOrigins);
 
   app.use(helmet());
@@ -37,16 +39,20 @@ export function createApp(options?: {
       },
     }),
   );
+  // The ingress envelope limiter intentionally runs before body parsing. Valid
+  // requests also consume their narrower route-class quota inside each router.
   app.use(
     "/api/inbox",
+    routeLimiters.requestEnvelope,
     express.json({ limit: options?.inboxJsonLimit ?? MAX_INBOX_FILE_REQUEST_BYTES }),
-    inboxRouter,
+    createInboxRouter(routeLimiters),
   );
+  app.use("/api/agents", routeLimiters.requestEnvelope);
   app.use(express.json({ limit: options?.jsonLimit ?? "12mb" }));
 
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/chat", chatRouter);
-  app.use("/api/agents", agentsRouter);
+  app.use("/api/agents", createAgentsRouter(routeLimiters));
   app.use("/api/workers", workersRouter);
   app.use("/api/settings", createSettingsRouter());
   app.use("/api/tts", ttsRouter);

@@ -15,12 +15,16 @@ const AgentFrontmatterSchema = AgentConfigSchema.omit({ instructions: true }).ex
 
 export function loadAgentConfig(filePath: string): AgentConfig {
   const raw = readUtf8FileBoundedSync(filePath, MAX_AGENT_CONFIG_BYTES, "agent config file");
+  return parseAgentConfigSource(raw, filePath);
+}
+
+export function parseAgentConfigSource(raw: string, sourceName: string): AgentConfig {
   const { data: frontmatter, content } = matter(raw);
 
   const parsed = parseBoundary(
     AgentFrontmatterSchema,
     frontmatter,
-    `agent frontmatter ${filePath}`,
+    `agent frontmatter ${sourceName}`,
   );
 
   return parseBoundary(
@@ -45,7 +49,7 @@ export function loadAgentConfig(filePath: string): AgentConfig {
       compactionKeepRecentMessages: parsed.compactionKeepRecentMessages,
       compactionChunkMessages: parsed.compactionChunkMessages,
     },
-    `agent configuration ${filePath}`,
+    `agent configuration ${sourceName}`,
   );
 }
 

@@ -105,6 +105,7 @@ export * from "./crypto/canonical-json.js";
 export * from "./crypto/redaction.js";
 export {
   readFileBounded,
+  readFileHandleBounded,
   readUtf8FileBounded,
   readUtf8FileBoundedSync,
   stringifyJsonBounded,
@@ -119,7 +120,11 @@ export type {
 export { LLMResponseSchema, LLMUsageSchema } from "./llm/client.js";
 export { createVercelAILLMClient } from "./llm/vercel-ai.js";
 export { CapabilityCache } from "./persistence/capability-cache.js";
-export { loadAgentConfig, loadAllAgentConfigs } from "./persistence/config-loader.js";
+export {
+  loadAgentConfig,
+  loadAllAgentConfigs,
+  parseAgentConfigSource,
+} from "./persistence/config-loader.js";
 export type { CompactionRange, PendingMessage, SessionData } from "./persistence/session.js";
 export {
   CompactionRangeSchema,

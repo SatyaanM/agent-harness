@@ -32,6 +32,24 @@ describe("SpeechChunker", () => {
     expect(chunks1).toEqual(["[whispering: Wait... Don't go!] Are you sure,..."]);
   });
 
+  it("handles a long unmatched tag prefix in bounded time", () => {
+    const chunker = createSpeechChunker({ minChars: 10, minSentences: 1 });
+    const input = "[".repeat(50_000);
+    const startedAt = performance.now();
+
+    expect(chunker.addToken(input)).toEqual([]);
+    expect(performance.now() - startedAt).toBeLessThan(750);
+    expect(chunker.flush()).toBe(input);
+  });
+
+  it("preserves chunking around a long valid emotive tag", () => {
+    const chunker = createSpeechChunker({ minChars: 10, minSentences: 1 });
+    const tag = `[${"quietly ".repeat(10_000)}]`;
+
+    expect(chunker.addToken(`${tag} Ready now. Next`)).toEqual([`${tag} Ready now,...`]);
+    expect(chunker.flush()).toBe("Next");
+  });
+
   it("splits on newlines", () => {
     const chunker = createSpeechChunker({ minChars: 5, minSentences: 1 });
 

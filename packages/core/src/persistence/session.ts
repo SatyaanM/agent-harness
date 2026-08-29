@@ -102,7 +102,7 @@ class TranscriptState {
 
   save(snapshot: SessionData): Promise<string> {
     const transcript = { ...parseBoundary(SessionDataSchema, snapshot, "session save") };
-    delete transcript.mailbox;
+    transcript.mailbox = undefined;
     this.latest = transcript;
     return new Promise<string>((resolve, reject) => {
       this.queue.push({ kind: "write", snapshot: transcript, resolve, reject });

@@ -3,7 +3,7 @@ import type { CapabilityRegistry } from "../capability/registry.js";
 import { describeError } from "../contracts/errors.js";
 import { createLogger, type Logger } from "../contracts/logging.js";
 import { type PendingMessage, PendingMessageSchema } from "../contracts/session.js";
-import { getTracer, SpanStatusCode } from "../contracts/tracing.js";
+import { getTracer, type ISpan, SpanStatusCode } from "../contracts/tracing.js";
 
 import type { LLMClient, LLMUsage } from "../llm/client.js";
 import type { SessionData } from "../persistence/session.js";
@@ -16,7 +16,7 @@ import type { ISqliteDatabase } from "../persistence/sqlite/types.js";
 import type { ExecutionLimiter } from "../runtime/execution-limiter.js";
 import type { ToolRegistry } from "../tool/types.js";
 import { isRecord, parseJsonBoundary } from "../validation.js";
-import { Agent, type StreamPerformanceMetrics } from "./agent.js";
+import { Agent, type AgentEventCallback, type StreamPerformanceMetrics } from "./agent.js";
 import { CompactionResponseError, Compactor, estimateMessagesTokens } from "./compactor.js";
 import {
   AgentBudgetExceededError,
@@ -146,6 +146,55 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_KEEP_RECENT_MESSAGES = 8;
 const DEFAULT_COMPACTION_CHUNK_MESSAGES = 50;
 
+interface RunRequestContext {
+  message?: string;
+  agentName?: string;
+  signal?: AbortSignal;
+  replayExistingUser: boolean;
+  requestId?: string;
+  deliveryId?: string;
+  runId: string;
+  correlation: RunCorrelation;
+  logger: Logger;
+  deliverSpan: ISpan;
+}
+
+interface PreparedRun {
+  session: SessionData;
+  now: string;
+  baseHistory: Message[];
+  deliveredSystem: Message[];
+}
+
+interface ActiveRunState {
+  session: SessionData;
+  now: string;
+  baseHistory: Message[];
+  deliveredSystem: Message[];
+  modelHistory: Message[];
+  modelHistoryLength: number;
+  hasMessage: boolean;
+  agentConfig: AgentConfig;
+  latestRunMessages?: Message[];
+  streamMetrics: StreamPerformanceMetrics[];
+  compactionTokenUsage?: LLMUsage;
+}
+
+interface DatabaseRepositories {
+  db: ISqliteDatabase;
+  sessionRepo: SessionRepository;
+  messageRepo: MessageRepository;
+  runRepo: RunRepository;
+  mailboxRepo: MailboxRepository;
+}
+
+type MailboxEventRow = ReturnType<MailboxRepository["peekPending"]>[number];
+
+interface ParsedMailboxEvent {
+  event: MailboxEventRow;
+  message: PendingMessage;
+}
+
 export class SessionRuntime {
   private queue: Promise<unknown> = Promise.resolve();
   private listeners = new Set<(event: SessionRuntimeEvent) => void>();
@@ -252,12 +301,9 @@ export class SessionRuntime {
       };
     }
 
-    // A fresh run identity per execution attempt. It is ephemeral correlation
-    // context for logs and WebSocket events, not a durable transcript field.
     const runId = uuidv4();
     const correlation: RunCorrelation = { runId, requestId };
     const logger = this.logger.child({ runId, ...(requestId ? { requestId } : {}) });
-
     const tracer = getTracer();
     const deliverSpan = tracer.startSpan("session.deliver", {
       attributes: {
@@ -269,467 +315,511 @@ export class SessionRuntime {
       },
     });
 
-    return tracer.withSpan(deliverSpan, async () => {
-      try {
-        const now = new Date().toISOString();
+    return tracer.withSpan(deliverSpan, () =>
+      this.executeRun({
+        message,
+        agentName,
+        signal,
+        replayExistingUser,
+        requestId,
+        deliveryId,
+        runId,
+        correlation,
+        logger,
+        deliverSpan,
+      }),
+    );
+  }
 
-        let session: SessionData | null = null;
-        if (this.sessionStore) {
-          session = await this.sessionStore.load(this.options.sessionId);
-        }
-
-        if (!session) {
-          session = {
-            sessionId: this.options.sessionId,
-            taskId: uuidv4(),
-            prompt: message ?? "",
-            agentName: agentName ?? "orchestrator",
-            messages: [],
-            mailbox: [],
-            createdAt: now,
-          };
-        }
-        if (agentName) session.agentName = agentName;
-        if (message) session.prompt = message;
-
-        const persistedHistory = [...session.messages];
-        let replayedUserIndex = -1;
-        if (deliveryId) {
-          for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
-            const candidate = persistedHistory[index];
-            if (candidate?.role === "user" && candidate.deliveryId === deliveryId) {
-              if (candidate.content !== message) {
-                throw new Error("Delivery identity does not match the durable user message");
-              }
-              if (!replayExistingUser) {
-                throw new Error("Delivery identity is already durable; retry is required");
-              }
-              replayedUserIndex = index;
-              break;
-            }
-          }
-        } else if (replayExistingUser) {
-          // Compatibility for legacy clients that predate delivery identity.
-          // Only the latest durable user can be replayed by content.
-          for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
-            const candidate = persistedHistory[index];
-            if (candidate?.role !== "user") continue;
-            if (candidate.content === message) replayedUserIndex = index;
-            break;
-          }
-        }
-        const isReplayingUser = replayedUserIndex !== -1;
-
-        // History handed to the agent = the loaded transcript + the delivered
-        // mailbox completions. The new user prompt is NOT included: agent.run
-        // re-adds it as the prompt itself, so it must be the last thing the model
-        // sees. A retry removes the already-durable copy only from model context;
-        // the persisted transcript keeps that single audit record.
-        const baseHistory =
-          replayedUserIndex === -1
-            ? persistedHistory
-            : [
-                ...persistedHistory.slice(0, replayedUserIndex),
-                ...persistedHistory.slice(replayedUserIndex + 1),
-              ];
-
-        // Transactional Mailbox Drain Protocol
-        let pending: PendingMessage[] = [];
-        if (this.db && this.mailboxRepo && this.sessionRepo && this.messageRepo && this.runRepo) {
-          const db = this.db;
-          const mailboxRepo = this.mailboxRepo;
-          const sessionRepo = this.sessionRepo;
-          const messageRepo = this.messageRepo;
-          const runRepo = this.runRepo;
-
-          const drainSpan = tracer.startSpan("session.mailbox_drain", {
-            attributes: {
-              "agent.session_id": this.options.sessionId,
-            },
-          });
-
-          try {
-            db.immediateTransaction(() => {
-              // 1. Ensure session row exists in SQLite
-              const existingSession = sessionRepo.get(this.options.sessionId);
-              if (!existingSession) {
-                sessionRepo.create({
-                  id: this.options.sessionId,
-                  agentName: session?.agentName ?? "orchestrator",
-                  prompt: message ?? "",
-                  createdAt: Date.now(),
-                });
-              }
-
-              // 2. Peek pending mailbox events from SQLite
-              const pendingEvents = mailboxRepo.peekPending(this.options.sessionId);
-              drainSpan.setAttribute("agent.mailbox.pending_count", pendingEvents.length);
-              const parsedPendingEvents: {
-                evt: (typeof pendingEvents)[0];
-                parsed: PendingMessage;
-              }[] = [];
-              for (const evt of pendingEvents) {
-                const parsed = parseJsonBoundary(
-                  PendingMessageSchema,
-                  evt.payload,
-                  `mailbox_event ${evt.id}`,
-                );
-                parsedPendingEvents.push({ evt, parsed });
-              }
-              pending = parsedPendingEvents.map((p) => p.parsed);
-
-              // 3. Materialize system messages and acknowledge mailbox events atomically
-              const existingTaskIds = new Set(
-                baseHistory.flatMap((existing) => {
-                  if (!isRecord(existing.meta) || existing.meta.kind !== "worker_completed")
-                    return [];
-                  return typeof existing.meta.taskId === "string" ? [existing.meta.taskId] : [];
-                }),
-              );
-
-              for (const { evt, parsed } of parsedPendingEvents) {
-                if (!existingTaskIds.has(parsed.taskId)) {
-                  const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
-                  messageRepo.create({
-                    sessionId: this.options.sessionId,
-                    role: "system",
-                    content:
-                      `Worker "${parsed.agentName}" (task ${parsed.taskId}) ` +
-                      `${
-                        parsed.status === "done"
-                          ? "completed with the result below"
-                          : parsed.status === "cancelled"
-                            ? "was cancelled by the user"
-                            : "failed with the error below"
-                      }. ` +
-                      `${parsed.summary}\n\n` +
-                      `This is the final result of the task you delegated. Present it to the user. Do not delegate this task again.`,
-                    sequenceNum: nextSeq,
-                    createdAt: Date.now(),
-                    metadata: {
-                      meta: {
-                        kind: "worker_completed",
-                        taskId: parsed.taskId,
-                        agentName: parsed.agentName,
-                        status: parsed.status,
-                        summary: parsed.summary,
-                      },
-                    },
-                  });
-                  existingTaskIds.add(parsed.taskId);
-                }
-                mailboxRepo.acknowledge(evt.id);
-              }
-
-              // 4. Insert user message into SQLite messages table if present and not replayed
-              if (message && !isReplayingUser) {
-                const existingDelivery = deliveryId ? messageRepo.get(deliveryId) : undefined;
-                if (existingDelivery) {
-                  if (
-                    existingDelivery.session_id !== this.options.sessionId ||
-                    existingDelivery.role !== "user" ||
-                    existingDelivery.content !== message
-                  ) {
-                    throw new Error("Delivery identity conflicts with an existing durable message");
-                  }
-                  if (!replayExistingUser) {
-                    throw new Error("Delivery identity is already durable; retry is required");
-                  }
-                } else {
-                  const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
-                  messageRepo.create({
-                    ...(deliveryId ? { id: deliveryId } : {}),
-                    sessionId: this.options.sessionId,
-                    role: "user",
-                    content: message,
-                    sequenceNum: nextSeq,
-                    createdAt: Date.now(),
-                  });
-                }
-              }
-
-              // 5. Create run record in SQLite
-              runRepo.create({
-                runId,
-                sessionId: this.options.sessionId,
-                requestId: requestId ?? null,
-                status: "running",
-                startedAt: Date.now(),
-              });
-
-              // 6. Update sessions.updated_at
-              sessionRepo.update(this.options.sessionId, {
-                updatedAt: Date.now(),
-                prompt: message ?? undefined,
-              });
-            })();
-          } finally {
-            drainSpan.end();
-          }
-        } else if (this.sessionStore) {
-          pending = (await this.sessionStore.peekMailbox(this.options.sessionId)) ?? [];
-        }
-
-        const materializedTaskIds = new Set(
-          baseHistory.flatMap((existing) => {
-            if (!isRecord(existing.meta) || existing.meta.kind !== "worker_completed") return [];
-            return typeof existing.meta.taskId === "string" ? [existing.meta.taskId] : [];
-          }),
-        );
-        const delivered = pending.filter((entry) => !materializedTaskIds.has(entry.taskId));
-        const deliveredSystem: Message[] = delivered.map((p) => ({
-          role: "system" as const,
-          content:
-            `Worker "${p.agentName}" (task ${p.taskId}) ` +
-            `${
-              p.status === "done"
-                ? "completed with the result below"
-                : p.status === "cancelled"
-                  ? "was cancelled by the user"
-                  : "failed with the error below"
-            }. ` +
-            `${p.summary}\n\n` +
-            `This is the final result of the task you delegated. Present it to the user. Do not delegate this task again.`,
-          createdAt: p.receivedAt,
-          meta: {
-            kind: "worker_completed",
-            taskId: p.taskId,
-            agentName: p.agentName,
-            status: p.status,
-            summary: p.summary,
-          },
-        }));
-        session.messages = [
-          ...persistedHistory,
-          ...deliveredSystem,
-          ...(message && !isReplayingUser
-            ? [
-                {
-                  ...(deliveryId ? { deliveryId } : {}),
-                  role: "user" as const,
-                  content: message,
-                  createdAt: now,
-                },
-              ]
-            : []),
-        ];
-        session.mailbox = pending;
-
-        if (!this.isAvailable()) {
-          deliverSpan.setStatus({ code: SpanStatusCode.OK, message: "Session cancelled" });
-          return {
-            status: "cancelled",
-            summary: "Session is no longer available",
-            messages: [...session.messages],
-          };
-        }
-
-        if (this.sessionStore) {
-          await this.sessionStore.save(session);
-          if (pending.length > 0 && this.isAvailable()) {
-            try {
-              await this.sessionStore.acknowledgeMailbox(
-                this.options.sessionId,
-                pending.map((entry) => entry.taskId),
-              );
-              session.mailbox = [];
-            } catch (ackError) {
-              logger.warn("Failed to acknowledge mailbox", { ...describeError(ackError) });
-            }
-          }
-        }
-
-        if (!message && deliveredSystem.length === 0) {
-          deliverSpan.setStatus({ code: SpanStatusCode.OK });
-          return {
-            status: "success",
-            summary: "",
-            messages: [...session.messages],
-          };
-        }
-
-        const agentConfig = this.options.resolveConfig(session.agentName);
-        // Wake runs (system-delivered completions, no user message) must report
-        // results, not spawn new work: drop the delegate tool to prevent runaway
-        // autonomous re-delegation.
-        const runTools = message
-          ? agentConfig.tools
-          : agentConfig.tools.filter((t) => t !== "delegate");
-        const runConfig = { ...agentConfig, tools: runTools };
-        let latestRunMessages: Message[] | undefined;
-        const streamMetrics: StreamPerformanceMetrics[] = [];
-        let modelHistory = [...baseHistory, ...deliveredSystem];
-        let modelHistoryLength = modelHistory.length;
-        let compactionTokenUsage: LLMUsage | undefined;
-        const agent = new Agent(
-          runConfig,
-          this.options.toolRegistry,
-          this.options.llmClient,
-          this.options.capabilityRegistry,
-          (e) => {
-            if (e.type === "step") {
-              latestRunMessages = e.messages;
-              // Live update: emit the session with the messages produced so far,
-              // so the chat fills in as the agent works instead of all at once.
-              const liveAppended = e.messages
-                .slice(modelHistoryLength + (message ? 1 : 0))
-                .map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
-              this.emit({
-                type: "session:updated",
-                session: { ...session, messages: [...session.messages, ...liveAppended] },
-              });
-              return;
-            }
-            if (e.type === "text-delta") {
-              this.emit({
-                type: "agent:text-delta",
-                agentName: agentConfig.name,
-                text: e.text,
-                runId,
-                ...(requestId ? { requestId } : {}),
-              });
-              return;
-            }
-            if (e.type === "tool-call-delta") {
-              this.emit({
-                type: "agent:tool-call-delta",
-                agentName: agentConfig.name,
-                toolCall: e.toolCall,
-                runId,
-                ...(requestId ? { requestId } : {}),
-              });
-              return;
-            }
-            if (e.type === "tool:called" || e.type === "tool:completed") {
-              const isCalled = e.type === "tool:called";
-              this.emit({
-                type: "agent:tool",
-                agentName: agentConfig.name,
-                tool: {
-                  type: isCalled ? "called" : "completed",
-                  toolName: e.toolName,
-                  args: isCalled ? e.args : undefined,
-                  result: !isCalled ? e.result : undefined,
-                },
-                runId,
-                ...(requestId ? { requestId } : {}),
-              });
-              return;
-            }
-            if (e.type === "stream-metrics") {
-              streamMetrics.push(e.metrics);
-            }
-          },
-          logger,
-        );
-
-        let result: AgentResult;
-        try {
-          const execute = async () => {
-            this.emit({ type: "agent:started", agentName: agentConfig.name, ...correlation });
-            const resolvedCapabilities = await agent.resolveCapabilities();
-            if (this.messageRepo) {
-              const prepared = await this.prepareActiveContext(
-                agentConfig,
-                resolvedCapabilities,
-                message,
-                signal,
-              );
-              modelHistory = prepared.history;
-              modelHistoryLength = modelHistory.length;
-              compactionTokenUsage = prepared.compactionTokenUsage;
-            }
-            return agent.run(message, modelHistory, signal, resolvedCapabilities);
-          };
-          result = this.options.executionLimiter
-            ? await this.options.executionLimiter.run(execute, signal)
-            : await execute();
-        } catch (error) {
-          if (error instanceof CompactionResponseError && error.usage) {
-            compactionTokenUsage = error.usage;
-          }
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          const errorCode = describeError(error).code;
-          const isCancelled =
-            error instanceof AgentCancelledError ||
-            (error instanceof DOMException && error.name === "AbortError") ||
-            Boolean(signal?.aborted);
-          const isBudgetExceeded = error instanceof AgentBudgetExceededError;
-
-          logger.error("Agent run failed", { code: errorCode, cancelled: isCancelled });
-
-          const partial = (latestRunMessages ?? [])
-            .slice(modelHistoryLength + (message ? 1 : 0))
-            .map((entry) => ({ ...entry, createdAt: entry.createdAt ?? new Date().toISOString() }));
-
-          await this.persistRunCompletion(
-            session,
-            runId,
-            partial,
-            isCancelled ? "cancelled" : "failed",
-            isCancelled ? "cancelled" : isBudgetExceeded ? "budgetExceeded" : "error",
-            errorMessage,
-            correlation,
-            agentConfig.name,
-            errorCode,
-            streamMetrics,
-            compactionTokenUsage,
-          );
-
-          this.emit({
-            type: "agent:error",
-            agentName: agentConfig.name,
-            error: errorMessage,
-            code: errorCode,
-            ...correlation,
-          });
-          deliverSpan.setStatus({
-            code: isCancelled ? SpanStatusCode.OK : SpanStatusCode.ERROR,
-            message: errorMessage,
-          });
-          throw error;
-        }
-
-        // Persist the full run record — every assistant message (with tool calls
-        // and reasoning) and every tool result — so the transcript is a complete
-        // audit of what the agent did. Slice off the history that was passed in
-        // (baseHistory + deliveredSystem + the prompt agent.run re-added), keeping
-        // only the messages this run actually produced.
-        const appended = result.messages
-          .slice(modelHistoryLength + (message ? 1 : 0))
-          .map((m) => ({ ...m, createdAt: m.createdAt ?? now }));
-
-        await this.persistRunCompletion(
-          session,
-          runId,
-          appended,
-          result.status === "cancelled" ? "cancelled" : "completed",
-          result.status,
-          result.summary,
-          correlation,
-          agentConfig.name,
-          undefined,
-          streamMetrics,
-          compactionTokenUsage,
-        );
-
-        if (this.isAvailable()) {
-          this.emit({
-            type: "agent:completed",
-            agentName: agentConfig.name,
-            status: result.status,
-            ...correlation,
-          });
-          this.emit({ type: "session:updated", session });
-        }
-
-        deliverSpan.setStatus({
-          code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
-        });
-        return result;
-      } finally {
-        deliverSpan.end();
+  private async executeRun(context: RunRequestContext): Promise<AgentResult> {
+    try {
+      const prepared = await this.prepareRun(context);
+      if (!this.isAvailable()) {
+        context.deliverSpan.setStatus({ code: SpanStatusCode.OK, message: "Session cancelled" });
+        return {
+          status: "cancelled",
+          summary: "Session is no longer available",
+          messages: [...prepared.session.messages],
+        };
       }
+
+      await this.persistInitialSession(prepared);
+      if (!context.message && prepared.deliveredSystem.length === 0) {
+        context.deliverSpan.setStatus({ code: SpanStatusCode.OK });
+        return {
+          status: "success",
+          summary: "",
+          messages: [...prepared.session.messages],
+        };
+      }
+      return this.executeAgentRun(prepared, context);
+    } finally {
+      context.deliverSpan.end();
+    }
+  }
+
+  private async prepareRun(context: RunRequestContext): Promise<PreparedRun> {
+    const now = new Date().toISOString();
+    const session = await this.loadOrCreateSession(context, now);
+    const persistedHistory = [...session.messages];
+    if (context.agentName) session.agentName = context.agentName;
+    if (context.message) session.prompt = context.message;
+
+    const replayedUserIndex = findReplayedUserIndex(
+      persistedHistory,
+      context.message,
+      context.deliveryId,
+      context.replayExistingUser,
+    );
+    const baseHistory =
+      replayedUserIndex === -1
+        ? persistedHistory
+        : [
+            ...persistedHistory.slice(0, replayedUserIndex),
+            ...persistedHistory.slice(replayedUserIndex + 1),
+          ];
+
+    const isReplayingUser = replayedUserIndex !== -1;
+    const pending = await this.drainPending(context, session, baseHistory, isReplayingUser);
+    const materializedTasks = materializedTaskIds(baseHistory);
+    const delivered = pending.filter((entry) => !materializedTasks.has(entry.taskId));
+    const deliveredSystem = delivered.map((entry) => pendingMessageToSystem(entry));
+    session.messages = [
+      ...persistedHistory,
+      ...deliveredSystem,
+      ...(context.message && !isReplayingUser
+        ? [
+            {
+              ...(context.deliveryId ? { deliveryId: context.deliveryId } : {}),
+              role: "user" as const,
+              content: context.message,
+              createdAt: now,
+            },
+          ]
+        : []),
+    ];
+    session.mailbox = pending;
+    return { session, now, baseHistory, deliveredSystem };
+  }
+
+  private async loadOrCreateSession(context: RunRequestContext, now: string): Promise<SessionData> {
+    const loaded = this.sessionStore ? await this.sessionStore.load(this.options.sessionId) : null;
+    return (
+      loaded ?? {
+        sessionId: this.options.sessionId,
+        taskId: uuidv4(),
+        prompt: context.message ?? "",
+        agentName: context.agentName ?? "orchestrator",
+        messages: [],
+        mailbox: [],
+        createdAt: now,
+      }
+    );
+  }
+
+  private async drainPending(
+    context: RunRequestContext,
+    session: SessionData,
+    baseHistory: Message[],
+    isReplayingUser: boolean,
+  ): Promise<PendingMessage[]> {
+    const repositories = this.databaseRepositories();
+    if (repositories) {
+      return this.drainDatabaseMailbox(
+        context,
+        session,
+        baseHistory,
+        isReplayingUser,
+        repositories,
+      );
+    }
+    if (this.sessionStore) {
+      return (await this.sessionStore.peekMailbox(this.options.sessionId)) ?? [];
+    }
+    return [];
+  }
+
+  private databaseRepositories(): DatabaseRepositories | undefined {
+    if (!this.db || !this.sessionRepo || !this.messageRepo || !this.runRepo || !this.mailboxRepo) {
+      return undefined;
+    }
+    return {
+      db: this.db,
+      sessionRepo: this.sessionRepo,
+      messageRepo: this.messageRepo,
+      runRepo: this.runRepo,
+      mailboxRepo: this.mailboxRepo,
+    };
+  }
+
+  private drainDatabaseMailbox(
+    context: RunRequestContext,
+    session: SessionData,
+    baseHistory: Message[],
+    isReplayingUser: boolean,
+    repositories: DatabaseRepositories,
+  ): PendingMessage[] {
+    const tracer = getTracer();
+    const drainSpan = tracer.startSpan("session.mailbox_drain", {
+      attributes: {
+        "agent.session_id": this.options.sessionId,
+      },
+    });
+    let pending: PendingMessage[] = [];
+    try {
+      repositories.db.immediateTransaction(() => {
+        pending = this.drainMailboxTransaction(
+          context,
+          session,
+          baseHistory,
+          isReplayingUser,
+          repositories,
+          drainSpan,
+        );
+      })();
+    } finally {
+      drainSpan.end();
+    }
+    return pending;
+  }
+
+  private drainMailboxTransaction(
+    context: RunRequestContext,
+    session: SessionData,
+    baseHistory: Message[],
+    isReplayingUser: boolean,
+    repositories: DatabaseRepositories,
+    drainSpan: ISpan,
+  ): PendingMessage[] {
+    this.ensureDatabaseSession(session, context, repositories.sessionRepo);
+    const parsedEvents = this.parsePendingEvents(
+      repositories.mailboxRepo.peekPending(this.options.sessionId),
+    );
+    drainSpan.setAttribute("agent.mailbox.pending_count", parsedEvents.length);
+    this.materializePendingEvents(parsedEvents, baseHistory, repositories);
+    insertDurableUserMessage(
+      context,
+      this.options.sessionId,
+      isReplayingUser,
+      repositories.messageRepo,
+    );
+    repositories.runRepo.create({
+      runId: context.runId,
+      sessionId: this.options.sessionId,
+      requestId: context.requestId ?? null,
+      status: "running",
+      startedAt: Date.now(),
+    });
+    repositories.sessionRepo.update(this.options.sessionId, {
+      updatedAt: Date.now(),
+      prompt: context.message ?? undefined,
+    });
+    return parsedEvents.map((entry) => entry.message);
+  }
+
+  private ensureDatabaseSession(
+    session: SessionData,
+    context: RunRequestContext,
+    sessionRepo: SessionRepository,
+  ): void {
+    if (sessionRepo.get(this.options.sessionId)) return;
+    sessionRepo.create({
+      id: this.options.sessionId,
+      agentName: session.agentName ?? "orchestrator",
+      prompt: context.message ?? "",
+      createdAt: Date.now(),
+    });
+  }
+
+  private parsePendingEvents(events: MailboxEventRow[]): ParsedMailboxEvent[] {
+    return events.map((event) => ({
+      event,
+      message: parseJsonBoundary(PendingMessageSchema, event.payload, `mailbox_event ${event.id}`),
+    }));
+  }
+
+  private materializePendingEvents(
+    parsedEvents: ParsedMailboxEvent[],
+    baseHistory: Message[],
+    repositories: DatabaseRepositories,
+  ): void {
+    const existingTaskIds = materializedTaskIds(baseHistory);
+    for (const { event, message } of parsedEvents) {
+      if (!existingTaskIds.has(message.taskId)) {
+        const nextSeq = repositories.messageRepo.getNextSequenceNum(this.options.sessionId);
+        repositories.messageRepo.create({
+          sessionId: this.options.sessionId,
+          role: "system",
+          content: pendingMessageContent(message),
+          sequenceNum: nextSeq,
+          createdAt: Date.now(),
+          metadata: { meta: pendingMessageMeta(message) },
+        });
+        existingTaskIds.add(message.taskId);
+      }
+      repositories.mailboxRepo.acknowledge(event.id);
+    }
+  }
+
+  private async persistInitialSession(prepared: PreparedRun): Promise<void> {
+    if (!this.sessionStore) return;
+    await this.sessionStore.save(prepared.session);
+    if (prepared.session.mailbox && prepared.session.mailbox.length > 0 && this.isAvailable()) {
+      try {
+        await this.sessionStore.acknowledgeMailbox(
+          this.options.sessionId,
+          prepared.session.mailbox.map((entry) => entry.taskId),
+        );
+        prepared.session.mailbox = [];
+      } catch (ackError) {
+        this.logger.warn("Failed to acknowledge mailbox", { ...describeError(ackError) });
+      }
+    }
+  }
+
+  private async executeAgentRun(
+    prepared: PreparedRun,
+    context: RunRequestContext,
+  ): Promise<AgentResult> {
+    const agentConfig = this.options.resolveConfig(prepared.session.agentName);
+    const runConfig = {
+      ...agentConfig,
+      tools: context.message
+        ? agentConfig.tools
+        : agentConfig.tools.filter((toolName) => toolName !== "delegate"),
+    };
+    const state: ActiveRunState = {
+      session: prepared.session,
+      now: prepared.now,
+      baseHistory: prepared.baseHistory,
+      deliveredSystem: prepared.deliveredSystem,
+      modelHistory: [...prepared.baseHistory, ...prepared.deliveredSystem],
+      modelHistoryLength: prepared.baseHistory.length + prepared.deliveredSystem.length,
+      hasMessage: Boolean(context.message),
+      agentConfig,
+      streamMetrics: [],
+    };
+    const agent = new Agent(
+      runConfig,
+      this.options.toolRegistry,
+      this.options.llmClient,
+      this.options.capabilityRegistry,
+      (event) => this.handleAgentEvent(event, state, context),
+      context.logger,
+    );
+
+    let result: AgentResult;
+    try {
+      result = await this.runAgent(agent, state, context);
+    } catch (error) {
+      await this.handleAgentFailure(error, state, context);
+      throw error;
+    }
+    return this.completeAgentRun(result, state, context);
+  }
+
+  private async runAgent(
+    agent: Agent,
+    state: ActiveRunState,
+    context: RunRequestContext,
+  ): Promise<AgentResult> {
+    const execute = () => this.executeAgent(agent, state, context);
+    return this.options.executionLimiter
+      ? this.options.executionLimiter.run(execute, context.signal)
+      : execute();
+  }
+
+  private async executeAgent(
+    agent: Agent,
+    state: ActiveRunState,
+    context: RunRequestContext,
+  ): Promise<AgentResult> {
+    this.emit({
+      type: "agent:started",
+      agentName: state.agentConfig.name,
+      ...context.correlation,
+    });
+    const resolvedCapabilities = await agent.resolveCapabilities();
+    if (this.messageRepo) {
+      const prepared = await this.prepareActiveContext(
+        state.agentConfig,
+        resolvedCapabilities,
+        context.message,
+        context.signal,
+      );
+      state.modelHistory = prepared.history;
+      state.modelHistoryLength = prepared.history.length;
+      state.compactionTokenUsage = prepared.compactionTokenUsage;
+    }
+    return agent.run(context.message, state.modelHistory, context.signal, resolvedCapabilities);
+  }
+
+  private async handleAgentFailure(
+    error: unknown,
+    state: ActiveRunState,
+    context: RunRequestContext,
+  ): Promise<void> {
+    if (error instanceof CompactionResponseError && error.usage) {
+      state.compactionTokenUsage = error.usage;
+    }
+    const errorDetails = describeError(error);
+    const isCancelled = isAgentCancellation(error, context.signal);
+    const isBudgetExceeded = error instanceof AgentBudgetExceededError;
+    context.logger.error("Agent run failed", {
+      code: errorDetails.code,
+      cancelled: isCancelled,
+    });
+
+    const partial = sliceRunMessages(
+      state.latestRunMessages ?? [],
+      state.modelHistoryLength,
+      Boolean(context.message),
+    ).map((entry) => ({
+      ...entry,
+      createdAt: entry.createdAt ?? new Date().toISOString(),
+    }));
+    await this.persistRunCompletion(
+      state.session,
+      context.runId,
+      partial,
+      isCancelled ? "cancelled" : "failed",
+      isCancelled ? "cancelled" : isBudgetExceeded ? "budgetExceeded" : "error",
+      errorDetails.message,
+      context.correlation,
+      state.agentConfig.name,
+      errorDetails.code,
+      state.streamMetrics,
+      state.compactionTokenUsage,
+    );
+    this.emit({
+      type: "agent:error",
+      agentName: state.agentConfig.name,
+      error: errorDetails.message,
+      code: errorDetails.code,
+      ...context.correlation,
+    });
+    context.deliverSpan.setStatus({
+      code: isCancelled ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+      message: errorDetails.message,
+    });
+  }
+
+  private async completeAgentRun(
+    result: AgentResult,
+    state: ActiveRunState,
+    context: RunRequestContext,
+  ): Promise<AgentResult> {
+    const appended = sliceRunMessages(
+      result.messages,
+      state.modelHistoryLength,
+      Boolean(context.message),
+    ).map((message) => ({
+      ...message,
+      createdAt: message.createdAt ?? state.now,
+    }));
+    await this.persistRunCompletion(
+      state.session,
+      context.runId,
+      appended,
+      result.status === "cancelled" ? "cancelled" : "completed",
+      result.status,
+      result.summary,
+      context.correlation,
+      state.agentConfig.name,
+      undefined,
+      state.streamMetrics,
+      state.compactionTokenUsage,
+    );
+    if (this.isAvailable()) {
+      this.emit({
+        type: "agent:completed",
+        agentName: state.agentConfig.name,
+        status: result.status,
+        ...context.correlation,
+      });
+      this.emit({ type: "session:updated", session: state.session });
+    }
+    context.deliverSpan.setStatus({
+      code: result.status === "success" ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+    });
+    return result;
+  }
+
+  private handleAgentEvent(
+    event: Parameters<AgentEventCallback>[0],
+    state: ActiveRunState,
+    context: RunRequestContext,
+  ): void {
+    switch (event.type) {
+      case "step":
+        this.handleStepEvent(event, state);
+        return;
+      case "text-delta":
+        this.emit({
+          type: "agent:text-delta",
+          agentName: state.agentConfig.name,
+          text: event.text,
+          runId: context.runId,
+          ...(context.requestId ? { requestId: context.requestId } : {}),
+        });
+        return;
+      case "tool-call-delta":
+        this.emit({
+          type: "agent:tool-call-delta",
+          agentName: state.agentConfig.name,
+          toolCall: event.toolCall,
+          runId: context.runId,
+          ...(context.requestId ? { requestId: context.requestId } : {}),
+        });
+        return;
+      case "tool:called":
+      case "tool:completed":
+        this.emitAgentToolEvent(event, state.agentConfig.name, context);
+        return;
+      case "stream-metrics":
+        state.streamMetrics.push(event.metrics);
+        return;
+      default:
+        return;
+    }
+  }
+
+  private handleStepEvent(
+    event: Extract<Parameters<AgentEventCallback>[0], { type: "step" }>,
+    state: ActiveRunState,
+  ): void {
+    state.latestRunMessages = event.messages;
+    const liveAppended = sliceRunMessages(
+      event.messages,
+      state.modelHistoryLength,
+      state.hasMessage,
+    ).map((message) => ({
+      ...message,
+      createdAt: message.createdAt ?? state.now,
+    }));
+    this.emit({
+      type: "session:updated",
+      session: { ...state.session, messages: [...state.session.messages, ...liveAppended] },
+    });
+  }
+
+  private emitAgentToolEvent(
+    event: Extract<Parameters<AgentEventCallback>[0], { type: "tool:called" | "tool:completed" }>,
+    agentName: string,
+    context: RunRequestContext,
+  ): void {
+    const isCalled = event.type === "tool:called";
+    this.emit({
+      type: "agent:tool",
+      agentName,
+      tool: {
+        type: isCalled ? "called" : "completed",
+        toolName: event.toolName,
+        args: isCalled ? event.args : undefined,
+        result: !isCalled ? event.result : undefined,
+      },
+      runId: context.runId,
+      ...(context.requestId ? { requestId: context.requestId } : {}),
     });
   }
 
@@ -752,43 +842,18 @@ export class SessionRuntime {
 
     if (!this.isAvailable()) return;
 
-    if (this.db && this.runRepo && this.sessionRepo && this.messageRepo) {
-      const runRepo = this.runRepo;
-      const sessionRepo = this.sessionRepo;
-      const messageRepo = this.messageRepo;
-      this.db.immediateTransaction(() => {
-        for (const msg of messagesToPersist) {
-          const nextSeq = messageRepo.getNextSequenceNum(this.options.sessionId);
-          messageRepo.create({
-            sessionId: this.options.sessionId,
-            runId,
-            role: msg.role,
-            content: msg.content,
-            reasoning: msg.role === "assistant" ? (msg.reasoning ?? null) : null,
-            toolCalls: msg.role === "assistant" ? (msg.toolCalls ?? null) : null,
-            toolCallId: msg.role === "tool" ? (msg.toolCallId ?? null) : null,
-            sequenceNum: nextSeq,
-            createdAt: Date.now(),
-          });
-        }
-        runRepo.update(runId, {
-          status: runStatus,
-          tokenUsage:
-            streamMetrics.length > 0 || compactionTokenUsage
-              ? {
-                  ...(streamMetrics.length > 0 ? { streaming: { steps: streamMetrics } } : {}),
-                  ...(compactionTokenUsage ? { compactionTokenUsage } : {}),
-                }
-              : undefined,
-          errorCode: errorCode ?? null,
-          errorMessage: runStatus === "failed" ? summary : null,
-          completedAt: Date.now(),
-        });
-        sessionRepo.update(this.options.sessionId, {
-          completedAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-      })();
+    const repositories = this.databaseRepositories();
+    if (repositories) {
+      this.persistRunInDatabase(
+        repositories,
+        runId,
+        messagesToPersist,
+        runStatus,
+        summary,
+        errorCode,
+        streamMetrics,
+        compactionTokenUsage,
+      );
     }
 
     if (this.sessionStore) {
@@ -813,6 +878,32 @@ export class SessionRuntime {
         }
       }
     }
+  }
+
+  private persistRunInDatabase(
+    repositories: DatabaseRepositories,
+    runId: string,
+    messagesToPersist: Message[],
+    runStatus: "completed" | "cancelled" | "failed",
+    summary: string,
+    errorCode: string | undefined,
+    streamMetrics: StreamPerformanceMetrics[],
+    compactionTokenUsage: LLMUsage | undefined,
+  ): void {
+    repositories.db.immediateTransaction(() => {
+      persistMessages(repositories.messageRepo, this.options.sessionId, runId, messagesToPersist);
+      repositories.runRepo.update(runId, {
+        status: runStatus,
+        tokenUsage: buildRunTokenUsage(streamMetrics, compactionTokenUsage),
+        errorCode: errorCode ?? null,
+        errorMessage: runStatus === "failed" ? summary : null,
+        completedAt: Date.now(),
+      });
+      repositories.sessionRepo.update(this.options.sessionId, {
+        completedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    })();
   }
 
   private async prepareActiveContext(
@@ -885,6 +976,163 @@ export class SessionRuntime {
       ...(compactionTokenUsage ? { compactionTokenUsage } : {}),
     };
   }
+}
+
+function findReplayedUserIndex(
+  persistedHistory: Message[],
+  message: string | undefined,
+  deliveryId: string | undefined,
+  replayExistingUser: boolean,
+): number {
+  if (deliveryId) {
+    for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
+      const candidate = persistedHistory[index];
+      if (candidate?.role !== "user" || candidate.deliveryId !== deliveryId) continue;
+      if (candidate.content !== message) {
+        throw new Error("Delivery identity does not match the durable user message");
+      }
+      if (!replayExistingUser) {
+        throw new Error("Delivery identity is already durable; retry is required");
+      }
+      return index;
+    }
+  }
+
+  if (replayExistingUser && !deliveryId) {
+    for (let index = persistedHistory.length - 1; index >= 0; index -= 1) {
+      const candidate = persistedHistory[index];
+      if (candidate?.role !== "user") continue;
+      return candidate.content === message ? index : -1;
+    }
+  }
+  return -1;
+}
+
+function materializedTaskIds(history: Message[]): Set<string> {
+  const taskIds = new Set<string>();
+  for (const existing of history) {
+    if (!isRecord(existing.meta) || existing.meta.kind !== "worker_completed") continue;
+    if (typeof existing.meta.taskId === "string") taskIds.add(existing.meta.taskId);
+  }
+  return taskIds;
+}
+
+function pendingMessageStatusText(status: PendingMessage["status"]): string {
+  if (status === "done") return "completed with the result below";
+  if (status === "cancelled") return "was cancelled by the user";
+  return "failed with the error below";
+}
+
+function pendingMessageContent(pending: PendingMessage): string {
+  return (
+    `Worker "${pending.agentName}" (task ${pending.taskId}) ` +
+    `${pendingMessageStatusText(pending.status)}. ${pending.summary}\n\n` +
+    "This is the final result of the task you delegated. Present it to the user. " +
+    "Do not delegate this task again."
+  );
+}
+
+function pendingMessageMeta(pending: PendingMessage): Record<string, string> {
+  return {
+    kind: "worker_completed",
+    taskId: pending.taskId,
+    agentName: pending.agentName,
+    status: pending.status,
+    summary: pending.summary,
+  };
+}
+
+function pendingMessageToSystem(pending: PendingMessage): Message {
+  return {
+    role: "system",
+    content: pendingMessageContent(pending),
+    createdAt: pending.receivedAt,
+    meta: pendingMessageMeta(pending),
+  };
+}
+
+function insertDurableUserMessage(
+  context: RunRequestContext,
+  sessionId: string,
+  isReplayingUser: boolean,
+  messageRepo: MessageRepository,
+): void {
+  const message = context.message;
+  if (!message || isReplayingUser) return;
+
+  const existingDelivery = context.deliveryId ? messageRepo.get(context.deliveryId) : undefined;
+  if (existingDelivery) {
+    if (
+      existingDelivery.session_id !== sessionId ||
+      existingDelivery.role !== "user" ||
+      existingDelivery.content !== message
+    ) {
+      throw new Error("Delivery identity conflicts with an existing durable message");
+    }
+    if (!context.replayExistingUser) {
+      throw new Error("Delivery identity is already durable; retry is required");
+    }
+    return;
+  }
+
+  const nextSeq = messageRepo.getNextSequenceNum(sessionId);
+  messageRepo.create({
+    ...(context.deliveryId ? { id: context.deliveryId } : {}),
+    sessionId,
+    role: "user",
+    content: message,
+    sequenceNum: nextSeq,
+    createdAt: Date.now(),
+  });
+}
+
+function isAgentCancellation(error: unknown, signal: AbortSignal | undefined): boolean {
+  return (
+    error instanceof AgentCancelledError ||
+    (error instanceof DOMException && error.name === "AbortError") ||
+    Boolean(signal?.aborted)
+  );
+}
+
+function sliceRunMessages(
+  messages: Message[],
+  modelHistoryLength: number,
+  hasMessage: boolean,
+): Message[] {
+  return messages.slice(modelHistoryLength + (hasMessage ? 1 : 0));
+}
+
+function persistMessages(
+  messageRepo: MessageRepository,
+  sessionId: string,
+  runId: string,
+  messages: Message[],
+): void {
+  for (const message of messages) {
+    const nextSeq = messageRepo.getNextSequenceNum(sessionId);
+    messageRepo.create({
+      sessionId,
+      runId,
+      role: message.role,
+      content: message.content,
+      reasoning: message.role === "assistant" ? (message.reasoning ?? null) : null,
+      toolCalls: message.role === "assistant" ? (message.toolCalls ?? null) : null,
+      toolCallId: message.role === "tool" ? (message.toolCallId ?? null) : null,
+      sequenceNum: nextSeq,
+      createdAt: Date.now(),
+    });
+  }
+}
+
+function buildRunTokenUsage(
+  streamMetrics: StreamPerformanceMetrics[],
+  compactionTokenUsage: LLMUsage | undefined,
+): Record<string, unknown> | undefined {
+  if (streamMetrics.length === 0 && !compactionTokenUsage) return undefined;
+  return {
+    ...(streamMetrics.length > 0 ? { streaming: { steps: streamMetrics } } : {}),
+    ...(compactionTokenUsage ? { compactionTokenUsage } : {}),
+  };
 }
 
 function positiveCapability(value: number | undefined): number | undefined {

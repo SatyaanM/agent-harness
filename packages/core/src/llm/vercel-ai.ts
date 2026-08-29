@@ -1,6 +1,6 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, streamText, tool, zodSchema } from "ai";
+import { generateText, streamText, type TextStreamPart, type ToolSet, tool, zodSchema } from "ai";
 import type { Message } from "../agent/types.js";
 import type { Config } from "../config.js";
 import { createLogger } from "../contracts/logging.js";
@@ -90,149 +90,216 @@ export function createVercelAILLMClient(
     },
 
     async *chatStream(params: LLMChatParams): AsyncIterable<LLMStreamDelta> {
-      const eligibleTargets = providerRuntime.registry.resolveTargets(
-        params.model,
-        params.preferredProviderId,
-      );
-      if (eligibleTargets.length === 0) {
-        throw new Error(`No eligible provider found for model ${params.model}`);
-      }
-
-      const system = buildSystem(params);
-      const messages = convertMessages(params.messages);
-      const tools = buildTools(params);
-
-      let lastError: Error | null = null;
-      let attempt = 0;
-      const estimatedTokens = estimateAdmissionTokens(params);
-
-      for (const target of eligibleTargets) {
-        const { provider } = target;
-        if (providerRuntime.isCircuitOpen(provider.id)) continue;
-
-        const admissionError = reserveTarget(providerRuntime, target, estimatedTokens);
-        if (admissionError) {
-          lastError = admissionError;
-          attempt++;
-          continue;
-        }
-
-        const apiKey = process.env[provider.apiKeyEnv] ?? "";
-        const model =
-          target.protocol === "anthropic"
-            ? createAnthropic({ baseURL: provider.baseUrl, apiKey })(target.modelId)
-            : createOpenAI({ baseURL: provider.baseUrl, apiKey }).chat(target.modelId);
-        const cacheOptions = { anthropic: { cacheControl: { type: "ephemeral" as const } } };
-        const useAnthropicCache = target.protocol === "anthropic" && params.promptCaching === true;
-
-        let streamHasStarted = false;
-        try {
-          if (attempt > 0) {
-            const backoff = Math.min(2 ** (attempt - 1) * 1000, 5000);
-            await delay(backoff, params.signal);
-          }
-
-          const result = streamText({
-            model,
-            messages,
-            ...(system && useAnthropicCache
-              ? {
-                  instructions: {
-                    role: "system" as const,
-                    content: system,
-                    providerOptions: cacheOptions,
-                  },
-                }
-              : system
-                ? { system }
-                : {}),
-            ...(useAnthropicCache ? { providerOptions: cacheOptions } : {}),
-            ...(tools ? { tools } : {}),
-            ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
-            ...(params.signal ? { abortSignal: params.signal } : {}),
-          });
-
-          const activeToolCalls = new Map<string, string>();
-          let receivedFinish = false;
-
-          for await (const chunk of result.fullStream) {
-            if (receivedFinish) {
-              throw new Error(`Provider stream emitted ${chunk.type} after terminal finish event`);
-            }
-            if (chunk.type === "text-delta" && chunk.text) {
-              streamHasStarted = true;
-              yield { type: "text-delta", text: chunk.text };
-            } else if (chunk.type === "reasoning-delta" && chunk.text) {
-              streamHasStarted = true;
-              yield { type: "reasoning-delta", reasoning: chunk.text };
-            } else if (chunk.type === "tool-input-start") {
-              streamHasStarted = true;
-              activeToolCalls.set(chunk.id, chunk.toolName);
-              yield {
-                type: "tool-call-delta",
-                toolCall: {
-                  id: chunk.id,
-                  name: chunk.toolName,
-                  argumentsDelta: "",
-                },
-              };
-            } else if (chunk.type === "tool-input-delta") {
-              streamHasStarted = true;
-              const name = activeToolCalls.get(chunk.id) || "unknown";
-              yield {
-                type: "tool-call-delta",
-                toolCall: {
-                  id: chunk.id,
-                  name,
-                  argumentsDelta: chunk.delta,
-                },
-              };
-            } else if (chunk.type === "finish") {
-              receivedFinish = true;
-              streamHasStarted = true;
-              yield {
-                type: "finish",
-                finishReason: mapFinishReason(chunk.finishReason),
-                usage: chunk.totalUsage
-                  ? {
-                      inputTokens: chunk.totalUsage.inputTokens ?? 0,
-                      outputTokens: chunk.totalUsage.outputTokens ?? 0,
-                      totalTokens: chunk.totalUsage.totalTokens ?? 0,
-                    }
-                  : undefined,
-              };
-            } else if (chunk.type === "error") {
-              throw chunk.error instanceof Error
-                ? chunk.error
-                : new Error(`Provider stream failed: ${String(chunk.error)}`);
-            } else if (chunk.type === "abort") {
-              throw new DOMException("Provider stream aborted", "AbortError");
-            }
-          }
-
-          if (!receivedFinish) {
-            throw new Error("Provider stream ended without a terminal finish event");
-          }
-
-          providerRuntime.closeCircuit(provider.id);
-          return;
-        } catch (error: unknown) {
-          if (streamHasStarted) throw error;
-          lastError = recordTransientFailure(providerRuntime, target, params, error);
-          attempt++;
-        }
-      }
-
-      if (attempt === 0) {
-        throw new Error(
-          "All eligible providers are temporarily unavailable (circuit breakers open)",
-        );
-      }
-      throw new Error(`All eligible providers failed. Last error: ${lastError?.message}`, {
-        cause: lastError,
-      });
+      yield* streamChat(params, providerRuntime);
     },
   };
+}
+
+type ProviderStreamPart = TextStreamPart<ToolSet>;
+
+interface StreamAttemptState {
+  streamHasStarted: boolean;
+}
+
+interface StreamRequestParts {
+  system: string | undefined;
+  messages: ReturnType<typeof convertMessages>;
+  tools: ReturnType<typeof buildTools>;
+}
+
+async function* streamChat(
+  params: LLMChatParams,
+  providerRuntime: ProviderRuntimeState,
+): AsyncGenerator<LLMStreamDelta> {
+  const eligibleTargets = providerRuntime.registry.resolveTargets(
+    params.model,
+    params.preferredProviderId,
+  );
+  if (eligibleTargets.length === 0) {
+    throw new Error(`No eligible provider found for model ${params.model}`);
+  }
+
+  const request: StreamRequestParts = {
+    system: buildSystem(params),
+    messages: convertMessages(params.messages),
+    tools: buildTools(params),
+  };
+  const estimatedTokens = estimateAdmissionTokens(params);
+  let lastError: Error | null = null;
+  let attempt = 0;
+
+  for (const target of eligibleTargets) {
+    if (providerRuntime.isCircuitOpen(target.provider.id)) continue;
+    const admissionError = reserveTarget(providerRuntime, target, estimatedTokens);
+    if (admissionError) {
+      lastError = admissionError;
+      attempt += 1;
+      continue;
+    }
+
+    const state: StreamAttemptState = { streamHasStarted: false };
+    try {
+      await waitForFallbackBackoff(attempt, params.signal);
+      yield* streamProviderAttempt(target, params, request, state);
+      providerRuntime.closeCircuit(target.provider.id);
+      return;
+    } catch (error: unknown) {
+      if (state.streamHasStarted) throw error;
+      lastError = recordTransientFailure(providerRuntime, target, params, error);
+      attempt += 1;
+    }
+  }
+
+  throwProviderExhausted(attempt, lastError);
+}
+
+async function waitForFallbackBackoff(attempt: number, signal?: AbortSignal): Promise<void> {
+  if (attempt === 0) return;
+  const backoff = Math.min(2 ** (attempt - 1) * 1000, 5000);
+  await delay(backoff, signal);
+}
+
+async function* streamProviderAttempt(
+  target: ProviderTarget,
+  params: LLMChatParams,
+  request: StreamRequestParts,
+  state: StreamAttemptState,
+): AsyncGenerator<LLMStreamDelta> {
+  const apiKey = process.env[target.provider.apiKeyEnv] ?? "";
+  const model =
+    target.protocol === "anthropic"
+      ? createAnthropic({ baseURL: target.provider.baseUrl, apiKey })(target.modelId)
+      : createOpenAI({ baseURL: target.provider.baseUrl, apiKey }).chat(target.modelId);
+  const result = streamText({
+    model,
+    messages: request.messages,
+    ...streamSystemOptions(request.system, target, params.promptCaching),
+    ...(request.tools ? { tools: request.tools } : {}),
+    ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
+    ...(params.signal ? { abortSignal: params.signal } : {}),
+  });
+
+  const activeToolCalls = new Map<string, string>();
+  let receivedFinish = false;
+  for await (const chunk of result.fullStream) {
+    const mapped = mapProviderStreamPart(chunk, activeToolCalls, receivedFinish);
+    receivedFinish = mapped.finished;
+    state.streamHasStarted ||= mapped.started;
+    if (mapped.delta) yield mapped.delta;
+  }
+  if (!receivedFinish) {
+    throw new Error("Provider stream ended without a terminal finish event");
+  }
+}
+
+function streamSystemOptions(
+  system: string | undefined,
+  target: ProviderTarget,
+  promptCaching: boolean | undefined,
+): Record<string, unknown> {
+  const cacheOptions = { anthropic: { cacheControl: { type: "ephemeral" as const } } };
+  const useAnthropicCache = target.protocol === "anthropic" && promptCaching === true;
+  return {
+    ...(system && useAnthropicCache
+      ? {
+          instructions: {
+            role: "system" as const,
+            content: system,
+            providerOptions: cacheOptions,
+          },
+        }
+      : system
+        ? { system }
+        : {}),
+    ...(useAnthropicCache ? { providerOptions: cacheOptions } : {}),
+  };
+}
+
+interface MappedProviderStreamPart {
+  delta?: LLMStreamDelta;
+  finished: boolean;
+  started: boolean;
+}
+
+function mapProviderStreamPart(
+  chunk: ProviderStreamPart,
+  activeToolCalls: Map<string, string>,
+  receivedFinish: boolean,
+): MappedProviderStreamPart {
+  if (receivedFinish) {
+    throw new Error(`Provider stream emitted ${chunk.type} after terminal finish event`);
+  }
+
+  switch (chunk.type) {
+    case "text-delta":
+      return chunk.text
+        ? { delta: { type: "text-delta", text: chunk.text }, finished: false, started: true }
+        : { finished: false, started: false };
+    case "reasoning-delta":
+      return chunk.text
+        ? {
+            delta: { type: "reasoning-delta", reasoning: chunk.text },
+            finished: false,
+            started: true,
+          }
+        : { finished: false, started: false };
+    case "tool-input-start":
+      activeToolCalls.set(chunk.id, chunk.toolName);
+      return {
+        delta: {
+          type: "tool-call-delta",
+          toolCall: { id: chunk.id, name: chunk.toolName, argumentsDelta: "" },
+        },
+        finished: false,
+        started: true,
+      };
+    case "tool-input-delta":
+      return {
+        delta: {
+          type: "tool-call-delta",
+          toolCall: {
+            id: chunk.id,
+            name: activeToolCalls.get(chunk.id) || "unknown",
+            argumentsDelta: chunk.delta,
+          },
+        },
+        finished: false,
+        started: true,
+      };
+    case "finish":
+      return {
+        delta: {
+          type: "finish",
+          finishReason: mapFinishReason(chunk.finishReason),
+          usage: chunk.totalUsage
+            ? {
+                inputTokens: chunk.totalUsage.inputTokens ?? 0,
+                outputTokens: chunk.totalUsage.outputTokens ?? 0,
+                totalTokens: chunk.totalUsage.totalTokens ?? 0,
+              }
+            : undefined,
+        },
+        finished: true,
+        started: true,
+      };
+    case "error":
+      throw chunk.error instanceof Error
+        ? chunk.error
+        : new Error(`Provider stream failed: ${String(chunk.error)}`);
+    case "abort":
+      throw new DOMException("Provider stream aborted", "AbortError");
+    default:
+      return { finished: false, started: false };
+  }
+}
+
+function throwProviderExhausted(attempt: number, lastError: Error | null): never {
+  if (attempt === 0) {
+    throw new Error("All eligible providers are temporarily unavailable (circuit breakers open)");
+  }
+  throw new Error(`All eligible providers failed. Last error: ${lastError?.message}`, {
+    cause: lastError,
+  });
 }
 
 function reserveTarget(

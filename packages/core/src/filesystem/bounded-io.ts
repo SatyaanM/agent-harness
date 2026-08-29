@@ -1,5 +1,8 @@
+import type { FileHandle } from "node:fs/promises";
 import fs from "fs-extra";
 import { BoundaryValidationError } from "../validation.js";
+
+const READ_CHUNK_BYTES = 64 * 1_024;
 
 function validateByteLimit(maxBytes: number): void {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
@@ -21,26 +24,40 @@ export async function readFileBounded(
   boundary: string,
 ): Promise<Buffer> {
   validateByteLimit(maxBytes);
-  const stream = fs.createReadStream(filePath);
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    return await readFileHandleBounded(handle, maxBytes, boundary);
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function readFileHandleBounded(
+  handle: FileHandle,
+  maxBytes: number,
+  boundary: string,
+): Promise<Buffer> {
+  validateByteLimit(maxBytes);
+  const initialStat = await handle.stat();
+  if (initialStat.size > maxBytes) {
+    throw new BoundaryValidationError(boundary, `file exceeds ${maxBytes} bytes`);
+  }
+
   const chunks: Buffer[] = [];
   let totalBytes = 0;
-  try {
-    for await (const chunk of stream) {
-      if (!(chunk instanceof Uint8Array)) {
-        throw new BoundaryValidationError(boundary, "file stream returned invalid data");
-      }
-      totalBytes += chunk.byteLength;
-      if (totalBytes > maxBytes) {
-        stream.destroy();
-        throw new BoundaryValidationError(boundary, `file exceeds ${maxBytes} bytes`);
-      }
-      chunks.push(Buffer.from(chunk));
+  let position = 0;
+  const readBuffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, maxBytes + 1));
+  while (true) {
+    const { bytesRead } = await handle.read(readBuffer, 0, readBuffer.byteLength, position);
+    if (bytesRead === 0) break;
+    totalBytes += bytesRead;
+    if (totalBytes > maxBytes) {
+      throw new BoundaryValidationError(boundary, `file exceeds ${maxBytes} bytes`);
     }
-    return Buffer.concat(chunks, totalBytes);
-  } catch (error) {
-    stream.destroy();
-    throw error;
+    chunks.push(Buffer.from(readBuffer.subarray(0, bytesRead)));
+    position += bytesRead;
   }
+  return Buffer.concat(chunks, totalBytes);
 }
 
 export function readUtf8FileBoundedSync(
@@ -49,15 +66,20 @@ export function readUtf8FileBoundedSync(
   boundary: string,
 ): string {
   validateByteLimit(maxBytes);
-  const stat = fs.statSync(filePath);
-  if (stat.size > maxBytes) {
-    throw new BoundaryValidationError(boundary, `file exceeds ${maxBytes} bytes`);
+  const descriptor = fs.openSync(filePath, "r");
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (stat.size > maxBytes) {
+      throw new BoundaryValidationError(boundary, `file exceeds ${maxBytes} bytes`);
+    }
+    const text = fs.readFileSync(descriptor, "utf8");
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      throw new BoundaryValidationError(boundary, `file exceeds ${maxBytes} bytes`);
+    }
+    return text;
+  } finally {
+    fs.closeSync(descriptor);
   }
-  const text = fs.readFileSync(filePath, "utf8");
-  if (Buffer.byteLength(text, "utf8") > maxBytes) {
-    throw new BoundaryValidationError(boundary, `file exceeds ${maxBytes} bytes`);
-  }
-  return text;
 }
 
 export function stringifyJsonBounded(value: unknown, maxBytes: number, boundary: string): string {

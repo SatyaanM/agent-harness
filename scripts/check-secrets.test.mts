@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { scanContent } from "./check-secrets.mjs";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { checkSecrets, scanContent } from "./check-secrets.mjs";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 describe("scanContent", () => {
   it("passes clean source code", () => {
@@ -38,4 +48,50 @@ describe("scanContent", () => {
     expect(findings.length).toBeGreaterThan(0);
     expect(findings[0]?.rule).toBe(expectedRule);
   });
+});
+
+describe("checkSecrets", () => {
+  it("keeps full-directory scanning strength without a separate metadata check", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-secrets-"));
+    tempDirs.push(root);
+    await writeFile(
+      path.join(root, "credentials.txt"),
+      "sk-proj-abcdef12345678901234567890\n",
+      "utf8",
+    );
+
+    expect(checkSecrets(root)).toMatchObject([
+      { file: "credentials.txt", line: 1, rule: "openai-api-key" },
+    ]);
+  });
+
+  it("scans staged bytes even when the working-tree file has been replaced", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-staged-secrets-"));
+    tempDirs.push(root);
+    expect(spawnSync("git", ["init", "--quiet"], { cwd: root }).status).toBe(0);
+    const file = path.join(root, "credentials.txt");
+    await writeFile(file, "sk-proj-abcdef12345678901234567890\n", "utf8");
+    expect(spawnSync("git", ["add", "credentials.txt"], { cwd: root }).status).toBe(0);
+    await writeFile(file, "clean working tree\n", "utf8");
+
+    expect(checkSecrets(root, true)).toMatchObject([
+      { file: "credentials.txt", line: 1, rule: "openai-api-key" },
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "parses NUL-delimited staged filenames containing newlines",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "agent-harness-staged-nul-"));
+      tempDirs.push(root);
+      expect(spawnSync("git", ["init", "--quiet"], { cwd: root }).status).toBe(0);
+      const unusualName = "line\nbreak.txt";
+      await writeFile(path.join(root, unusualName), "sk-proj-abcdef12345678901234567890\n", "utf8");
+      expect(spawnSync("git", ["add", unusualName], { cwd: root }).status).toBe(0);
+
+      expect(checkSecrets(root, true)).toMatchObject([
+        { file: unusualName, line: 1, rule: "openai-api-key" },
+      ]);
+    },
+  );
 });

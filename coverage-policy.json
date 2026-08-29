@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "overall": {
+    "statements": 68.65,
+    "branches": 59.88,
+    "functions": 65.1,
+    "lines": 71.04
+  },
+  "paths": [
+    { "path": "packages/core/src/agent/", "lines": 94.75 },
+    { "path": "packages/core/src/persistence/", "lines": 89.6 },
+    { "path": "packages/core/src/filesystem/", "lines": 89.13 },
+    { "path": "packages/core/src/provider", "lines": 100 },
+    { "path": "packages/core/src/llm/", "lines": 79.55 },
+    { "path": "packages/server/src/http/", "lines": 86 },
+    { "path": "packages/server/src/routes/", "lines": 66.7 },
+    { "path": "packages/server/src/routes/agents.ts", "lines": 90.62 },
+    { "path": "packages/server/src/routes/inbox.ts", "lines": 23.98 }
+  ],
+  "changedFiles": { "newFilesMinimumLines": 70 }
+}

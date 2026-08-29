@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import fs from "fs-extra";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readFileBounded,
   readUtf8FileBounded,
@@ -36,6 +37,19 @@ describe("bounded file I/O", () => {
     await expect(readFileBounded(file, 3, "binary file")).resolves.toEqual(
       Buffer.from([0, 255, 1]),
     );
+  });
+
+  it("uses the opened descriptor for synchronous size validation and reading", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agent-harness-bounded-io-"));
+    tempRoots.push(root);
+    const file = path.join(root, "stable.txt");
+    await writeFile(file, "stable");
+    const statSync = vi.spyOn(fs, "statSync");
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+
+    expect(readUtf8FileBoundedSync(file, 6, "stable file")).toBe("stable");
+    expect(statSync).not.toHaveBeenCalled();
+    expect(readFileSync).toHaveBeenCalledWith(expect.any(Number), "utf8");
   });
 
   it("rejects oversized serialized JSON", () => {
