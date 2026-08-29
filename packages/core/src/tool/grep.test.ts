@@ -11,7 +11,7 @@ const originalRoot = process.env.ROOT;
 function createRegexTimeoutProbe(): string {
   // This intentionally adversarial pattern is test-only, receives a fixed 29-character input,
   // and executes only inside grep's 250ms VM boundary.
-  // lgtm[js/redos]
+  // codeql[js/redos]
   // lgtm[js/inefficient-regexp]
   return "(a+)+$";
 }

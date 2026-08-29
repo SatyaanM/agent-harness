@@ -120,6 +120,31 @@ describe("CodeQL severity gate", () => {
     ]);
   });
 
+  it("resolves rules declared by SARIF tool extensions", () => {
+    const findings = evaluateCodeqlSarif({
+      runs: [
+        {
+          tool: {
+            driver: {
+              rules: [{ id: "js/medium", properties: { "security-severity": "6.9" } }],
+            },
+            extensions: [
+              {
+                name: "security rules",
+                rules: [{ id: "js/high", properties: { "security-severity": "8.1" } }],
+              },
+            ],
+          },
+          results: [{ ruleId: "js/high", ruleIndex: 0 }],
+        },
+      ],
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({ ruleId: "js/high", securitySeverity: 8.1 }),
+    ]);
+  });
+
   it("permits ordinary rules without security severity metadata", () => {
     expect(
       evaluateCodeqlSarif({

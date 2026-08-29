@@ -23,18 +23,36 @@ function hasReviewedSuppression(result) {
   );
 }
 
-function findRule(result, rules) {
+function findRule(result, components) {
   const ruleId = typeof result.ruleId === "string" ? result.ruleId : undefined;
   if (ruleId) {
-    const matchingRule = rules.find(
-      (candidate) => typeof candidate === "object" && candidate !== null && candidate.id === ruleId,
-    );
+    const matchingRule = components
+      .flatMap(({ rules }) => rules)
+      .find(
+        (candidate) =>
+          typeof candidate === "object" && candidate !== null && candidate.id === ruleId,
+      );
     if (matchingRule) return asObject(matchingRule, `rule ${ruleId}`);
   }
 
-  const ruleIndex = result.ruleIndex;
-  if (Number.isInteger(ruleIndex) && ruleIndex >= 0 && ruleIndex < rules.length) {
-    const indexedRule = asObject(rules[ruleIndex], `rule ${ruleIndex}`);
+  const ruleReference =
+    typeof result.rule === "object" && result.rule !== null && !Array.isArray(result.rule)
+      ? result.rule
+      : undefined;
+  const ruleIndex = Number.isInteger(result.ruleIndex) ? result.ruleIndex : ruleReference?.index;
+  const referencedComponent = components.find(({ component }) => {
+    const reference = ruleReference?.toolComponent;
+    if (typeof reference !== "object" || reference === null || Array.isArray(reference)) {
+      return false;
+    }
+    return (
+      (typeof reference.name === "string" && component.name === reference.name) ||
+      (typeof reference.guid === "string" && component.guid === reference.guid)
+    );
+  });
+  const indexedRules = referencedComponent?.rules ?? components[0]?.rules ?? [];
+  if (Number.isInteger(ruleIndex) && ruleIndex >= 0 && ruleIndex < indexedRules.length) {
+    const indexedRule = asObject(indexedRules[ruleIndex], `rule ${ruleIndex}`);
     if (!ruleId || indexedRule.id === ruleId) return indexedRule;
   }
 
@@ -93,10 +111,30 @@ function evaluateRun(rawRun, runIndex) {
   const run = asObject(rawRun, `runs[${runIndex}]`);
   const tool = asObject(run.tool, `runs[${runIndex}].tool`);
   const driver = asObject(tool.driver, `runs[${runIndex}].tool.driver`);
-  const rules = Array.isArray(driver.rules) ? driver.rules : [];
+  const components = [
+    {
+      component: driver,
+      rules: Array.isArray(driver.rules) ? driver.rules : [],
+    },
+  ];
+  if (tool.extensions !== undefined) {
+    if (!Array.isArray(tool.extensions)) {
+      throw new Error(`Invalid CodeQL SARIF: runs[${runIndex}].tool.extensions must be an array`);
+    }
+    for (const [extensionIndex, rawExtension] of tool.extensions.entries()) {
+      const extension = asObject(
+        rawExtension,
+        `runs[${runIndex}].tool.extensions[${extensionIndex}]`,
+      );
+      components.push({
+        component: extension,
+        rules: Array.isArray(extension.rules) ? extension.rules : [],
+      });
+    }
+  }
   if (!Array.isArray(run.results)) return [];
   return run.results
-    .map((result, resultIndex) => evaluateResult(result, resultIndex, runIndex, rules))
+    .map((result, resultIndex) => evaluateResult(result, resultIndex, runIndex, components))
     .filter(Boolean);
 }
 
