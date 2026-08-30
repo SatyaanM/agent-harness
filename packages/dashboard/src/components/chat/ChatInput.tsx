@@ -21,6 +21,56 @@ interface PendingRequest {
   error: string;
 }
 
+async function consumeChatStream(
+  stream: ReadableStream<Uint8Array>,
+  onTextDelta: (text: string) => void,
+): Promise<string> {
+  const reader = stream.getReader();
+  try {
+    const decoder = new TextDecoder();
+    let accumulated = "";
+    let buffer = "";
+    let completed = false;
+
+    while (!completed) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6);
+        if (data === "[DONE]") {
+          completed = true;
+          break;
+        }
+
+        const parsed = parseChatStreamEvent(data);
+        if (parsed.type === "text-delta") {
+          accumulated += parsed.text;
+          onTextDelta(accumulated);
+        } else if (parsed.type === "done") {
+          completed = true;
+          break;
+        } else if (parsed.type === "error") {
+          throw new Error(parsed.error);
+        }
+      }
+    }
+
+    if (!completed) throw new Error("The response stream ended before completion.");
+    return accumulated;
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export default function ChatInput() {
   const [input, setInput] = useState("");
   const [pendingRequest, setPendingRequest] = useState<PendingRequest | null>(null);
@@ -67,7 +117,6 @@ export default function ChatInput() {
     }
     beginMessageStream(request.sessionId, request.assistantMessageId);
     updateMessage(request.sessionId, request.assistantMessageId, "");
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       const stream = await sendMessage(request.sessionId, request.content, request.agentName, {
         deliveryId: request.userMessageId,
@@ -75,44 +124,9 @@ export default function ChatInput() {
       });
       if (!stream) throw new Error("The server returned no response stream.");
 
-      reader = stream.getReader();
-      const decoder = new TextDecoder();
-      let accumulated = "";
-      let buffer = "";
-      let completed = false;
-
-      while (!completed) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6);
-          if (data === "[DONE]") {
-            completed = true;
-            break;
-          }
-
-          const parsed = parseChatStreamEvent(data);
-          if (parsed.type === "text-delta") {
-            accumulated += parsed.text;
-            updateMessage(request.sessionId, request.assistantMessageId, accumulated);
-          } else if (parsed.type === "done") {
-            completed = true;
-            break;
-          } else if (parsed.type === "error") {
-            throw new Error(parsed.error);
-          }
-        }
-      }
-
-      if (!completed) throw new Error("The response stream ended before completion.");
-      reader.releaseLock();
-      reader = undefined;
+      const accumulated = await consumeChatStream(stream, (content) =>
+        updateMessage(request.sessionId, request.assistantMessageId, content),
+      );
       finishMessageStream(request.sessionId, request.assistantMessageId);
       void fetchSession(request.sessionId)
         .then((latest) =>
@@ -133,8 +147,6 @@ export default function ChatInput() {
         });
       }
     } catch (error) {
-      await reader?.cancel().catch(() => undefined);
-      reader = undefined;
       const detail = error instanceof Error ? error.message : "Unknown network error";
       failMessageStream(request.sessionId, request.assistantMessageId);
       setPendingRequest({ ...request, error: detail });

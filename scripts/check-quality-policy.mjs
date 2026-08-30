@@ -211,48 +211,71 @@ function checkSourceFile(rootDir, filePath) {
 
   /** @param {ts.Node} node */
   function visit(node) {
-    if (node.kind === ts.SyntaxKind.AnyKeyword) {
-      diagnostics.push({
-        file: relative,
-        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        rule: "typescript/no-explicit-any",
-        message: "Explicit any is forbidden; use unknown and narrow or validate it.",
-      });
-    }
+    checkTypeScriptSyntax(node);
+    checkTransportBoundaries(node);
+    checkImportBoundaries(node);
+    checkPersistenceWrites(node);
+    ts.forEachChild(node, visit);
+  }
 
+  /** @param {ts.Node} node @param {string} rule @param {string} message */
+  function addNodeDiagnostic(node, rule, message) {
+    diagnostics.push({
+      file: relative,
+      line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+      rule,
+      message,
+    });
+  }
+
+  /** @param {ts.Node} node */
+  function checkTypeScriptSyntax(node) {
+    if (node.kind === ts.SyntaxKind.AnyKeyword) {
+      addNodeDiagnostic(
+        node,
+        "typescript/no-explicit-any",
+        "Explicit any is forbidden; use unknown and narrow or validate it.",
+      );
+    }
     if (
       (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) &&
       (ts.isAsExpression(node.expression) || ts.isTypeAssertionExpression(node.expression))
     ) {
-      diagnostics.push({
-        file: relative,
-        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        rule: "typescript/no-double-assertion",
-        message: "Double assertions bypass the type system; validate or narrow the value instead.",
-      });
+      addNodeDiagnostic(
+        node,
+        "typescript/no-double-assertion",
+        "Double assertions bypass the type system; validate or narrow the value instead.",
+      );
     }
-
     if (
       ts.isTypeAssertionExpression(node) ||
       (ts.isAsExpression(node) && node.type.getText(sourceFile) !== "const")
     ) {
-      diagnostics.push({
-        file: relative,
-        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        rule: "typescript/no-assertion",
-        message: "Type assertions are forbidden; validate or narrow the value instead.",
-      });
+      addNodeDiagnostic(
+        node,
+        "typescript/no-assertion",
+        "Type assertions are forbidden; validate or narrow the value instead.",
+      );
     }
-
     if (ts.isNonNullExpression(node)) {
-      diagnostics.push({
-        file: relative,
-        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        rule: "typescript/no-non-null-assertion",
-        message: "Non-null assertions are forbidden; narrow or validate the value instead.",
-      });
+      addNodeDiagnostic(
+        node,
+        "typescript/no-non-null-assertion",
+        "Non-null assertions are forbidden; narrow or validate the value instead.",
+      );
     }
+  }
 
+  /** @param {ts.Node} node */
+  function checkTransportBoundaries(node) {
+    checkBoundedJsonResponse(node);
+    checkValidatedRequest(node);
+    checkAsyncRoute(node);
+    checkParsedJson(node);
+  }
+
+  /** @param {ts.Node} node */
+  function checkBoundedJsonResponse(node) {
     if (
       relative.startsWith("packages/") &&
       ts.isCallExpression(node) &&
@@ -263,14 +286,16 @@ function checkSourceFile(rootDir, filePath) {
         ts.isIdentifier(node.expression.expression) && node.expression.expression.text === "express"
       )
     ) {
-      diagnostics.push({
-        file: relative,
-        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        rule: "boundaries/bounded-json-response",
-        message: "HTTP JSON responses must be byte-bounded and schema-validated before use.",
-      });
+      addNodeDiagnostic(
+        node,
+        "boundaries/bounded-json-response",
+        "HTTP JSON responses must be byte-bounded and schema-validated before use.",
+      );
     }
+  }
 
+  /** @param {ts.Node} node */
+  function checkValidatedRequest(node) {
     if (
       relative.startsWith("packages/server/src/routes/") &&
       ts.isPropertyAccessExpression(node) &&
@@ -279,14 +304,16 @@ function checkSourceFile(rootDir, filePath) {
       ["body", "params", "query"].includes(node.name.text) &&
       !isWithinCallNamed(node, "validateRequest")
     ) {
-      diagnostics.push({
-        file: relative,
-        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        rule: "boundaries/validate-request",
-        message: `req.${node.name.text} must flow directly into validateRequest before use.`,
-      });
+      addNodeDiagnostic(
+        node,
+        "boundaries/validate-request",
+        `req.${node.name.text} must flow directly into validateRequest before use.`,
+      );
     }
+  }
 
+  /** @param {ts.Node} node */
+  function checkAsyncRoute(node) {
     if (
       relative.startsWith("packages/server/src/routes/") &&
       ts.isCallExpression(node) &&
@@ -294,15 +321,16 @@ function checkSourceFile(rootDir, filePath) {
       ["delete", "get", "patch", "post", "put"].includes(node.expression.name.text) &&
       node.arguments.slice(1).some(isAsyncFunction)
     ) {
-      diagnostics.push({
-        file: relative,
-        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        rule: "express/handled-async-route",
-        message:
-          "Async Express handlers must be wrapped so rejected promises reach error middleware.",
-      });
+      addNodeDiagnostic(
+        node,
+        "express/handled-async-route",
+        "Async Express handlers must be wrapped so rejected promises reach error middleware.",
+      );
     }
+  }
 
+  /** @param {ts.Node} node */
+  function checkParsedJson(node) {
     if (
       (relative.startsWith("packages/core/src/persistence/") ||
         relative.startsWith("packages/server/src/") ||
@@ -313,150 +341,154 @@ function checkSourceFile(rootDir, filePath) {
       node.expression.expression.text === "JSON" &&
       node.expression.name.text === "parse"
     ) {
-      diagnostics.push({
-        file: relative,
-        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        rule: "boundaries/validated-json",
-        message: "Serialized boundary data must use parseJsonBoundary with an explicit schema.",
-      });
+      addNodeDiagnostic(
+        node,
+        "boundaries/validated-json",
+        "Serialized boundary data must use parseJsonBoundary with an explicit schema.",
+      );
     }
+  }
 
+  /** @param {ts.Node} node */
+  function checkImportBoundaries(node) {
+    if (!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)) return;
+    const specifier = node.moduleSpecifier;
+    if (!specifier || !ts.isStringLiteral(specifier)) return;
+    checkContractsBoundary(node, specifier.text);
+    checkPackageIsolation(node, specifier.text);
+  }
+
+  /** @param {ts.Node} node @param {string} specifier */
+  function checkContractsBoundary(node, specifier) {
+    if (!relative.startsWith("packages/core/src/contracts/")) return;
+    const contractsRoot = path.join(rootDir, "packages", "core", "src", "contracts");
+    const resolved = specifier.startsWith(".")
+      ? path.resolve(path.dirname(filePath), specifier)
+      : undefined;
     if (
-      relative.startsWith("packages/core/src/contracts/") &&
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
+      specifier.startsWith("node:") ||
+      (resolved !== undefined && !resolved.startsWith(`${contractsRoot}${path.sep}`))
     ) {
-      const specifier = node.moduleSpecifier.text;
-      const contractsRoot = path.join(rootDir, "packages", "core", "src", "contracts");
-      const resolved = specifier.startsWith(".")
-        ? path.resolve(path.dirname(filePath), specifier)
-        : undefined;
-      if (
-        specifier.startsWith("node:") ||
-        (resolved !== undefined && !resolved.startsWith(`${contractsRoot}${path.sep}`))
-      ) {
-        diagnostics.push({
-          file: relative,
-          line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-          rule: "boundaries/browser-safe-contracts",
-          message: "Core contracts must not import Node built-ins or core runtime modules.",
-        });
-      }
+      addNodeDiagnostic(
+        node,
+        "boundaries/browser-safe-contracts",
+        "Core contracts must not import Node built-ins or core runtime modules.",
+      );
     }
+  }
 
+  /** @param {ts.Node} node @param {string} specifier */
+  function checkPackageIsolation(node, specifier) {
+    checkCoreIsolation(node, specifier);
+    checkDashboardIsolation(node, specifier);
+    checkServerIsolation(node, specifier);
+  }
+
+  /** @param {ts.Node} node @param {string} specifier */
+  function checkCoreIsolation(node, specifier) {
     if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
+      !relative.startsWith("packages/core/src/") ||
+      relative.includes(".test.") ||
+      relative.includes(".spec.")
     ) {
-      const specifier = node.moduleSpecifier.text;
-      if (
-        relative.startsWith("packages/core/src/") &&
-        !relative.includes(".test.") &&
-        !relative.includes(".spec.")
-      ) {
-        if (
-          specifier === "express" ||
-          specifier === "socket.io" ||
-          specifier === "react" ||
-          specifier === "next" ||
-          specifier.startsWith("@agent-harness/server") ||
-          specifier.startsWith("@agent-harness/dashboard")
-        ) {
-          diagnostics.push({
-            file: relative,
-            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-            rule: "boundaries/core-isolation",
-            message: "Core must not import UI, server frameworks, or adapter packages.",
-          });
-        }
-      }
-
-      if (
-        relative.startsWith("packages/dashboard/src/") &&
-        !relative.includes(".test.") &&
-        !relative.includes(".spec.")
-      ) {
-        if (
-          specifier === "@agent-harness/core" ||
-          (specifier.startsWith("@agent-harness/core/") &&
-            !specifier.startsWith("@agent-harness/core/contracts"))
-        ) {
-          diagnostics.push({
-            file: relative,
-            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-            rule: "boundaries/dashboard-contracts-only",
-            message:
-              "Dashboard must only import from @agent-harness/core/contracts, not core runtime.",
-          });
-        }
-        if (
-          specifier === "express" ||
-          specifier === "socket.io" ||
-          specifier.startsWith("@agent-harness/server")
-        ) {
-          diagnostics.push({
-            file: relative,
-            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-            rule: "boundaries/dashboard-isolation",
-            message: "Dashboard must not import server modules or packages.",
-          });
-        }
-      }
-
-      if (
-        relative.startsWith("packages/server/src/") &&
-        !relative.includes(".test.") &&
-        !relative.includes(".spec.")
-      ) {
-        if (specifier.startsWith("@agent-harness/dashboard")) {
-          diagnostics.push({
-            file: relative,
-            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-            rule: "boundaries/server-isolation",
-            message: "Server must not import dashboard modules or packages.",
-          });
-        }
-      }
+      return;
     }
-
     if (
-      relative.startsWith("packages/core/src/") &&
+      ["express", "socket.io", "react", "next"].includes(specifier) ||
+      specifier.startsWith("@agent-harness/server") ||
+      specifier.startsWith("@agent-harness/dashboard")
+    ) {
+      addNodeDiagnostic(
+        node,
+        "boundaries/core-isolation",
+        "Core must not import UI, server frameworks, or adapter packages.",
+      );
+    }
+  }
+
+  /** @param {ts.Node} node @param {string} specifier */
+  function checkDashboardIsolation(node, specifier) {
+    if (
+      !relative.startsWith("packages/dashboard/src/") ||
+      relative.includes(".test.") ||
+      relative.includes(".spec.")
+    ) {
+      return;
+    }
+    if (
+      specifier === "@agent-harness/core" ||
+      (specifier.startsWith("@agent-harness/core/") &&
+        !specifier.startsWith("@agent-harness/core/contracts"))
+    ) {
+      addNodeDiagnostic(
+        node,
+        "boundaries/dashboard-contracts-only",
+        "Dashboard must only import from @agent-harness/core/contracts, not core runtime.",
+      );
+    }
+    if (
+      ["express", "socket.io"].includes(specifier) ||
+      specifier.startsWith("@agent-harness/server")
+    ) {
+      addNodeDiagnostic(
+        node,
+        "boundaries/dashboard-isolation",
+        "Dashboard must not import server modules or packages.",
+      );
+    }
+  }
+
+  /** @param {ts.Node} node @param {string} specifier */
+  function checkServerIsolation(node, specifier) {
+    if (
+      relative.startsWith("packages/server/src/") &&
       !relative.includes(".test.") &&
       !relative.includes(".spec.") &&
-      !relative.startsWith("packages/core/src/persistence/") &&
-      !relative.startsWith("packages/core/src/tool/") &&
-      relative !== "packages/core/src/presentation/inbox.ts" &&
-      relative !== "packages/core/src/filesystem/bounded-io.ts"
+      specifier.startsWith("@agent-harness/dashboard")
     ) {
-      if (
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        ts.isIdentifier(node.expression.expression) &&
-        ["fs", "fsExtra", "promises"].includes(node.expression.expression.text) &&
-        [
-          "writeFile",
-          "writeFileSync",
-          "outputFile",
-          "outputFileSync",
-          "rm",
-          "rmSync",
-          "remove",
-          "removeSync",
-        ].includes(node.expression.name.text)
-      ) {
-        diagnostics.push({
-          file: relative,
-          line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-          rule: "persistence/single-writer-only",
-          message:
-            "Direct filesystem write operations in core must be owned by SessionStore, BoundedIO, InboxManager, or workspace tools.",
-        });
-      }
+      addNodeDiagnostic(
+        node,
+        "boundaries/server-isolation",
+        "Server must not import dashboard modules or packages.",
+      );
     }
+  }
 
-    ts.forEachChild(node, visit);
+  /** @param {ts.Node} node */
+  function checkPersistenceWrites(node) {
+    if (
+      !relative.startsWith("packages/core/src/") ||
+      relative.includes(".test.") ||
+      relative.includes(".spec.") ||
+      relative.startsWith("packages/core/src/persistence/") ||
+      relative.startsWith("packages/core/src/tool/") ||
+      relative === "packages/core/src/presentation/inbox.ts" ||
+      relative === "packages/core/src/filesystem/bounded-io.ts"
+    ) {
+      return;
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      ["fs", "fsExtra", "promises"].includes(node.expression.expression.text) &&
+      [
+        "writeFile",
+        "writeFileSync",
+        "outputFile",
+        "outputFileSync",
+        "rm",
+        "rmSync",
+        "remove",
+        "removeSync",
+      ].includes(node.expression.name.text)
+    ) {
+      addNodeDiagnostic(
+        node,
+        "persistence/single-writer-only",
+        "Direct filesystem write operations in core must be owned by SessionStore, BoundedIO, InboxManager, or workspace tools.",
+      );
+    }
   }
 }
 

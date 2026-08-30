@@ -2,6 +2,17 @@
 
 A TypeScript multi-agent orchestration harness with a web dashboard for managing AI agent collaborations.
 
+<a href="https://deepwiki.com/SatyaanM/agent-harness"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+[![CI](https://github.com/SatyaanM/agent-harness/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/SatyaanM/agent-harness/actions/workflows/ci.yml)
+[![Full-stack E2E](https://github.com/SatyaanM/agent-harness/actions/workflows/fullstack.yml/badge.svg?branch=development)](https://github.com/SatyaanM/agent-harness/actions/workflows/fullstack.yml)
+[![CodeQL](https://github.com/SatyaanM/agent-harness/actions/workflows/codeql.yml/badge.svg?branch=development)](https://github.com/SatyaanM/agent-harness/actions/workflows/codeql.yml)
+[![Nightly quality](https://github.com/SatyaanM/agent-harness/actions/workflows/nightly.yml/badge.svg)](https://github.com/SatyaanM/agent-harness/actions/workflows/nightly.yml)
+[![OWASP ZAP](https://github.com/SatyaanM/agent-harness/actions/workflows/zap-scan.yml/badge.svg)](https://github.com/SatyaanM/agent-harness/actions/workflows/zap-scan.yml)
+[![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![pnpm](https://img.shields.io/badge/pnpm-11.22.0-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Security policy](https://img.shields.io/badge/security-policy-blue)](https://github.com/SatyaanM/agent-harness/blob/development/docs/SECURITY.md)
+
 An **orchestrator agent** can delegate tasks to background **worker agents** and deposit artifacts into a **knowledge inbox** for review. Everything runs through a persistent split-panel dashboard.
 
 > Implementation status: see [`docs/architecture/CURRENT_STATE.md`](docs/architecture/CURRENT_STATE.md). Architecture and feature documents also contain explicit target direction; they are not proof that a capability is wired into the running application.

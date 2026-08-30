@@ -67,6 +67,43 @@ interface Ipv6Parts {
   hextets: number[];
 }
 
+function normalizeIpv4Tail(address: string): string | null {
+  const match = address.match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u);
+  if (!match) return address;
+
+  const octets = match.slice(1).map((digit) => Number.parseInt(digit ?? "", 10));
+  if (octets.some((value) => Number.isNaN(value) || value < 0 || value > 255)) return null;
+  const [a, b, c, d] = octets;
+  if (a === undefined || b === undefined || c === undefined || d === undefined) return null;
+  const hex = `${(((a << 8) | b) >>> 0).toString(16)}:${(((c << 8) | d) >>> 0).toString(16)}`;
+  return `${address.slice(0, match.index ?? 0)}${hex}`;
+}
+
+function expandIpv6Groups(address: string): string[] | null {
+  const doubleColonIdx = address.indexOf("::");
+  if (doubleColonIdx < 0) return address.split(":");
+
+  const head = doubleColonIdx === 0 ? "" : address.slice(0, doubleColonIdx);
+  const tail = address.endsWith("::") ? "" : address.slice(doubleColonIdx + 2);
+  const headGroups = head === "" ? [] : head.split(":");
+  const tailGroups = tail === "" ? [] : tail.split(":");
+  const missing = 8 - headGroups.length - tailGroups.length;
+  if (missing < 0) return null;
+  return [...headGroups, ...Array(missing).fill("0"), ...tailGroups];
+}
+
+function parseIpv6Hextets(groups: readonly string[]): number[] | null {
+  if (groups.length !== 8) return null;
+  const hextets: number[] = [];
+  for (const group of groups) {
+    if (group.length === 0 || group.length > 4) return null;
+    const parsed = Number.parseInt(group, 16);
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 0xffff) return null;
+    hextets.push(parsed);
+  }
+  return hextets;
+}
+
 /**
  * Expand any IPv6 text representation to 8 16-bit hextets.
  *
@@ -82,62 +119,17 @@ function expandIpv6(address: string): Ipv6Parts | null {
   // text allows either `::a.b.c.d`, `::ffff:a.b.c.d`, `::w.xy:z` or even a
   // leading `0:0:0:0:0:0:w.x.y.z`. Convert those to 32-bit integers so the
   // generic hextet parser below sees only hex pairs.
-  const ipv4Tail = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u;
-  const match = address.match(ipv4Tail);
-  let normalized = address;
-  if (match) {
-    // Capture groups 1..4 are each a string when the regex matches; coerce
-    // the `string | undefined` shape to plain strings via `??` once and then
-    // map them to integers below.
-    const firstDigit = match[1] ?? "";
-    const secondDigit = match[2] ?? "";
-    const thirdDigit = match[3] ?? "";
-    const fourthDigit = match[4] ?? "";
-    const octets: Array<number | null> = [firstDigit, secondDigit, thirdDigit, fourthDigit].map(
-      (digit) => {
-        const value = Number.parseInt(digit, 10);
-        return Number.isNaN(value) || value < 0 || value > 255 ? null : value;
-      },
-    );
-    if (octets.some((value) => value === null)) return null;
-    const a = octets[0] ?? 0;
-    const b = octets[1] ?? 0;
-    const c = octets[2] ?? 0;
-    const d = octets[3] ?? 0;
-    const hex = `${(((a << 8) | b) >>> 0).toString(16)}:${(((c << 8) | d) >>> 0).toString(16)}`;
-    normalized = `${address.slice(0, match.index)}${hex}`;
-  }
+  const normalized = normalizeIpv4Tail(address);
+  if (!normalized) return null;
 
-  if (normalized.includes(":")) {
-    // Strip optional zone id (RFC 4007 / RFC 6874) like `fe80::1%eth0`.
-    const zoneIdx = normalized.indexOf("%");
-    if (zoneIdx >= 0) normalized = normalized.slice(0, zoneIdx);
-  }
+  // Strip optional zone id (RFC 4007 / RFC 6874) like `fe80::1%eth0`.
+  const zoneIdx = normalized.indexOf("%");
+  const withoutZone = zoneIdx >= 0 ? normalized.slice(0, zoneIdx) : normalized;
+  const groups = expandIpv6Groups(withoutZone);
+  if (!groups) return null;
 
-  // Collapse `::` into a single zero-run marker.
-  const doubleColonIdx = normalized.indexOf("::");
-  let groups: string[];
-  if (doubleColonIdx >= 0) {
-    const head = doubleColonIdx === 0 ? "" : normalized.slice(0, doubleColonIdx);
-    const tail = normalized.endsWith("::") ? "" : normalized.slice(doubleColonIdx + 2);
-    const headGroups = head === "" ? [] : head.split(":");
-    const tailGroups = tail === "" ? [] : tail.split(":");
-    const missing = 8 - headGroups.length - tailGroups.length;
-    if (missing < 0) return null;
-    groups = [...headGroups, ...Array(missing).fill("0"), ...tailGroups];
-  } else {
-    groups = normalized.split(":");
-  }
-
-  if (groups.length !== 8) return null;
-  const hextets: number[] = [];
-  for (const group of groups) {
-    if (group.length === 0 || group.length > 4) return null;
-    const parsed = Number.parseInt(group, 16);
-    if (Number.isNaN(parsed) || parsed < 0 || parsed > 0xffff) return null;
-    hextets.push(parsed);
-  }
-  return { hextets };
+  const hextets = parseIpv6Hextets(groups);
+  return hextets ? { hextets } : null;
 }
 
 /**
@@ -252,6 +244,57 @@ function refused(reason: string): Error {
   return new Error(`Refusing outbound URL: ${reason}`);
 }
 
+async function requestWithRedirects(
+  requestImpl: RequestImplementation,
+  rawUrl: string,
+  resolver: AddressResolver,
+  signal: AbortSignal,
+): Promise<Response | string> {
+  let currentTarget = await resolveOutboundUrl(rawUrl, resolver, signal);
+  let response: Response | undefined;
+  for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
+    response = await requestImpl(currentTarget.url, currentTarget.addresses, {
+      signal,
+      headers: { "User-Agent": "agent-harness/0.1.0" },
+      redirect: "manual",
+    });
+    if (!REDIRECT_STATUSES.has(response.status)) break;
+    const location = response.headers.get("location");
+    if (!location) break;
+    if (redirects === MAX_REDIRECTS) {
+      await response.body?.cancel();
+      return `[error] Response exceeded ${MAX_REDIRECTS} redirects.`;
+    }
+    await response.body?.cancel();
+    currentTarget = await resolveOutboundUrl(
+      new URL(location, currentTarget.url),
+      resolver,
+      signal,
+    );
+  }
+  return response ?? "[error] Request did not produce a response.";
+}
+
+async function formatWebFetchResponse(
+  response: Response,
+  format: "text" | "json",
+): Promise<string> {
+  if (!response.ok) {
+    try {
+      await response.body?.cancel();
+    } catch {}
+    return `[error] HTTP ${response.status} ${response.statusText}`;
+  }
+
+  const text = await readResponseTextBounded(response, MAX_BODY_BYTES, "web fetch response");
+  if (format !== "json") return text;
+  try {
+    return JSON.stringify(parseJsonBoundary(z.unknown(), text, "web fetch JSON"), null, 2);
+  } catch {
+    return text;
+  }
+}
+
 export async function validateOutboundUrl(
   rawUrl: string | URL,
   resolver: AddressResolver = resolveAddresses,
@@ -319,47 +362,9 @@ export function createWebFetchTool(options?: {
         : controller.signal;
 
       try {
-        let currentTarget = await resolveOutboundUrl(args.url, resolver, signal);
-        let response: Response | undefined;
-        for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-          response = await requestImpl(currentTarget.url, currentTarget.addresses, {
-            signal,
-            headers: { "User-Agent": "agent-harness/0.1.0" },
-            redirect: "manual",
-          });
-          if (!REDIRECT_STATUSES.has(response.status)) break;
-          const location = response.headers.get("location");
-          if (!location) break;
-          if (redirects === MAX_REDIRECTS) {
-            await response.body?.cancel();
-            return `[error] Response exceeded ${MAX_REDIRECTS} redirects.`;
-          }
-          await response.body?.cancel();
-          currentTarget = await resolveOutboundUrl(
-            new URL(location, currentTarget.url),
-            resolver,
-            signal,
-          );
-        }
-
-        if (!response) return "[error] Request did not produce a response.";
-        if (!response.ok) {
-          try {
-            await response.body?.cancel();
-          } catch {}
-          return `[error] HTTP ${response.status} ${response.statusText}`;
-        }
-
-        const text = await readResponseTextBounded(response, MAX_BODY_BYTES, "web fetch response");
-
-        if (args.format === "json") {
-          try {
-            return JSON.stringify(parseJsonBoundary(z.unknown(), text, "web fetch JSON"), null, 2);
-          } catch {
-            return text;
-          }
-        }
-        return text;
+        const response = await requestWithRedirects(requestImpl, args.url, resolver, signal);
+        if (typeof response === "string") return response;
+        return formatWebFetchResponse(response, args.format);
       } catch (err: unknown) {
         if (isRecord(err) && err.name === "AbortError") {
           return `[error] Request timed out after ${timeoutMs}ms.`;

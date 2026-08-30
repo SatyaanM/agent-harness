@@ -8,14 +8,17 @@ function read(path: string): string {
 describe("required CI gates", () => {
   it("keeps the credential-free PR gate suite and full-stack check required by workflow", () => {
     const workflow = read(".github/workflows/ci.yml");
+    const fullstackWorkflow = read(".github/workflows/fullstack.yml");
     const checks = read("scripts/run-checks.mjs");
 
     expect(workflow).toContain("pull_request:");
     expect(workflow).toContain("name: Required repository gates");
-    expect(workflow).toContain("name: Required full-stack gate");
     expect(workflow).toContain("corepack pnpm install --frozen-lockfile");
     expect(workflow).toContain("corepack pnpm run check:ci");
-    expect(workflow).toContain("corepack pnpm run test:fullstack");
+    expect(fullstackWorkflow).toContain("pull_request:");
+    expect(fullstackWorkflow).toContain("name: Required full-stack gate");
+    expect(fullstackWorkflow).toContain("corepack pnpm install --frozen-lockfile");
+    expect(fullstackWorkflow).toContain("corepack pnpm run test:fullstack");
     for (const command of [
       "quality:ci",
       "typecheck",

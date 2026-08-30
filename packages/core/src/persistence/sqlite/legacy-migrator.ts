@@ -43,6 +43,268 @@ const OpenSessionsFileSchema = z.array(
   }),
 );
 
+type LegacyMailboxEvent = { sessionId: string; message: PendingMessage };
+type OpenSessionData = { sessionId: string; tabOrder: number; isActive: boolean };
+
+interface LegacyFiles {
+  transcriptFiles: string[];
+  mailboxFiles: string[];
+  openSessionsPath: string;
+  hasOpenSessions: boolean;
+}
+
+interface ParsedLegacyData {
+  validSessions: SessionData[];
+  validMailboxEvents: LegacyMailboxEvent[];
+  openSessionsData: OpenSessionData[];
+  diagnostics: MigrationDiagnostic[];
+  quarantinedCount: number;
+}
+
+interface MigrationCounts {
+  migratedMessages: number;
+  migratedTasks: number;
+  migratedMailboxEvents: number;
+}
+
+function skippedMigrationResult(): LegacyMigrationResult {
+  return {
+    migratedSessions: 0,
+    migratedMessages: 0,
+    migratedTasks: 0,
+    migratedMailboxEvents: 0,
+    quarantinedFiles: 0,
+    diagnostics: [],
+    skipped: true,
+  };
+}
+
+function quarantineLegacyFile(
+  filePath: string,
+  file: string,
+  kind: MigrationDiagnostic["kind"],
+  error: unknown,
+  now: number,
+  diagnostics: MigrationDiagnostic[],
+): void {
+  const errorMsg = error instanceof Error ? error.message : String(error);
+  const quarantinePath = `${filePath}.invalid-${now}-${uuidv4().slice(0, 8)}`;
+  try {
+    fs.renameSync(filePath, quarantinePath);
+  } catch {
+    try {
+      fs.copyFileSync(filePath, quarantinePath);
+      fs.unlinkSync(filePath);
+    } catch {
+      // best effort quarantine
+    }
+  }
+  diagnostics.push({
+    file,
+    kind,
+    error: errorMsg,
+    quarantinePath,
+    timestamp: new Date(now).toISOString(),
+  });
+}
+
+function migrationSessionStatus(status: string | undefined): "completed" | "cancelled" | "failed" {
+  return status === "done"
+    ? "completed"
+    : status === "cancelled"
+      ? "cancelled"
+      : status === "error"
+        ? "failed"
+        : "completed";
+}
+
+function migrationMailboxStatus(status: string | undefined): "completed" | "cancelled" | "failed" {
+  return status === "done" ? "completed" : status === "cancelled" ? "cancelled" : "failed";
+}
+
+function discoverLegacyFiles(sessionsDir: string, harnessDir: string): LegacyFiles | undefined {
+  if (!fs.existsSync(sessionsDir)) return undefined;
+
+  const transcriptFiles: string[] = [];
+  const mailboxFiles: string[] = [];
+  for (const entry of fs.readdirSync(sessionsDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    if (entry.name.endsWith(".mailbox.jsonl")) {
+      mailboxFiles.push(path.join(sessionsDir, entry.name));
+    } else if (
+      entry.name.endsWith(".json") &&
+      !entry.name.startsWith(".") &&
+      !entry.name.includes(".invalid-")
+    ) {
+      transcriptFiles.push(path.join(sessionsDir, entry.name));
+    }
+  }
+
+  const openSessionsPath = path.join(harnessDir, "open-sessions.json");
+  const hasOpenSessions = fs.existsSync(openSessionsPath);
+  if (transcriptFiles.length === 0 && mailboxFiles.length === 0 && !hasOpenSessions) {
+    return undefined;
+  }
+  return { transcriptFiles, mailboxFiles, openSessionsPath, hasOpenSessions };
+}
+
+function backupLegacyFiles(files: LegacyFiles, backupDir: string): void {
+  for (const file of files.transcriptFiles) {
+    fs.copyFileSync(file, path.join(backupDir, path.basename(file)));
+  }
+  for (const file of files.mailboxFiles) {
+    fs.copyFileSync(file, path.join(backupDir, path.basename(file)));
+  }
+  if (files.hasOpenSessions) {
+    fs.copyFileSync(files.openSessionsPath, path.join(backupDir, "open-sessions.json"));
+  }
+}
+
+function parseTranscriptFile(
+  filePath: string,
+  now: number,
+  diagnostics: MigrationDiagnostic[],
+): SessionData | undefined {
+  try {
+    return parseJsonBoundary(
+      SessionDataSchema,
+      fs.readFileSync(filePath, "utf8"),
+      `legacy transcript ${path.basename(filePath)}`,
+    );
+  } catch (error) {
+    quarantineLegacyFile(filePath, path.basename(filePath), "transcript", error, now, diagnostics);
+    return undefined;
+  }
+}
+
+function parseMailboxFile(
+  filePath: string,
+  now: number,
+  diagnostics: MigrationDiagnostic[],
+  events: LegacyMailboxEvent[],
+): void {
+  const fileName = path.basename(filePath);
+  const sessionId = fileName.replace(/\.mailbox\.jsonl$/, "");
+  try {
+    const lines = fs.readFileSync(filePath, "utf8").split("\n");
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]?.trim();
+      if (!line) continue;
+      const message = parseJsonBoundary(
+        PendingMessageSchema,
+        line,
+        `legacy mailbox ${fileName} line ${i + 1}`,
+      );
+      events.push({ sessionId, message });
+    }
+  } catch (error) {
+    quarantineLegacyFile(filePath, fileName, "mailbox", error, now, diagnostics);
+  }
+}
+
+function parseOpenSessionsFile(
+  filePath: string,
+  now: number,
+  diagnostics: MigrationDiagnostic[],
+): OpenSessionData[] {
+  try {
+    const parsed = parseJsonBoundary(
+      OpenSessionsFileSchema,
+      fs.readFileSync(filePath, "utf8"),
+      "legacy open-sessions.json",
+    );
+    return parsed.map((item, index) => ({
+      sessionId: item.sessionId,
+      tabOrder: item.tabOrder ?? index,
+      isActive: item.isActive ?? false,
+    }));
+  } catch (error) {
+    quarantineLegacyFile(filePath, "open-sessions.json", "open_sessions", error, now, diagnostics);
+    return [];
+  }
+}
+
+function parseLegacyFiles(files: LegacyFiles, now: number): ParsedLegacyData {
+  const diagnostics: MigrationDiagnostic[] = [];
+  const validSessions = files.transcriptFiles
+    .map((filePath) => parseTranscriptFile(filePath, now, diagnostics))
+    .filter((session): session is SessionData => session !== undefined);
+  const validMailboxEvents: LegacyMailboxEvent[] = [];
+  for (const filePath of files.mailboxFiles) {
+    parseMailboxFile(filePath, now, diagnostics, validMailboxEvents);
+  }
+  const openSessionsData = files.hasOpenSessions
+    ? parseOpenSessionsFile(files.openSessionsPath, now, diagnostics)
+    : [];
+  return {
+    validSessions,
+    validMailboxEvents,
+    openSessionsData,
+    diagnostics,
+    quarantinedCount: diagnostics.length,
+  };
+}
+
+function buildTaskParentMap(
+  validSessions: readonly SessionData[],
+  validMailboxEvents: readonly LegacyMailboxEvent[],
+): Map<string, string> {
+  const taskParentMap = new Map<string, string>();
+  for (const item of validMailboxEvents) {
+    taskParentMap.set(item.message.taskId, item.sessionId);
+  }
+  for (const session of validSessions) {
+    for (const mailbox of session.mailbox ?? []) {
+      if (typeof mailbox.taskId === "string") taskParentMap.set(mailbox.taskId, session.sessionId);
+    }
+    for (const message of session.messages) {
+      if (message.role !== "tool" || !message.content?.includes("taskId")) continue;
+      try {
+        const parsed = parseJsonBoundary(
+          z.object({ taskId: z.string().min(1) }),
+          message.content,
+          "tool result taskId extract",
+        );
+        taskParentMap.set(parsed.taskId, session.sessionId);
+      } catch {
+        // ignore non-matching tool contents
+      }
+    }
+  }
+  return taskParentMap;
+}
+
+function renameMigratedFiles(files: LegacyFiles): void {
+  const paths = [
+    ...files.transcriptFiles,
+    ...files.mailboxFiles,
+    ...(files.hasOpenSessions ? [files.openSessionsPath] : []),
+  ];
+  for (const file of paths) {
+    try {
+      if (fs.existsSync(file)) fs.renameSync(file, `${file}.migrated`);
+    } catch {
+      // best effort
+    }
+  }
+}
+
+function writeMigrationDiagnostics(
+  harnessDir: string,
+  diagnostics: readonly MigrationDiagnostic[],
+): void {
+  if (diagnostics.length === 0) return;
+  try {
+    fs.writeFileSync(
+      path.join(harnessDir, "migration_diagnostics.json"),
+      JSON.stringify(diagnostics, null, 2),
+      "utf8",
+    );
+  } catch {
+    // best effort diagnostic save
+  }
+}
+
 export class LegacyMigrator {
   private readonly sessionRepo: SessionRepository;
   private readonly messageRepo: MessageRepository;
@@ -63,384 +325,223 @@ export class LegacyMigrator {
   }
 
   migrate(): LegacyMigrationResult {
-    const diagnostics: MigrationDiagnostic[] = [];
+    const files = discoverLegacyFiles(this.sessionsDir, this.harnessDir);
+    if (!files) return skippedMigrationResult();
 
-    if (!fs.existsSync(this.sessionsDir)) {
-      return {
-        migratedSessions: 0,
-        migratedMessages: 0,
-        migratedTasks: 0,
-        migratedMailboxEvents: 0,
-        quarantinedFiles: 0,
-        diagnostics: [],
-        skipped: true,
-      };
-    }
-
-    // 1. Discover legacy files
-    const entries = fs.readdirSync(this.sessionsDir, { withFileTypes: true });
-    const transcriptFiles: string[] = [];
-    const mailboxFiles: string[] = [];
-
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      if (entry.name.endsWith(".mailbox.jsonl")) {
-        mailboxFiles.push(path.join(this.sessionsDir, entry.name));
-      } else if (
-        entry.name.endsWith(".json") &&
-        !entry.name.startsWith(".") &&
-        !entry.name.includes(".invalid-")
-      ) {
-        transcriptFiles.push(path.join(this.sessionsDir, entry.name));
-      }
-    }
-
-    const openSessionsPath = path.join(this.harnessDir, "open-sessions.json");
-    const hasOpenSessions = fs.existsSync(openSessionsPath);
-
-    if (transcriptFiles.length === 0 && mailboxFiles.length === 0 && !hasOpenSessions) {
-      return {
-        migratedSessions: 0,
-        migratedMessages: 0,
-        migratedTasks: 0,
-        migratedMailboxEvents: 0,
-        quarantinedFiles: 0,
-        diagnostics: [],
-        skipped: true,
-      };
-    }
-
-    // 2. Snapshot & Pre-Migration Backup
     const now = Date.now();
     const backupDir = path.join(this.harnessDir, `legacy_backup_${now}_${uuidv4().slice(0, 8)}`);
     fs.mkdirSync(backupDir, { recursive: true });
+    backupLegacyFiles(files, backupDir);
 
-    for (const file of transcriptFiles) {
-      fs.copyFileSync(file, path.join(backupDir, path.basename(file)));
-    }
-    for (const file of mailboxFiles) {
-      fs.copyFileSync(file, path.join(backupDir, path.basename(file)));
-    }
-    if (hasOpenSessions) {
-      fs.copyFileSync(openSessionsPath, path.join(backupDir, "open-sessions.json"));
-    }
+    const parsed = parseLegacyFiles(files, now);
+    const taskParentMap = buildTaskParentMap(parsed.validSessions, parsed.validMailboxEvents);
+    const counts = this.migrateDatabase(
+      parsed.validSessions,
+      parsed.validMailboxEvents,
+      parsed.openSessionsData,
+      taskParentMap,
+    );
 
-    // 3. Parse, Validate & Quarantine
-    const validSessions: SessionData[] = [];
-    const validMailboxEvents: { sessionId: string; message: PendingMessage }[] = [];
-    let quarantinedCount = 0;
+    this.verifyIntegrity();
+    renameMigratedFiles(files);
+    writeMigrationDiagnostics(this.harnessDir, parsed.diagnostics);
 
-    for (const filePath of transcriptFiles) {
-      try {
-        const content = fs.readFileSync(filePath, "utf8");
-        const parsed = parseJsonBoundary(
-          SessionDataSchema,
-          content,
-          `legacy transcript ${path.basename(filePath)}`,
-        );
-        validSessions.push(parsed);
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        const quarantinePath = `${filePath}.invalid-${now}-${uuidv4().slice(0, 8)}`;
-        try {
-          fs.renameSync(filePath, quarantinePath);
-        } catch {
-          try {
-            fs.copyFileSync(filePath, quarantinePath);
-            fs.unlinkSync(filePath);
-          } catch {
-            // best effort quarantine
-          }
-        }
-        quarantinedCount += 1;
-        diagnostics.push({
-          file: path.basename(filePath),
-          kind: "transcript",
-          error: errorMsg,
-          quarantinePath,
-          timestamp: new Date(now).toISOString(),
-        });
-      }
-    }
+    return {
+      migratedSessions: parsed.validSessions.length,
+      ...counts,
+      quarantinedFiles: parsed.quarantinedCount,
+      diagnostics: parsed.diagnostics,
+      backupDir,
+      skipped: false,
+    };
+  }
 
-    for (const filePath of mailboxFiles) {
-      const fileName = path.basename(filePath);
-      const sessionId = fileName.replace(/\.mailbox\.jsonl$/, "");
-      try {
-        const content = fs.readFileSync(filePath, "utf8");
-        const lines = content.split("\n");
-        for (let i = 0; i < lines.length; i += 1) {
-          const line = lines[i]?.trim();
-          if (!line) continue;
-          const parsed = parseJsonBoundary(
-            PendingMessageSchema,
-            line,
-            `legacy mailbox ${fileName} line ${i + 1}`,
-          );
-          validMailboxEvents.push({ sessionId, message: parsed });
-        }
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        const quarantinePath = `${filePath}.invalid-${now}-${uuidv4().slice(0, 8)}`;
-        try {
-          fs.renameSync(filePath, quarantinePath);
-        } catch {
-          try {
-            fs.copyFileSync(filePath, quarantinePath);
-            fs.unlinkSync(filePath);
-          } catch {
-            // best effort quarantine
-          }
-        }
-        quarantinedCount += 1;
-        diagnostics.push({
-          file: fileName,
-          kind: "mailbox",
-          error: errorMsg,
-          quarantinePath,
-          timestamp: new Date(now).toISOString(),
-        });
-      }
-    }
-
-    let openSessionsData: {
-      sessionId: string;
-      tabOrder: number;
-      isActive: boolean;
-    }[] = [];
-    if (hasOpenSessions) {
-      try {
-        const content = fs.readFileSync(openSessionsPath, "utf8");
-        const parsed = parseJsonBoundary(
-          OpenSessionsFileSchema,
-          content,
-          "legacy open-sessions.json",
-        );
-        openSessionsData = parsed.map((item, idx) => ({
-          sessionId: item.sessionId,
-          tabOrder: item.tabOrder ?? idx,
-          isActive: item.isActive ?? false,
-        }));
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        const quarantinePath = `${openSessionsPath}.invalid-${now}-${uuidv4().slice(0, 8)}`;
-        try {
-          fs.renameSync(openSessionsPath, quarantinePath);
-        } catch {
-          try {
-            fs.copyFileSync(openSessionsPath, quarantinePath);
-            fs.unlinkSync(openSessionsPath);
-          } catch {
-            // best effort quarantine
-          }
-        }
-        quarantinedCount += 1;
-        diagnostics.push({
-          file: "open-sessions.json",
-          kind: "open_sessions",
-          error: errorMsg,
-          quarantinePath,
-          timestamp: new Date(now).toISOString(),
-        });
-      }
-    }
-
-    // 4. Relational Transformation & Atomic Batch Load
-    let migratedMessagesCount = 0;
-    let migratedTasksCount = 0;
-    let migratedMailboxCount = 0;
-
-    // Build task-to-parent-session mapping across mailbox events and session transcripts
-    const taskParentMap = new Map<string, string>();
-    for (const item of validMailboxEvents) {
-      taskParentMap.set(item.message.taskId, item.sessionId);
-    }
-    for (const s of validSessions) {
-      if (Array.isArray(s.mailbox)) {
-        for (const mb of s.mailbox) {
-          if (mb && typeof mb.taskId === "string") {
-            taskParentMap.set(mb.taskId, s.sessionId);
-          }
-        }
-      }
-      for (const msg of s.messages) {
-        if (msg.role === "tool" && msg.content && msg.content.includes("taskId")) {
-          try {
-            const parsed = parseJsonBoundary(
-              z.object({ taskId: z.string().min(1) }),
-              msg.content,
-              "tool result taskId extract",
-            );
-            taskParentMap.set(parsed.taskId, s.sessionId);
-          } catch {
-            // ignore non-matching tool contents
-          }
-        }
-      }
-    }
-
+  private migrateDatabase(
+    validSessions: readonly SessionData[],
+    validMailboxEvents: readonly LegacyMailboxEvent[],
+    openSessionsData: readonly OpenSessionData[],
+    taskParentMap: ReadonlyMap<string, string>,
+  ): MigrationCounts {
+    const counts: MigrationCounts = {
+      migratedMessages: 0,
+      migratedTasks: 0,
+      migratedMailboxEvents: 0,
+    };
     this.db.immediateTransaction(() => {
-      // Pass 1: Import all genuine session roots first so real parent sessions exist
-      for (const session of validSessions) {
-        const createdAtMs = new Date(session.createdAt).getTime();
-        const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : null;
-        const updatedAtMs = completedAtMs ?? createdAtMs;
-
-        const existingSession = this.sessionRepo.get(session.sessionId);
-        if (!existingSession) {
-          this.sessionRepo.create({
-            id: session.sessionId,
-            agentName: session.agentName ?? "orchestrator",
-            title: session.title ?? null,
-            prompt: session.prompt,
-            createdAt: Number.isNaN(createdAtMs) ? Date.now() : createdAtMs,
-            updatedAt: Number.isNaN(updatedAtMs) ? Date.now() : updatedAtMs,
-            completedAt: completedAtMs,
-            metadata: session.result ? { result: session.result } : null,
-          });
-        }
-      }
-
-      // Pass 2: Import messages and resolve worker task relationships
-      for (const session of validSessions) {
-        const createdAtMs = new Date(session.createdAt).getTime();
-        const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : null;
-
-        // Insert messages idempotently
-        const existingMessages = this.messageRepo.listBySession(session.sessionId);
-        const existingSeqNums = new Set(existingMessages.map((m) => m.sequence_num));
-
-        for (let i = 0; i < session.messages.length; i += 1) {
-          if (existingSeqNums.has(i)) continue;
-          const msg = session.messages[i];
-          if (!msg) continue;
-          const msgCreatedMs = msg.createdAt
-            ? new Date(msg.createdAt).getTime()
-            : createdAtMs + i * 1000;
-
-          this.messageRepo.create({
-            ...(msg.role === "user" && msg.deliveryId ? { id: msg.deliveryId } : {}),
-            sessionId: session.sessionId,
-            role: msg.role,
-            content: msg.content,
-            reasoning: msg.role === "assistant" ? (msg.reasoning ?? null) : null,
-            toolCalls: msg.role === "assistant" ? (msg.toolCalls ?? null) : null,
-            toolCallId: msg.role === "tool" ? (msg.toolCallId ?? null) : null,
-            sequenceNum: i,
-            createdAt: Number.isNaN(msgCreatedMs) ? Date.now() : msgCreatedMs,
-            metadata: msg.meta ? { meta: msg.meta } : null,
-          });
-          migratedMessagesCount += 1;
-        }
-
-        // If worker session, resolve top-level parent session and record in tasks table
-        if (session.sessionId.startsWith("worker-")) {
-          const taskId = session.taskId || session.sessionId.replace(/^worker-/, "");
-          let parentSessionId =
-            taskParentMap.get(taskId) ??
-            taskParentMap.get(session.sessionId.replace(/^worker-/, ""));
-
-          if (!parentSessionId) {
-            const existingTaskInDb = this.taskRepo.get(taskId);
-            if (existingTaskInDb) {
-              parentSessionId = existingTaskInDb.parent_session_id;
-            } else {
-              const nonWorker = validSessions.find((s) => !s.sessionId.startsWith("worker-"));
-              parentSessionId = nonWorker ? nonWorker.sessionId : session.sessionId;
-            }
-          }
-
-          // Ensure parent session exists before inserting task foreign key
-          const parentRow = this.sessionRepo.get(parentSessionId);
-          if (!parentRow) {
-            this.sessionRepo.create({
-              id: parentSessionId,
-              agentName: "orchestrator",
-              prompt: "Recovered delegating session",
-              createdAt: Date.now(),
-            });
-          }
-
-          const existingTask = this.taskRepo.get(taskId);
-          if (!existingTask) {
-            this.taskRepo.create({
-              taskId,
-              parentSessionId,
-              workerSessionId: session.sessionId,
-              description: session.prompt,
-              status:
-                session.result?.status === "done"
-                  ? "completed"
-                  : session.result?.status === "cancelled"
-                    ? "cancelled"
-                    : session.result?.status === "error"
-                      ? "failed"
-                      : "completed",
-              createdAt: Number.isNaN(createdAtMs) ? Date.now() : createdAtMs,
-              completedAt: completedAtMs,
-            });
-            migratedTasksCount += 1;
-          }
-        }
-      }
-
-      // Import mailbox events
-      for (const item of validMailboxEvents) {
-        // Ensure parent session exists
-        const parent = this.sessionRepo.get(item.sessionId);
-        if (!parent) {
-          this.sessionRepo.create({
-            id: item.sessionId,
-            agentName: "orchestrator",
-            prompt: "Recovered delegating session",
-            createdAt: Date.now(),
-          });
-        }
-
-        // Ensure task exists
-        const existingTask = this.taskRepo.get(item.message.taskId);
-        if (!existingTask) {
-          this.taskRepo.create({
-            taskId: item.message.taskId,
-            parentSessionId: item.sessionId,
-            description: item.message.summary,
-            status:
-              item.message.status === "done"
-                ? "completed"
-                : item.message.status === "cancelled"
-                  ? "cancelled"
-                  : "failed",
-            createdAt: Date.now(),
-          });
-          migratedTasksCount += 1;
-        }
-
-        // Avoid enqueuing duplicates
-        const pendingEvents = this.mailboxRepo.peekPending(item.sessionId);
-        const alreadyPending = pendingEvents.some((e) => e.task_id === item.message.taskId);
-        if (!alreadyPending) {
-          this.mailboxRepo.enqueue({
-            parentSessionId: item.sessionId,
-            taskId: item.message.taskId,
-            eventType: "worker_completed",
-            payload: item.message,
-            createdAt: new Date(item.message.receivedAt).getTime() || Date.now(),
-          });
-          migratedMailboxCount += 1;
-        }
-      }
-
-      // Import open sessions
-      if (openSessionsData.length > 0) {
-        // Filter open sessions that actually exist in sessions table
-        const filteredOpenSessions = openSessionsData.filter((s) =>
-          Boolean(this.sessionRepo.get(s.sessionId)),
-        );
-        this.openSessionsRepo.upsertAll(filteredOpenSessions);
-      }
+      this.importSessionRoots(validSessions);
+      const sessionCounts = this.importSessionData(validSessions, taskParentMap);
+      const mailboxCounts = this.importMailboxEvents(validMailboxEvents);
+      this.importOpenSessions(openSessionsData);
+      counts.migratedMessages = sessionCounts.migratedMessages;
+      counts.migratedTasks = sessionCounts.migratedTasks + mailboxCounts.migratedTasks;
+      counts.migratedMailboxEvents = mailboxCounts.migratedMailboxEvents;
     })();
+    return counts;
+  }
 
-    // 5. Post-Migration Verification & Integrity Check
+  private importSessionRoots(sessions: readonly SessionData[]): void {
+    for (const session of sessions) {
+      const createdAtMs = new Date(session.createdAt).getTime();
+      const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : null;
+      const updatedAtMs = completedAtMs ?? createdAtMs;
+      if (this.sessionRepo.get(session.sessionId)) continue;
+      this.sessionRepo.create({
+        id: session.sessionId,
+        agentName: session.agentName ?? "orchestrator",
+        title: session.title ?? null,
+        prompt: session.prompt,
+        createdAt: Number.isNaN(createdAtMs) ? Date.now() : createdAtMs,
+        updatedAt: Number.isNaN(updatedAtMs) ? Date.now() : updatedAtMs,
+        completedAt: completedAtMs,
+        metadata: session.result ? { result: session.result } : null,
+      });
+    }
+  }
+
+  private importSessionData(
+    sessions: readonly SessionData[],
+    taskParentMap: ReadonlyMap<string, string>,
+  ): Pick<MigrationCounts, "migratedMessages" | "migratedTasks"> {
+    let migratedMessages = 0;
+    let migratedTasks = 0;
+    for (const session of sessions) {
+      migratedMessages += this.importMessages(session);
+      if (this.importWorkerTask(session, sessions, taskParentMap)) migratedTasks += 1;
+    }
+    return { migratedMessages, migratedTasks };
+  }
+
+  private importMessages(session: SessionData): number {
+    const createdAtMs = new Date(session.createdAt).getTime();
+    const existingMessages = this.messageRepo.listBySession(session.sessionId);
+    const existingSeqNums = new Set(existingMessages.map((message) => message.sequence_num));
+    let migratedMessages = 0;
+    for (let i = 0; i < session.messages.length; i += 1) {
+      if (existingSeqNums.has(i)) continue;
+      const message = session.messages[i];
+      if (!message) continue;
+      const messageCreatedMs = message.createdAt
+        ? new Date(message.createdAt).getTime()
+        : createdAtMs + i * 1000;
+      this.messageRepo.create({
+        ...(message.role === "user" && message.deliveryId ? { id: message.deliveryId } : {}),
+        sessionId: session.sessionId,
+        role: message.role,
+        content: message.content,
+        reasoning: message.role === "assistant" ? (message.reasoning ?? null) : null,
+        toolCalls: message.role === "assistant" ? (message.toolCalls ?? null) : null,
+        toolCallId: message.role === "tool" ? (message.toolCallId ?? null) : null,
+        sequenceNum: i,
+        createdAt: Number.isNaN(messageCreatedMs) ? Date.now() : messageCreatedMs,
+        metadata: message.meta ? { meta: message.meta } : null,
+      });
+      migratedMessages += 1;
+    }
+    return migratedMessages;
+  }
+
+  private importWorkerTask(
+    session: SessionData,
+    sessions: readonly SessionData[],
+    taskParentMap: ReadonlyMap<string, string>,
+  ): boolean {
+    if (!session.sessionId.startsWith("worker-")) return false;
+    const taskId = session.taskId || session.sessionId.replace(/^worker-/, "");
+    const parentSessionId = this.resolveWorkerParent(session, sessions, taskId, taskParentMap);
+    this.ensureRecoveredSession(parentSessionId);
+    if (this.taskRepo.get(taskId)) return false;
+
+    const createdAtMs = new Date(session.createdAt).getTime();
+    const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : null;
+    this.taskRepo.create({
+      taskId,
+      parentSessionId,
+      workerSessionId: session.sessionId,
+      description: session.prompt,
+      status: migrationSessionStatus(session.result?.status),
+      createdAt: Number.isNaN(createdAtMs) ? Date.now() : createdAtMs,
+      completedAt: completedAtMs,
+    });
+    return true;
+  }
+
+  private resolveWorkerParent(
+    session: SessionData,
+    sessions: readonly SessionData[],
+    taskId: string,
+    taskParentMap: ReadonlyMap<string, string>,
+  ): string {
+    const mappedParent =
+      taskParentMap.get(taskId) ?? taskParentMap.get(session.sessionId.replace(/^worker-/, ""));
+    if (mappedParent) return mappedParent;
+    const existingTask = this.taskRepo.get(taskId);
+    if (existingTask) return existingTask.parent_session_id;
+    const nonWorker = sessions.find((candidate) => !candidate.sessionId.startsWith("worker-"));
+    return nonWorker?.sessionId ?? session.sessionId;
+  }
+
+  private ensureRecoveredSession(sessionId: string): void {
+    if (this.sessionRepo.get(sessionId)) return;
+    this.sessionRepo.create({
+      id: sessionId,
+      agentName: "orchestrator",
+      prompt: "Recovered delegating session",
+      createdAt: Date.now(),
+    });
+  }
+
+  private importMailboxEvents(
+    events: readonly LegacyMailboxEvent[],
+  ): Pick<MigrationCounts, "migratedTasks" | "migratedMailboxEvents"> {
+    let migratedTasks = 0;
+    let migratedMailboxEvents = 0;
+    for (const event of events) {
+      const counts = this.importMailboxEvent(event);
+      migratedTasks += counts.migratedTasks;
+      migratedMailboxEvents += counts.migratedMailboxEvents;
+    }
+    return { migratedTasks, migratedMailboxEvents };
+  }
+
+  private importMailboxEvent(
+    event: LegacyMailboxEvent,
+  ): Pick<MigrationCounts, "migratedTasks" | "migratedMailboxEvents"> {
+    this.ensureRecoveredSession(event.sessionId);
+    let migratedTasks = 0;
+    if (!this.taskRepo.get(event.message.taskId)) {
+      this.taskRepo.create({
+        taskId: event.message.taskId,
+        parentSessionId: event.sessionId,
+        description: event.message.summary,
+        status: migrationMailboxStatus(event.message.status),
+        createdAt: Date.now(),
+      });
+      migratedTasks = 1;
+    }
+
+    const alreadyPending = this.mailboxRepo
+      .peekPending(event.sessionId)
+      .some((pending) => pending.task_id === event.message.taskId);
+    if (alreadyPending) return { migratedTasks, migratedMailboxEvents: 0 };
+    this.mailboxRepo.enqueue({
+      parentSessionId: event.sessionId,
+      taskId: event.message.taskId,
+      eventType: "worker_completed",
+      payload: event.message,
+      createdAt: new Date(event.message.receivedAt).getTime() || Date.now(),
+    });
+    return { migratedTasks, migratedMailboxEvents: 1 };
+  }
+
+  private importOpenSessions(openSessions: readonly OpenSessionData[]): void {
+    if (openSessions.length === 0) return;
+    const filteredOpenSessions = openSessions.filter((session) =>
+      Boolean(this.sessionRepo.get(session.sessionId)),
+    );
+    this.openSessionsRepo.upsertAll(filteredOpenSessions);
+  }
+
+  private verifyIntegrity(): void {
     const integrity = this.db
       .prepare<[], { integrity_check: string }>("PRAGMA integrity_check;")
       .get();
@@ -449,58 +550,5 @@ export class LegacyMigrator {
         `Post-migration SQLite integrity check failed: ${integrity?.integrity_check}`,
       );
     }
-
-    // Rename migrated legacy files so subsequent server startups skip quickly
-    for (const file of transcriptFiles) {
-      try {
-        if (fs.existsSync(file)) {
-          fs.renameSync(file, `${file}.migrated`);
-        }
-      } catch {
-        // best effort
-      }
-    }
-    for (const file of mailboxFiles) {
-      try {
-        if (fs.existsSync(file)) {
-          fs.renameSync(file, `${file}.migrated`);
-        }
-      } catch {
-        // best effort
-      }
-    }
-    if (hasOpenSessions) {
-      try {
-        if (fs.existsSync(openSessionsPath)) {
-          fs.renameSync(openSessionsPath, `${openSessionsPath}.migrated`);
-        }
-      } catch {
-        // best effort
-      }
-    }
-
-    // Save migration diagnostics if any
-    if (diagnostics.length > 0) {
-      try {
-        fs.writeFileSync(
-          path.join(this.harnessDir, "migration_diagnostics.json"),
-          JSON.stringify(diagnostics, null, 2),
-          "utf8",
-        );
-      } catch {
-        // best effort diagnostic save
-      }
-    }
-
-    return {
-      migratedSessions: validSessions.length,
-      migratedMessages: migratedMessagesCount,
-      migratedTasks: migratedTasksCount,
-      migratedMailboxEvents: migratedMailboxCount,
-      quarantinedFiles: quarantinedCount,
-      diagnostics,
-      backupDir,
-      skipped: false,
-    };
   }
 }

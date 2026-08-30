@@ -31,6 +31,41 @@ const AgentCreateSchema = AgentConfigSchema.partial()
 const AgentUpdateSchema = AgentConfigSchema.omit({ name: true }).partial().strict();
 const AgentSourceSchema = z.object({ source: z.string().max(2_000_000) }).strict();
 
+type AgentCreateInput = z.infer<typeof AgentCreateSchema>;
+
+function createAgentConfig(body: AgentCreateInput): AgentConfig {
+  return {
+    name: body.name,
+    model: body.model,
+    ...(body.provider !== undefined ? { provider: body.provider } : {}),
+    tools: body.tools ?? [],
+    maxSteps: body.maxSteps ?? 10,
+    instructions: body.instructions ?? "",
+    ...(body.description !== undefined ? { description: body.description } : {}),
+    ...(body.capabilities !== undefined ? { capabilities: body.capabilities } : {}),
+    ...(body.modelIdMapping !== undefined ? { modelIdMapping: body.modelIdMapping } : {}),
+    ...(body.maxToolCalls !== undefined ? { maxToolCalls: body.maxToolCalls } : {}),
+    ...(body.maxToolResultChars !== undefined
+      ? { maxToolResultChars: body.maxToolResultChars }
+      : {}),
+    ...(body.maxOutputTokens !== undefined ? { maxOutputTokens: body.maxOutputTokens } : {}),
+    ...(body.maxTotalTokens !== undefined ? { maxTotalTokens: body.maxTotalTokens } : {}),
+    ...(body.runTimeoutMs !== undefined ? { runTimeoutMs: body.runTimeoutMs } : {}),
+  };
+}
+
+function respondAgentAlreadyExists(error: unknown, res: Response): boolean {
+  if (
+    isRecord(error) &&
+    (error.code === "EEXIST" ||
+      (typeof error.message === "string" && error.message.includes("EEXIST")))
+  ) {
+    res.status(409).json({ error: "Agent already exists" });
+    return true;
+  }
+  return false;
+}
+
 async function readAgentSource(
   filePath: string,
   root: string,
@@ -170,30 +205,7 @@ export function createAgentsRouter(limiters: RouteLimiters = createRouteLimiters
       await fs.mkdir(config.AGENTS_DIR, { recursive: true });
 
       try {
-        const agentConfig = await writeAgentConfig(
-          filePath,
-          {
-            name: body.name,
-            model: body.model,
-            ...(body.provider !== undefined ? { provider: body.provider } : {}),
-            tools: body.tools ?? [],
-            maxSteps: body.maxSteps ?? 10,
-            instructions: body.instructions ?? "",
-            ...(body.description !== undefined ? { description: body.description } : {}),
-            ...(body.capabilities !== undefined ? { capabilities: body.capabilities } : {}),
-            ...(body.modelIdMapping !== undefined ? { modelIdMapping: body.modelIdMapping } : {}),
-            ...(body.maxToolCalls !== undefined ? { maxToolCalls: body.maxToolCalls } : {}),
-            ...(body.maxToolResultChars !== undefined
-              ? { maxToolResultChars: body.maxToolResultChars }
-              : {}),
-            ...(body.maxOutputTokens !== undefined
-              ? { maxOutputTokens: body.maxOutputTokens }
-              : {}),
-            ...(body.maxTotalTokens !== undefined ? { maxTotalTokens: body.maxTotalTokens } : {}),
-            ...(body.runTimeoutMs !== undefined ? { runTimeoutMs: body.runTimeoutMs } : {}),
-          },
-          true,
-        );
+        const agentConfig = await writeAgentConfig(filePath, createAgentConfig(body), true);
         sessionManager.audit({
           actorType: "user",
           actorId: "user",
@@ -204,14 +216,7 @@ export function createAgentsRouter(limiters: RouteLimiters = createRouteLimiters
         });
         res.status(201).json(agentConfig);
       } catch (error) {
-        if (
-          isRecord(error) &&
-          (error.code === "EEXIST" ||
-            (typeof error.message === "string" && error.message.includes("EEXIST")))
-        ) {
-          res.status(409).json({ error: "Agent already exists" });
-          return;
-        }
+        if (respondAgentAlreadyExists(error, res)) return;
         throw error;
       }
     }),

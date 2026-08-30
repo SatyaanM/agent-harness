@@ -36,6 +36,51 @@ function nextRosterSequence(): number {
   return rosterSequence;
 }
 
+function mergeHydratedWorker(
+  merged: Map<string, WorkerEntry>,
+  existing: WorkerEntry | undefined,
+  worker: WorkerSummary,
+  requestSequence: number,
+): void {
+  if ((existing?.localSequence ?? 0) <= requestSequence) {
+    merged.set(worker.taskId, {
+      id: worker.workerSessionId ?? `pending-${worker.taskId}`,
+      name: worker.agentName,
+      taskId: worker.taskId,
+      task: worker.description,
+      status: worker.status,
+      createdAt: worker.createdAt,
+      updatedAt: worker.updatedAt,
+      localSequence: requestSequence,
+    });
+    return;
+  }
+
+  if (existing) {
+    merged.set(worker.taskId, {
+      id: worker.workerSessionId ?? existing.id,
+      name: worker.agentName,
+      taskId: worker.taskId,
+      task: worker.description,
+      status: existing.status,
+      createdAt: worker.createdAt,
+      updatedAt: existing.updatedAt ?? worker.updatedAt,
+      localSequence: existing.localSequence,
+    });
+  }
+}
+
+function compareRosterEntries(requestSequence: number) {
+  return (a: WorkerEntry, b: WorkerEntry): number => {
+    const aIsPostRequest = (a.localSequence ?? 0) > requestSequence ? 1 : 0;
+    const bIsPostRequest = (b.localSequence ?? 0) > requestSequence ? 1 : 0;
+    if (aIsPostRequest !== bIsPostRequest) return aIsPostRequest - bIsPostRequest;
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return aTime - bTime;
+  };
+}
+
 export const useRosterStore = create<RosterState>((set) => ({
   bySession: {},
   addWorker: (sessionId, entry) =>
@@ -113,40 +158,11 @@ export const useRosterStore = create<RosterState>((set) => ({
 
       for (const w of workers) {
         const existing = list.find((entry) => entry.taskId === w.taskId);
-        if ((existing?.localSequence ?? 0) <= requestSequence) {
-          merged.set(w.taskId, {
-            id: w.workerSessionId ?? `pending-${w.taskId}`,
-            name: w.agentName,
-            taskId: w.taskId,
-            task: w.description,
-            status: w.status,
-            createdAt: w.createdAt,
-            updatedAt: w.updatedAt,
-            localSequence: requestSequence,
-          });
-        } else if (existing) {
-          merged.set(w.taskId, {
-            id: w.workerSessionId ?? existing.id,
-            name: w.agentName,
-            taskId: w.taskId,
-            task: w.description,
-            status: existing.status,
-            createdAt: w.createdAt,
-            updatedAt: existing.updatedAt ?? w.updatedAt,
-            localSequence: existing.localSequence,
-          });
-        }
+        mergeHydratedWorker(merged, existing, w, requestSequence);
       }
 
       const sorted = Array.from(merged.values())
-        .sort((a, b) => {
-          const aIsPostRequest = (a.localSequence ?? 0) > requestSequence ? 1 : 0;
-          const bIsPostRequest = (b.localSequence ?? 0) > requestSequence ? 1 : 0;
-          if (aIsPostRequest !== bIsPostRequest) return aIsPostRequest - bIsPostRequest;
-          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-          return aTime - bTime;
-        })
+        .sort(compareRosterEntries(requestSequence))
         .slice(-WORKER_ROSTER_CAPACITY);
 
       return {

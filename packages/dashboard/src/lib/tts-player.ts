@@ -34,6 +34,73 @@ interface AudioQueueItem {
   buffer: AudioBuffer;
 }
 
+async function fetchTtsAudio(
+  text: string,
+  options: TTSPlayOptions | undefined,
+  signal: AbortSignal,
+): Promise<ArrayBuffer> {
+  const response = await fetch(`${TTS_BASE_URL}/api/tts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text,
+      voice: options?.voice || "Gacrux",
+      persona: options?.persona || "",
+      emotiveTags: options?.emotiveTags ?? true,
+      tagStyle: options?.tagStyle ?? "balanced",
+      customTagInstructions: options?.customTagInstructions || "",
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const error = await parseJsonResponseBoundary(
+      response,
+      TTSErrorSchema,
+      "TTS error response",
+      64_000,
+    );
+    throw new Error(error.error || "TTS request failed");
+  }
+
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_AUDIO_BYTES) {
+    await response.body?.cancel();
+    throw new Error("TTS audio exceeds maximum size");
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  try {
+    const chunks: Uint8Array[] = [];
+    let totalLength = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      totalLength += value.byteLength;
+      if (totalLength > MAX_AUDIO_BYTES) {
+        await reader.cancel();
+        throw new Error("TTS audio exceeds maximum size");
+      }
+    }
+
+    const combinedBuffer = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      combinedBuffer.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return combinedBuffer.buffer;
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export function createTTSPlayer(): TTSPlayer {
   let audioContext: AudioContext | null = null;
   let currentSource: AudioBufferSourceNode | null = null;
@@ -144,62 +211,8 @@ export function createTTSPlayer(): TTSPlayer {
       requestController = controller;
 
       try {
-        const response = await fetch(`${TTS_BASE_URL}/api/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text,
-            voice: options?.voice || "Gacrux",
-            persona: options?.persona || "",
-            emotiveTags: options?.emotiveTags ?? true,
-            tagStyle: options?.tagStyle ?? "balanced",
-            customTagInstructions: options?.customTagInstructions || "",
-          }),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          const error = await parseJsonResponseBoundary(
-            response,
-            TTSErrorSchema,
-            "TTS error response",
-            64_000,
-          );
-          throw new Error(error.error || "TTS request failed");
-        }
-
-        const declaredLength = Number(response.headers.get("content-length"));
-        if (Number.isFinite(declaredLength) && declaredLength > MAX_AUDIO_BYTES) {
-          await response.body?.cancel();
-          throw new Error("TTS audio exceeds maximum size");
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("No response body");
-
-        const chunks: Uint8Array[] = [];
-        let totalLength = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          totalLength += value.byteLength;
-          if (totalLength > MAX_AUDIO_BYTES) {
-            await reader.cancel();
-            throw new Error("TTS audio exceeds maximum size");
-          }
-        }
-
-        // Combine all chunks into a single buffer
-        const combinedBuffer = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const chunk of chunks) {
-          combinedBuffer.set(chunk, offset);
-          offset += chunk.length;
-        }
-
-        // Decode and add to queue
-        const audioBuffer = await decodeAudioChunk(combinedBuffer.buffer);
+        const audioData = await fetchTtsAudio(text, options, controller.signal);
+        const audioBuffer = await decodeAudioChunk(audioData);
         const fadedBuffer = addFadeEnvelope(audioBuffer);
         if (generation !== playbackGeneration) return;
         audioQueue.push({ buffer: fadedBuffer });
