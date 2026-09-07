@@ -131,8 +131,8 @@ PROVIDER_ENDPOINT=http://localhost:11434/v1
 ## Production
 
 ```bash
-corepack npm run build
-corepack npm start
+corepack pnpm run build
+corepack pnpm start
 ```
 
 `npm run build` compiles all packages; `npm start` runs the built server (port `3001`) and dashboard (port `3000`).

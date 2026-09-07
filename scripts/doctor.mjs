@@ -43,20 +43,20 @@ const corepackResult = spawnSync("corepack", ["--version"], {
 });
 check("Corepack available", corepackResult.status === 0, "Run: corepack enable");
 
-// ── npm version (via corepack) ───────────────────────────────────
+// ── pnpm version (via corepack) ──────────────────────────────────
 const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
-const npmVersionResult = spawnSync(
+const pnpmVersionResult = spawnSync(
   process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : corepack,
   process.platform === "win32"
-    ? ["/d", "/s", "/c", "corepack npm --version"]
-    : ["npm", "--version"],
+    ? ["/d", "/s", "/c", "corepack pnpm --version"]
+    : ["pnpm", "--version"],
   { encoding: "utf8" },
 );
-if (npmVersionResult.status === 0) {
-  const npmVersion = (npmVersionResult.stdout || "").trim();
-  console.log(`  ${PASS} npm ${npmVersion} (via corepack)`);
+if (pnpmVersionResult.status === 0) {
+  const pnpmVersion = (pnpmVersionResult.stdout || "").trim();
+  console.log(`  ${PASS} pnpm ${pnpmVersion} (via corepack)`);
 } else {
-  warn("npm version", "Could not determine npm version via corepack.");
+  warn("pnpm version", "Could not determine pnpm version via corepack.");
 }
 
 // ── .env file ────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ if (fs.existsSync(turboDir)) {
 }
 
 const nodeModulesExists = fs.existsSync(path.join(ROOT, "node_modules"));
-check("node_modules installed", nodeModulesExists, "Run: corepack npm install");
+check("node_modules installed", nodeModulesExists, "Run: corepack pnpm install");
 
 // ── Summary ──────────────────────────────────────────────────────
 console.log("");

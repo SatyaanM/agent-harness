@@ -66,7 +66,7 @@ if (configured && !pathsMatch) {
 
 const lefthookEntry = path.join(root, "node_modules", "lefthook", "bin", "index.js");
 if (!existsSync(lefthookEntry)) {
-  console.error("Unable to install Lefthook. Run corepack npm install first.");
+  console.error("Unable to install Lefthook. Run corepack pnpm install first.");
   process.exit(1);
 }
 
@@ -77,5 +77,5 @@ const installResult = spawnSync(process.execPath, [lefthookEntry, "install"], {
 });
 
 if (installResult.status !== 0) {
-  fail(installResult, "Unable to install Lefthook. Run corepack npm install first.");
+  fail(installResult, "Unable to install Lefthook. Run corepack pnpm install first.");
 }

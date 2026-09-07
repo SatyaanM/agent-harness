@@ -45,5 +45,26 @@ describe("required CI gates", () => {
     expect(workflow).toContain("fail_action: true");
     expect(workflow).toContain('cmd_options: "-I"');
     expect(workflow).not.toContain("fail_action: false");
+    expect(workflow).toContain("zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25");
+    expect(workflow).not.toContain("52c50259e86016c68e2193b22e1b4b1a41dbad76");
+  });
+
+  it("configures Nightly quality workflow with Node 24 actions and check:nightly", () => {
+    const workflow = read(".github/workflows/nightly.yml");
+
+    expect(workflow).toContain("schedule:");
+    expect(workflow).toContain("name: Nightly quality");
+    expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
+    expect(workflow).toContain("actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444");
+    expect(workflow).toContain("corepack pnpm install --frozen-lockfile");
+    expect(workflow).toContain("corepack pnpm run check:nightly");
+  });
+
+  it("ensures perf-report script builds core workspace via pnpm", () => {
+    const perfReport = read("scripts/perf-report.mjs");
+
+    expect(perfReport).toContain('"pnpm"');
+    expect(perfReport).toContain('"@agent-harness/core"');
+    expect(perfReport).not.toContain('"npm"');
   });
 });
