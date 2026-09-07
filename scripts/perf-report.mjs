@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
 const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
-const command = ["npm", "run", "build", "--workspace", "@agent-harness/core"];
+const command = ["pnpm", "--filter", "@agent-harness/core", "run", "build"];
 const build =
   process.platform === "win32"
     ? spawnSync(
